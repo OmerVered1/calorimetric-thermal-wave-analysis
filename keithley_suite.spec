@@ -38,6 +38,10 @@ a = Analysis(
         'network_setup',
         '_version',
         'calorimeter_reader',
+        'calorimeter_setups',
+        'calorimeter_discovery',
+        'calorimeter_wizard',
+        'signal_units',
         'realtime_tab',
         'updater',
         'sniffer',
@@ -110,6 +114,6 @@ if sys.platform == 'darwin':
         bundle_identifier='com.omervered.keithley-smu-control',
         info_plist={
             'NSHighResolutionCapable': True,
-            'CFBundleShortVersionString': '3.5.3',  # bump per release
+            'CFBundleShortVersionString': '3.6.0',  # bump per release
         },
     )

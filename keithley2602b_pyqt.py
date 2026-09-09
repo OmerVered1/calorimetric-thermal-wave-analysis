@@ -51,6 +51,8 @@ from calorimeter_reader import (
     SniffingCalorimeterReader, sniff_available, sniff_capture_readiness, sniff_interface_for,
     sniff_list_interfaces,
 )
+from calorimeter_setups import SetupStore
+from calorimeter_wizard import CalorimeterSetupDialog
 
 # Configure pyqtgraph
 pg.setConfigOptions(antialias=True, background='#ffffff', foreground='#1a1a2e')
@@ -86,12 +88,32 @@ class MeasurementPoint:
 
 _CAL_COLUMN_LABELS = {"hf": "HF(mW)", "t": "T(C)", "ext_t": "ExtT(C)"}
 
+# Filled in on connect from the reader's declared signals, so a column derived
+# from a user-edited profile is still labelled with its name and unit rather
+# than a bare dictionary key. Cleared on disconnect.
+_CAL_COLUMN_LABELS_DYNAMIC: dict = {}
+
+
+def set_cal_column_labels(signals) -> None:
+    """Label the calorimeter CSV columns from what the reader says it emits."""
+    _CAL_COLUMN_LABELS_DYNAMIC.clear()
+    for sig in signals or ():
+        _CAL_COLUMN_LABELS_DYNAMIC[sig.key] = (
+            f"{sig.label}({sig.unit})" if sig.unit else sig.label
+        )
+
+
+def _cal_column_label(key: str) -> str:
+    if key in _CAL_COLUMN_LABELS_DYNAMIC:
+        return _CAL_COLUMN_LABELS_DYNAMIC[key]
+    return _CAL_COLUMN_LABELS.get(key, key)
+
 
 def _sweep_csv_header(cal_channels) -> list:
     header = ['Index', 'Channel', 'Computer_Time', 'Elapsed(s)',
               'Voltage(V)', 'Current(A)', 'Resistance(Ohm)', 'Power(mW)']
     for key in cal_channels:
-        header.append(_CAL_COLUMN_LABELS.get(key, key))
+        header.append(_cal_column_label(key))
     return header
 
 
@@ -1698,6 +1720,27 @@ class ConnectionDialog(QDialog):
         cal_group = QGroupBox("Calorimeter (read-only monitor)")
         cal_layout = QVBoxLayout(cal_group)
 
+        cal_setup_row = QHBoxLayout()
+        cal_setup_row.addWidget(QLabel("Setup:"))
+        self.cal_setup_combo = QComboBox()
+        self.cal_setup_combo.setToolTip(
+            "A saved setup remembers this instrument's IP, the capture adapter,\n"
+            "and the signal profile that says what its replies mean.\n"
+            "Build one with New… — it watches the traffic and shows you what it finds."
+        )
+        self.cal_setup_combo.currentIndexChanged.connect(self._on_cal_setup_selected)
+        cal_setup_row.addWidget(self.cal_setup_combo, stretch=1)
+        self.cal_setup_new_btn = QPushButton("New…")
+        self.cal_setup_new_btn.clicked.connect(lambda: self._on_cal_setup_edit(True))
+        cal_setup_row.addWidget(self.cal_setup_new_btn)
+        self.cal_setup_edit_btn = QPushButton("Edit…")
+        self.cal_setup_edit_btn.clicked.connect(lambda: self._on_cal_setup_edit(False))
+        cal_setup_row.addWidget(self.cal_setup_edit_btn)
+        self.cal_setup_del_btn = QPushButton("Delete")
+        self.cal_setup_del_btn.clicked.connect(self._on_cal_setup_delete)
+        cal_setup_row.addWidget(self.cal_setup_del_btn)
+        cal_layout.addLayout(cal_setup_row)
+
         cal_pick_row = QHBoxLayout()
         cal_pick_row.addWidget(QLabel("Instrument:"))
         self.cal_combo = QComboBox()
@@ -1747,6 +1790,7 @@ class ConnectionDialog(QDialog):
         cal_layout.addLayout(cal_iface_row)
         self.cal_iface_combo.setEnabled(False)
         self.cal_iface_refresh_btn.setEnabled(False)
+        self._refresh_cal_setups()
 
         cal_ctrl_row = QHBoxLayout()
         cal_ctrl_row.addWidget(QLabel("Poll (s):"))
@@ -1798,6 +1842,85 @@ class ConnectionDialog(QDialog):
             self.cal_status_label.setText(f"Discover failed: {diag}")
             self.cal_status_label.setStyleSheet("color: #dc2626; font-size: 13px;")
 
+    # ---- Saved setups ---------------------------------------------------
+
+    def _setup_store(self):
+        if getattr(self, "_cal_setup_store", None) is None:
+            self._cal_setup_store = SetupStore()
+        return self._cal_setup_store
+
+    def _refresh_cal_setups(self):
+        """Reload the setup list, keeping the current selection if it survived."""
+        current = self.cal_setup_combo.currentData()
+        self.cal_setup_combo.blockSignals(True)
+        self.cal_setup_combo.clear()
+        self.cal_setup_combo.addItem("(none — configure by hand below)", None)
+        for name in self._setup_store().names():
+            self.cal_setup_combo.addItem(name, name)
+        if current:
+            found = self.cal_setup_combo.findData(current)
+            if found >= 0:
+                self.cal_setup_combo.setCurrentIndex(found)
+        self.cal_setup_combo.blockSignals(False)
+        self._sync_setup_buttons()
+
+    def _sync_setup_buttons(self):
+        has = self.cal_setup_combo.currentData() is not None
+        self.cal_setup_edit_btn.setEnabled(has)
+        self.cal_setup_del_btn.setEnabled(has)
+
+    def _selected_setup(self):
+        name = self.cal_setup_combo.currentData()
+        return self._setup_store().get(name) if name else None
+
+    def _on_cal_setup_selected(self, _index=None):
+        """Apply a saved setup to the fields below it.
+
+        The fields stay editable afterwards: a setup is a starting point, not a
+        lock, and the IP in particular is DHCP-assigned and does move.
+        """
+        self._sync_setup_buttons()
+        setup = self._selected_setup()
+        if setup is None:
+            return
+        idx = self.cal_combo.findText(setup.calorimeter)
+        if idx >= 0:
+            self.cal_combo.setCurrentIndex(idx)
+        if setup.host:
+            self.cal_host.setText(setup.host)
+        # A setup exists to describe passive watching, so selecting one turns
+        # sniff mode on; the interface list only populates while it is on.
+        self.cal_sniff_check.setChecked(True)
+        self._refresh_cal_interfaces()
+        if setup.interface:
+            found = self.cal_iface_combo.findData(setup.interface)
+            if found >= 0:
+                self.cal_iface_combo.setCurrentIndex(found)
+
+    def _on_cal_setup_edit(self, new: bool):
+        setup = None if new else self._selected_setup()
+        dlg = CalorimeterSetupDialog(self, store=self._setup_store(), setup=setup)
+        if dlg.exec_() and dlg.saved_setup is not None:
+            self._refresh_cal_setups()
+            found = self.cal_setup_combo.findData(dlg.saved_setup.name)
+            if found >= 0:
+                self.cal_setup_combo.setCurrentIndex(found)
+
+    def _on_cal_setup_delete(self):
+        setup = self._selected_setup()
+        if setup is None:
+            return
+        reply = QMessageBox.question(
+            self, "Delete setup",
+            f"Delete the setup {setup.name!r}?\n\n"
+            "Its signal profile is kept — only the saved IP, adapter and "
+            "profile choice go away.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._setup_store().delete(setup.name)
+            self._refresh_cal_setups()
+
     def _on_cal_sniff_toggled(self, checked: bool):
         self.cal_interval.setEnabled(not checked)
         self.cal_connect_btn.setText(
@@ -1831,9 +1954,11 @@ class ConnectionDialog(QDialog):
         name = self.cal_combo.currentText()
 
         if sniff:
-            if not sniff_available(name):
+            setup_for_profile = self._selected_setup()
+            if setup_for_profile is None and not sniff_available(name):
                 QMessageBox.warning(self, "No Sniff Profile",
-                    f"No traffic-decoding profile is bundled for {name}.")
+                    f"No traffic-decoding profile is bundled for {name}.\n\n"
+                    "Use New… beside Setup to build one by watching the traffic.")
                 return
             readiness = sniff_capture_readiness()
             if not readiness.ok:
@@ -1850,8 +1975,10 @@ class ConnectionDialog(QDialog):
                 if reply != QMessageBox.Yes:
                     return
             chosen_interface = self.cal_iface_combo.currentData()
+            setup = self._selected_setup()
             self.app.connect_calorimeter(name, host, float(self.cal_interval.value()),
-                                          sniff=True, interface=chosen_interface)
+                                          sniff=True, interface=chosen_interface,
+                                          profile_name=setup.profile_name if setup else None)
             self._refresh_calorimeter_status()
             return
 
@@ -3676,7 +3803,8 @@ class Keithley2602BApp(QMainWindow):
     # ---- Calorimeter (Setaram C80 / Drop) \u2014 read-only LAN monitor ----
 
     def connect_calorimeter(self, name: str, host: str, interval_s: float, sniff: bool = False,
-                             interface: Optional[str] = None):
+                             interface: Optional[str] = None,
+                             profile_name: Optional[str] = None):
         """Connect to (or, if sniff=True, passively watch) a Setaram calorimeter.
 
         Called from ConnectionDialog. Runs a background QThread poller that
@@ -3704,6 +3832,7 @@ class Keithley2602BApp(QMainWindow):
                 host=host,
                 calorimeter_name=name,
                 interface=interface or sniff_interface_for(host),
+                profile_name=profile_name,
             )
         else:
             reader = CalorimeterReader(
@@ -3724,7 +3853,12 @@ class Keithley2602BApp(QMainWindow):
         # Tell the Real Time tab which calorimeter channels + Keithley
         # signals are available. Keithley signals are always available.
         if hasattr(self, "realtime_tab") and self.realtime_tab is not None:
-            available = list(channels.keys()) + ["v", "i", "r", "p"]
+            # The reader knows what it will emit — in sniff mode that comes
+            # from a user-editable profile, so it cannot be assumed here.
+            cal_signals = reader.signal_specs()
+            set_cal_column_labels(cal_signals)
+            self.realtime_tab.set_calorimeter_signals(cal_signals)
+            available = [s.key for s in cal_signals] + ["v", "i", "r", "p"]
             self.realtime_tab.set_available_signals(available)
             if not self.running:
                 self.realtime_tab.set_reference_now("connect")
@@ -3743,6 +3877,7 @@ class Keithley2602BApp(QMainWindow):
         self.calorimeter_name = None
         self.calorimeter_host = None
         self.calorimeter_sniffing = False
+        set_cal_column_labels([])
         self._update_connection_label()
         self.status.showMessage("Calorimeter disconnected")
 

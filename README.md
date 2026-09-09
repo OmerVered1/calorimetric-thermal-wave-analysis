@@ -99,8 +99,38 @@ calorimeter_reader.py        # Setaram calorimeter LAN reader (2602B/2611A "Calo
 sniffer/                     # Passive packet capture/decode, vendored from lan-signal-sniffer —
                               # backs the calorimeter panel's "Sniff mode" (watch Calisto's own
                               # traffic instead of connecting, so both can run at once)
-calorimeter_profiles/        # Verified traffic-decoding profiles for the C80 / Drop
+calorimeter_profiles/        # Traffic-decoding profiles for the C80 / Drop (bundled defaults;
+                              # a user-saved profile of the same name replaces one)
+calorimeter_setups.py        # Named setups: instrument + IP + capture adapter + which profile
+calorimeter_discovery.py     # Derives signals from a live capture (no Qt — testable headless)
+calorimeter_wizard.py        # "New setup…" dialog: capture, pick fields, name them, save
+signal_units.py              # Unit menus and plot colors for run-time-defined signals
+sniff_diagnose.py            # Standalone per-layer capture diagnostic (run as admin)
+tests/                       # pytest suite — run: QT_QPA_PLATFORM=offscreen pytest tests/
 ```
+
+## Calorimeter setups
+
+Sniff mode decodes an instrument's traffic using a *profile* that says which
+request bytes carry which measurement. The bundled profiles cover the C80 and
+Drop as they behaved when captured; if an instrument answers differently, the
+status bar reports packets captured but nothing decoded.
+
+**Setup ▸ New…** in the Calorimeter panel fixes that without a code change. It
+captures for a few seconds, lists every request the vendor software sends, and
+for each one shows the byte field that most looks like a measurement, with its
+recent values. Name the ones you recognise, give them units, and save. The
+signals become a profile in your application-data folder — which shadows the
+bundled one of the same name, and survives app updates — and the setup itself
+remembers the IP, the capture adapter and which profile to use, so reconnecting
+is one dropdown.
+
+Signals defined this way flow through to the Real Time plot (with their own
+axes, colors and unit menus) and to the merged sweep CSV columns.
+
+Setups configure **passive watching only**. Direct connect still uses the
+built-in command list, so the app can never transmit bytes typed into a dialog
+to an instrument that may be mid-run under Calisto.
 
 ## Author
 

@@ -29,7 +29,8 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Optional
+from dataclasses import dataclass
+from typing import List, Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -37,18 +38,72 @@ from PyQt5.QtCore import QThread, pyqtSignal
 C80_PORT = 1210
 
 # Maps a CALORIMETERS registry key to the vendored sniffer profile that
-# decodes its traffic, and maps that profile's signal names back to the
-# short keys ("hf"/"t"/"ext_t") the rest of the app already expects from
-# CalorimeterReader — so SniffingCalorimeterReader is a drop-in alternative.
+# decodes its traffic.
 _SNIFF_PROFILE_BY_CALORIMETER = {
     "C80 (Setaram)": "Setaram C80",
     "Drop (Alexsys)": "Alexsys Drop",
 }
-_SNIFF_SIGNAL_TO_CHANNEL = {
-    "heat_flow": "hf",
-    "sample_temperature": "t",
-    "external_temperature": "ext_t",
+
+
+# ----- What a reader will emit ----------------------------------------------
+
+# Readers describe their own output rather than the UI assuming it. The direct
+# reader's channel keys are fixed by the CALORIMETERS registry; the sniffing
+# reader's come from whichever profile is decoding the traffic, and a profile
+# is now user-editable, so there is no fixed list to hardcode against.
+
+
+@dataclass(frozen=True)
+class CalorimeterSignal:
+    """One value a reader will put in its `sample` readings dict.
+
+    `key` is the dict key; `label` and `unit` are for display. `unit` is the
+    unit the raw value is already in — no conversion happens in the reader.
+    """
+
+    key: str
+    label: str
+    unit: str
+
+
+# Display metadata for the direct reader's fixed channel keys.
+CHANNEL_META = {
+    "hf": ("Heat Flow", "mW"),
+    "t": ("Sample Temperature", "°C"),
+    "ext_t": ("External Temperature", "°C"),
 }
+
+# Profiles are written by a wizard and by hand, so unit strings arrive in
+# whatever form was typed. Normalise only the ones with an unambiguous
+# display form; anything unrecognised is shown exactly as written.
+_UNIT_ALIASES = {
+    "degc": "°C",
+    "degreec": "°C",
+    "c": "°C",
+    "degf": "°F",
+    "degk": "K",
+    "ohm": "Ω",
+}
+
+
+def normalize_unit(unit: str) -> str:
+    """Canonical display form of a profile's unit string."""
+    unit = (unit or "").strip()
+    return _UNIT_ALIASES.get(unit.lower().replace(" ", ""), unit)
+
+
+def pretty_signal_label(name: str) -> str:
+    """Human-readable label for a profile signal name.
+
+    `heat_flow` -> `Heat Flow`. A name that already carries capitals is left
+    alone, so an acronym the user typed ("HF", "QDOS") survives.
+    """
+    name = (name or "").strip()
+    if not name:
+        return ""
+    if any(c.isupper() for c in name):
+        return name
+    return name.replace("_", " ").title()
 
 
 # ----- Registry -------------------------------------------------------------
@@ -203,6 +258,14 @@ class CalorimeterReader(QThread):
         # immediately once connected.
         self._poll_enabled = threading.Event()
         self._poll_enabled.set()
+
+    def signal_specs(self) -> List[CalorimeterSignal]:
+        """The readings this reader will emit, in registry order."""
+        specs = []
+        for key in self._channels:
+            label, unit = CHANNEL_META.get(key, (pretty_signal_label(key), ""))
+            specs.append(CalorimeterSignal(key=key, label=label, unit=unit))
+        return specs
 
     def stop(self) -> None:
         self._stop = True
@@ -360,6 +423,7 @@ class SniffingCalorimeterReader(QThread):
         calorimeter_name: str,
         port: int = C80_PORT,
         interface: Optional[str] = None,
+        profile_name: Optional[str] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -368,6 +432,38 @@ class SniffingCalorimeterReader(QThread):
         self._calorimeter_name = calorimeter_name
         self._interface = interface
         self._stop = False
+        # A setup may name any profile; without one, fall back to the profile
+        # the registry associates with this calorimeter.
+        self._profile_name = profile_name or _SNIFF_PROFILE_BY_CALORIMETER.get(
+            calorimeter_name
+        )
+        # Resolved eagerly so signal_specs() can answer before run() starts —
+        # the UI needs to lay out its plot the moment the user hits connect.
+        # A missing profile is reported by run(), not raised here.
+        self._profile = self._resolve_profile()
+
+    def _resolve_profile(self):
+        if not self._profile_name:
+            return None
+        try:
+            from sniffer.profile import load_profiles
+
+            return {p.name: p for p in load_profiles()}.get(self._profile_name)
+        except Exception:
+            return None
+
+    def signal_specs(self) -> List[CalorimeterSignal]:
+        """The readings this reader will emit, taken from its profile."""
+        if self._profile is None:
+            return []
+        return [
+            CalorimeterSignal(
+                key=s.name,
+                label=pretty_signal_label(s.name),
+                unit=normalize_unit(s.unit),
+            )
+            for s in self._profile.signals
+        ]
 
     def stop(self) -> None:
         self._stop = True
@@ -383,7 +479,7 @@ class SniffingCalorimeterReader(QThread):
 
     def run(self) -> None:
         from sniffer.capture import PacketPump, capture_readiness
-        from sniffer.profile import LiveDecoder, load_profiles
+        from sniffer.profile import LiveDecoder
 
         readiness = capture_readiness()
         if not readiness.ok:
@@ -393,15 +489,16 @@ class SniffingCalorimeterReader(QThread):
             self.error.emit(f"capture not available: {detail}")
             return
 
-        profile_name = _SNIFF_PROFILE_BY_CALORIMETER.get(self._calorimeter_name)
-        if profile_name is None:
+        if not self._profile_name:
             self.error.emit(f"no sniff profile for {self._calorimeter_name!r}")
             return
-        profiles = {p.name: p for p in load_profiles()}
-        profile = profiles.get(profile_name)
+        # Re-resolve: the user may have saved a corrected profile from the
+        # setup wizard since this reader was constructed.
+        profile = self._resolve_profile() or self._profile
         if profile is None:
-            self.error.emit(f"sniff profile {profile_name!r} not found")
+            self.error.emit(f"sniff profile {self._profile_name!r} not found")
             return
+        self._profile = profile
 
         pump = PacketPump(self._host, device_port=self._port, interface=self._interface)
         decoder = LiveDecoder(profile)
@@ -423,10 +520,7 @@ class SniffingCalorimeterReader(QThread):
                 chunks = pump.poll()
                 if chunks:
                     for s in decoder.feed(chunks):
-                        readings = {
-                            _SNIFF_SIGNAL_TO_CHANNEL.get(k, k): v
-                            for k, v in s.values.items()
-                        }
+                        readings = dict(s.values)
                         if readings:
                             if not samples_seen:
                                 samples_seen = True
@@ -456,10 +550,7 @@ class SniffingCalorimeterReader(QThread):
                 self.msleep(200)
             final = decoder.flush()
             if final is not None:
-                readings = {
-                    _SNIFF_SIGNAL_TO_CHANNEL.get(k, k): v
-                    for k, v in final.values.items()
-                }
+                readings = dict(final.values)
                 if readings:
                     self.sample.emit(final.ts, readings)
         finally:
