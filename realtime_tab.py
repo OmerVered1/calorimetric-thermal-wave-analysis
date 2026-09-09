@@ -50,6 +50,9 @@ from PyQt5.QtWidgets import (
 
 import pyqtgraph as pg
 
+from calorimeter_reader import CalorimeterSignal
+from signal_units import color_for_index, unit_options
+
 
 # ---- Signal catalog --------------------------------------------------------
 
@@ -73,13 +76,9 @@ class SignalSpec:
     units: list[tuple[str, callable]]   # (label, base→display fn)
 
 
-SIGNAL_CATALOG: list[SignalSpec] = [
-    SignalSpec("hf",    "Heat Flow",            "#dc2626",
-               [("mW", _mul(1)), ("µW", _mul(1000)), ("W", _mul(1e-3)), ("kW", _mul(1e-6))]),
-    SignalSpec("t",     "Sample Temperature",   "#2563eb",
-               [("°C", _mul(1)), ("K", _c_to_k), ("°F", _c_to_f)]),
-    SignalSpec("ext_t", "External Temperature", "#ea580c",
-               [("°C", _mul(1)), ("K", _c_to_k), ("°F", _c_to_f)]),
+# The SMU's own signals. Fixed in code because they come from the instrument
+# driver, not off the wire — no profile can rename or re-unit them.
+KEITHLEY_SPECS: list[SignalSpec] = [
     SignalSpec("v",     "Voltage",              "#16a34a",
                [("V", _mul(1)), ("mV", _mul(1000)), ("µV", _mul(1e6)), ("kV", _mul(1e-3))]),
     SignalSpec("i",     "Current",              "#f59e0b",
@@ -89,6 +88,36 @@ SIGNAL_CATALOG: list[SignalSpec] = [
     SignalSpec("p",     "Power",                "#0891b2",
                [("W", _mul(1)), ("mW", _mul(1000)), ("µW", _mul(1e6)), ("kW", _mul(1e-3))]),
 ]
+
+KEITHLEY_KEYS = tuple(s.key for s in KEITHLEY_SPECS)
+
+
+def specs_from_signals(signals) -> list[SignalSpec]:
+    """Turn reader-declared CalorimeterSignals into plot specs.
+
+    Colors come from the palette by position, so the same profile paints the
+    same way every session; unit menus come from the unit string, which for an
+    unrecognised unit means no conversions rather than a wrong guess.
+    """
+    return [
+        SignalSpec(
+            key=sig.key,
+            name=sig.label or sig.key,
+            color=color_for_index(i),
+            units=unit_options(sig.unit),
+        )
+        for i, sig in enumerate(signals)
+    ]
+
+
+# Shown before any calorimeter connects, and by the direct-connect reader.
+# Same keys, colors and units the tab has always had, so the default view is
+# unchanged.
+DEFAULT_CAL_SPECS: list[SignalSpec] = specs_from_signals([
+    CalorimeterSignal("hf", "Heat Flow", "mW"),
+    CalorimeterSignal("t", "Sample Temperature", "°C"),
+    CalorimeterSignal("ext_t", "External Temperature", "°C"),
+])
 
 MUTED = "#6b7280"
 
@@ -120,19 +149,83 @@ class RealTimeTab(QWidget):
         self._t_ref: float | None = None
         self._t_ref_source: str = "connect"
 
+        # Calorimeter signals are whatever the connected reader declares; the
+        # SMU's four are fixed. Both live in one ordered list so axis slots,
+        # control rows and CSV columns all follow the same order.
+        self._cal_specs: list[SignalSpec] = list(DEFAULT_CAL_SPECS)
+        self._specs: list[SignalSpec] = self._cal_specs + KEITHLEY_SPECS
         self._series: dict[str, Series] = {
-            spec.key: Series(spec=spec) for spec in SIGNAL_CATALOG
+            spec.key: Series(spec=spec) for spec in self._specs
         }
 
         # Row-widgets we need to refer to later, keyed by signal key
         self._control_rows: dict[str, dict] = {}
+        self._status_labels: dict[str, QLabel] = {}
+        self._status_layout: QHBoxLayout | None = None
+        self._status_widget: QWidget | None = None
 
         self._setup_ui()
         # Start with only calorimeter defaults visible (V/I/R/P off) — Keithley
-        # signals only make sense during a sweep. The K2602B app will call
-        # set_available_signals() when a calorimeter connects.
-        for key in ("v", "i", "r", "p"):
+        # signals only make sense during a sweep. The app calls
+        # set_calorimeter_signals() when a calorimeter connects.
+        for key in KEITHLEY_KEYS:
             self._series[key].visible = False
+
+    # ---- Signal set --------------------------------------------------------
+
+    def set_calorimeter_signals(self, signals) -> None:
+        """Replace the calorimeter signals with the ones a reader declares.
+
+        Called on connect, before any sample arrives. A no-op when the set is
+        unchanged, so reconnecting to the same instrument does not tear the
+        plot down and lose the axis arrangement the user set up.
+        """
+        new_specs = specs_from_signals(signals) if signals else list(DEFAULT_CAL_SPECS)
+        same = [(s.key, s.name, [u for u, _ in s.units]) for s in self._cal_specs] == \
+               [(s.key, s.name, [u for u, _ in s.units]) for s in new_specs]
+        if same:
+            for spec in new_specs:
+                self._series[spec.key].available = True
+            return
+
+        self._teardown_plot_items()
+
+        keithley_series = {k: self._series[k] for k in KEITHLEY_KEYS}
+        self._cal_specs = new_specs
+        self._specs = self._cal_specs + KEITHLEY_SPECS
+        self._series = {spec.key: Series(spec=spec) for spec in self._cal_specs}
+        self._series.update(keithley_series)
+
+        self._populate_controls()
+        self._populate_status_labels()
+        self._build_plot_items()
+        self._rebuild_axes()
+
+    def _teardown_plot_items(self) -> None:
+        """Detach the current curves, ViewBoxes and axes from the plot.
+
+        Everything added in _build_plot_items has to come back off, or the
+        scene keeps painting orphaned curves from the previous profile.
+        """
+        plot_item = self._plot.plotItem
+        for s in self._series.values():
+            if s.axis is not None:
+                try:
+                    plot_item.layout.removeItem(s.axis)
+                except Exception:
+                    pass
+                s.axis.hide()
+                s.axis.unlinkFromView()
+            if s.view_box is not None:
+                if s.curve is not None:
+                    s.view_box.removeItem(s.curve)
+                try:
+                    plot_item.scene().removeItem(s.view_box)
+                except Exception:
+                    pass
+            s.curve = None
+            s.axis = None
+            s.view_box = None
 
     # ---- UI construction ---------------------------------------------------
 
@@ -163,6 +256,20 @@ class RealTimeTab(QWidget):
         grid = QGridLayout(group)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
+        self._controls_grid = grid
+        self._populate_controls()
+        return group
+
+    def _populate_controls(self) -> None:
+        """(Re)build one control row per signal in the current signal set."""
+        grid = self._controls_grid
+        while grid.count():
+            item = grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        self._control_rows = {}
 
         # Header row (all black; only tick numbers/units on the plot get color)
         headers = ["", "Signal", "Unit", "Auto"]
@@ -172,7 +279,7 @@ class RealTimeTab(QWidget):
             grid.addWidget(lbl, 0, col)
 
         row = 1
-        for spec in SIGNAL_CATALOG:
+        for spec in self._specs:
             s = self._series[spec.key]
 
             show_cb = QCheckBox()
@@ -189,6 +296,7 @@ class RealTimeTab(QWidget):
             unit_combo = QComboBox()
             for unit_label, _ in spec.units:
                 unit_combo.addItem(unit_label)
+            unit_combo.setCurrentIndex(min(s.unit_index, len(spec.units) - 1))
             unit_combo.currentIndexChanged.connect(
                 lambda idx, k=spec.key: self._on_unit_changed(k, idx)
             )
@@ -210,27 +318,52 @@ class RealTimeTab(QWidget):
             row += 1
 
         grid.setRowStretch(row, 1)
-        return group
 
     def create_status_values_widget(self) -> QWidget:
         """Compact per-signal value strip meant to sit in the app status bar.
 
         Text (signal name) is black; the numeric value + unit are colored.
-        Only signals currently `available` are shown.
+        Only signals currently `available` are shown. The widget itself is
+        created once and handed to the status bar; changing the signal set
+        repopulates it in place rather than replacing it.
         """
         w = QWidget()
         layout = QHBoxLayout(w)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
-        self._status_labels: dict[str, QLabel] = {}
-        for spec in SIGNAL_CATALOG:
+        # Hold the widget, not just its layout: the caller reparents it into
+        # the status bar, but if it ever does not, Python would collect the
+        # QWidget and take the layout we repopulate through with it.
+        self._status_widget = w
+        self._status_layout = layout
+        self._populate_status_labels()
+        return w
+
+    def _populate_status_labels(self) -> None:
+        layout = self._status_layout
+        if layout is None:
+            return
+        try:
+            layout.count()
+        except RuntimeError:
+            # Host destroyed the strip; nothing to repopulate.
+            self._status_layout = None
+            self._status_labels = {}
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._status_labels = {}
+        for spec in self._specs:
             lbl = QLabel()
             lbl.setTextFormat(Qt.RichText)
             lbl.setStyleSheet("font-size: 12px;")
             layout.addWidget(lbl)
             self._status_labels[spec.key] = lbl
             lbl.setVisible(self._series[spec.key].available)
-        return w
 
     def _build_plot(self) -> pg.PlotWidget:
         self._plot = pg.PlotWidget()
@@ -248,22 +381,7 @@ class RealTimeTab(QWidget):
         # slot at any time uses the plot's own vb (linked to the built-in
         # left axis when shown). All other signals get their own extra
         # ViewBox + AxisItem stacked on the right.
-        for spec in SIGNAL_CATALOG:
-            s = self._series[spec.key]
-            s.view_box = pg.ViewBox()
-            s.view_box.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
-            plot_item.scene().addItem(s.view_box)
-            s.view_box.setXLink(plot_item.vb)
-            s.curve = pg.PlotDataItem(pen=pg.mkPen(spec.color, width=1))
-            s.view_box.addItem(s.curve)
-            # Right-side axis for this signal, created once, reused.
-            # Axis line = black, tick numbers = colored, label = mixed
-            # (name black + unit colored) via HTML in setLabel.
-            s.axis = pg.AxisItem("right")
-            s.axis.setLabel(_axis_label_html(spec.name, s.current_unit_label(), spec.color))
-            s.axis.setPen("#000000")
-            s.axis.setTextPen(spec.color)
-            s.axis.linkToView(s.view_box)
+        self._build_plot_items()
 
         # Keep aux ViewBoxes' geometry synced with the main plot area
         plot_item.vb.sigResized.connect(self._sync_viewboxes)
@@ -273,6 +391,32 @@ class RealTimeTab(QWidget):
 
         self._rebuild_axes()
         return self._plot
+
+    def _build_plot_items(self) -> None:
+        """Create one ViewBox + curve + right-hand axis per signal.
+
+        The signal that occupies the "left" slot at any time uses the plot's
+        own vb; every other signal gets its own ViewBox stacked on the right.
+        """
+        plot_item = self._plot.plotItem
+        for spec in self._specs:
+            s = self._series[spec.key]
+            s.view_box = pg.ViewBox()
+            s.view_box.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+            plot_item.scene().addItem(s.view_box)
+            s.view_box.setXLink(plot_item.vb)
+            s.curve = pg.PlotDataItem(pen=pg.mkPen(spec.color, width=1))
+            s.view_box.addItem(s.curve)
+            if s.ys_base:
+                s.curve.setData(s.xs, s.display_ys())
+            # Right-side axis for this signal, created once, reused.
+            # Axis line = black, tick numbers = colored, label = mixed
+            # (name black + unit colored) via HTML in setLabel.
+            s.axis = pg.AxisItem("right")
+            s.axis.setLabel(_axis_label_html(spec.name, s.current_unit_label(), spec.color))
+            s.axis.setPen("#000000")
+            s.axis.setTextPen(spec.color)
+            s.axis.linkToView(s.view_box)
 
     def _on_manual_range_change(self, _mask=None) -> None:
         if getattr(self, "follow_cb", None) is not None and self.follow_cb.isChecked():
@@ -326,7 +470,7 @@ class RealTimeTab(QWidget):
         Rule: at most one axis on the left (the plot's built-in left axis,
         linked to the first-visible signal's ViewBox). All other visible
         signals get their own AxisItem stacked outward on the right, in
-        SIGNAL_CATALOG order. Matches Omer's stated examples:
+        signal-set order. Matches Omer's stated examples:
             n=1  → left
             n=2  → left + right
             n=3  → left + 2 right (innermost + outer)
@@ -343,7 +487,7 @@ class RealTimeTab(QWidget):
                 pass
             s.axis.hide()
 
-        visible = [self._series[spec.key] for spec in SIGNAL_CATALOG
+        visible = [self._series[spec.key] for spec in self._specs
                    if self._series[spec.key].available and self._series[spec.key].visible]
 
         left_axis = plot_item.getAxis("left")
@@ -401,7 +545,7 @@ class RealTimeTab(QWidget):
         if s.axis is not None:
             s.axis.setLabel(new_label)
         left_axis = self._plot.plotItem.getAxis("left")
-        visible = [self._series[spec.key] for spec in SIGNAL_CATALOG
+        visible = [self._series[spec.key] for spec in self._specs
                    if self._series[spec.key].available and self._series[spec.key].visible]
         if visible and visible[0] is s:
             left_axis.setLabel(new_label)
@@ -425,7 +569,7 @@ class RealTimeTab(QWidget):
         the control panel + status-bar strip; they cannot be toggled on.
         """
         available_set = set(keys)
-        for spec in SIGNAL_CATALOG:
+        for spec in self._specs:
             s = self._series[spec.key]
             avail = spec.key in available_set
             s.available = avail
@@ -451,12 +595,22 @@ class RealTimeTab(QWidget):
             s.ys_base.clear()
             if s.curve is not None:
                 s.curve.setData([], [])
+            # Clear the status-bar readout too. _update_value_label bails on an
+            # empty series, so a value left here would sit there looking live
+            # while the plot is empty — which is exactly how a silently-failing
+            # sniff session managed to look like a working one.
+            lbl = self._status_labels.get(s.spec.key)
+            if lbl is not None:
+                lbl.setText("")
 
     def push_calorimeter_sample(self, wall_ts: float, readings: dict) -> None:
-        """`readings` keys: "hf", "t", "ext_t" (any subset)."""
-        for key in ("hf", "t", "ext_t"):
-            if key in readings:
-                self._append(key, wall_ts, float(readings[key]))
+        """`readings` is keyed by whatever the connected reader declares —
+        the built-in "hf"/"t"/"ext_t" for a direct connection, or the profile's
+        own signal names when sniffing. Keys the tab does not know about are
+        dropped rather than plotted against the wrong axis."""
+        for spec in self._cal_specs:
+            if spec.key in readings:
+                self._append(spec.key, wall_ts, float(readings[spec.key]))
 
     def push_keithley_sample(self, wall_ts: float, v, i, r, p) -> None:
         for key, value in (("v", v), ("i", i), ("r", r), ("p", p)):
@@ -465,8 +619,8 @@ class RealTimeTab(QWidget):
             self._append(key, wall_ts, float(value))
 
     def _append(self, key: str, wall_ts: float, value_base: float) -> None:
-        s = self._series[key]
-        if not s.available:
+        s = self._series.get(key)
+        if s is None or not s.available:
             return
         if self._t_ref is None:
             self._t_ref = wall_ts
