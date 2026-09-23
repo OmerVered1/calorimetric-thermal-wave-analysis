@@ -78,6 +78,34 @@ class SMU:
         )
         return cls(caps, driver, module, convention)
 
+    @staticmethod
+    def default_limits(model: str):
+        """That model's own SafetyLimits, at its driver's defaults.
+
+        Each driver defines its own SafetyLimits class with its own defaults
+        (the 2602B allows 3 A, the 6430 105 mA), so limits must never be carried
+        from one model to another — the window keeps one set per model.
+        """
+        module_name, _cls, _conv = _DRIVERS[registry.get(model).model]
+        return importlib.import_module(module_name).SafetyLimits()
+
+    @staticmethod
+    def clamp_limits(model: str, limits):
+        """Copy of ``limits`` in this model's SafetyLimits type, with every
+        magnitude held inside the model's own defaults — which are its hardware
+        maxima. Used for limits loaded from a saved configuration, which may
+        have been written while a different instrument was connected."""
+        default = SMU.default_limits(model)
+        out = SMU.default_limits(model)
+        for name in ("max_voltage", "max_current", "compliance_voltage",
+                     "compliance_current", "power_limit"):
+            if hasattr(limits, name) and hasattr(out, name):
+                setattr(out, name, min(abs(getattr(limits, name)), abs(getattr(default, name))))
+        for name, bound in (("min_voltage", "max_voltage"), ("min_current", "max_current")):
+            if hasattr(limits, name) and hasattr(out, name):
+                setattr(out, name, -min(abs(getattr(limits, name)), abs(getattr(default, bound))))
+        return out
+
     # ----- helpers -------------------------------------------------------
 
     def _ch(self, channel: str) -> dict:
@@ -129,6 +157,8 @@ class SMU:
 
     def identify(self) -> str:
         return self.driver.get_identification()
+
+    get_identification = identify   # the name the window has always used
 
     def reset(self, channel: str = "a") -> None:
         self.driver.reset(**self._ch(channel))

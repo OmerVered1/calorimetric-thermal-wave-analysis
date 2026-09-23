@@ -1,0 +1,401 @@
+"""The source-meter half of the connect dialog: choose the model, then how.
+
+This replaces the launcher. Where there used to be a separate program per
+instrument, you now pick the instrument here, and the connection options below
+change to fit it — an instrument list for USB/GPIB, an address with history for
+LAN, a port list and baud rate for the 6430's RS-232.
+
+Scanning happens on a worker thread. The original dialogs scanned on the UI
+thread and froze for about a second every time they opened (longer on a busy
+lab network, and tens of seconds for a serial auto-detect).
+"""
+
+from __future__ import annotations
+
+from typing import Callable, List, Optional
+
+from PyQt5.QtCore import QObject, QSettings, QThread, Qt, pyqtSignal
+from PyQt5.QtWidgets import (
+    QButtonGroup,
+    QComboBox,
+    QDoubleSpinBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ctwa import theme
+from ctwa.instruments import discovery, registry
+from ctwa.instruments.capabilities import LAN, SERIAL, VISA, Capabilities
+
+_LAST_MODEL_KEY = "connection/last_model"
+_LAN_HISTORY_KEY = "connection/lan_ip_history"
+_LAN_HISTORY_MAX = 5
+_BAUD_RATES = ("9600", "19200", "38400", "57600", "115200")
+
+
+class _Job(QObject):
+    done = pyqtSignal(object)
+
+    def __init__(self, fn: Callable):
+        super().__init__()
+        self._fn = fn
+
+    def run(self):
+        try:
+            result = self._fn()
+        except Exception as exc:  # reported, never raised into Qt
+            result = exc
+        self.done.emit(result)
+
+
+def run_in_background(owner: QObject, fn: Callable, on_done: Callable) -> QThread:
+    """Run ``fn`` on a worker thread and deliver its result on the UI thread."""
+    thread = QThread(owner)
+    job = _Job(fn)
+    job.moveToThread(thread)
+    thread.started.connect(job.run)
+    job.done.connect(on_done)
+    job.done.connect(thread.quit)
+    job.done.connect(job.deleteLater)
+    thread.finished.connect(thread.deleteLater)
+    thread._job = job  # keep it alive for the thread's lifetime
+    thread.start()
+    return thread
+
+
+class ModelCard(QPushButton):
+    """A checkable card: model name over its one-line summary."""
+
+    def __init__(self, caps: Capabilities, parent=None):
+        super().__init__(parent)
+        self.caps = caps
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(64)
+        theme.set_role(self, "model-card")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(2)
+        name = QLabel(caps.display_name)
+        name.setAttribute(Qt.WA_TransparentForMouseEvents)
+        theme.set_role(name, "card-title")
+        summary = QLabel(caps.summary)
+        summary.setAttribute(Qt.WA_TransparentForMouseEvents)
+        summary.setWordWrap(True)
+        theme.set_role(summary, "faint")
+        lay.addWidget(name)
+        lay.addWidget(summary)
+
+
+class SMUConnectPanel(QWidget):
+    """Emits ``connect_requested(model, address, simulate, resistance, baud)``."""
+
+    connect_requested = pyqtSignal(str, object, bool, object, object)
+
+    def __init__(self, settings: Optional[QSettings] = None, parent=None):
+        super().__init__(parent)
+        self.settings = settings or QSettings()
+        self._threads: List[QThread] = []
+        self._scan_serial = 0
+        self._build()
+        last = self.settings.value(_LAST_MODEL_KEY, registry.MODEL_ORDER[0])
+        self.select_model(last if last in registry.MODELS else registry.MODEL_ORDER[0])
+
+    # ----- layout -------------------------------------------------------
+
+    def _build(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 4, 0, 0)
+        outer.setSpacing(10)
+
+        outer.addWidget(theme.set_role(QLabel("Instrument"), "section"))
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        self._cards = {}
+        self._card_group = QButtonGroup(self)
+        self._card_group.setExclusive(True)
+        for i, model in enumerate(registry.MODEL_ORDER):
+            card = ModelCard(registry.get(model))
+            card.clicked.connect(lambda _c=False, m=model: self.select_model(m))
+            self._card_group.addButton(card)
+            self._cards[model] = card
+            grid.addWidget(card, i // 2, i % 2)
+        outer.addLayout(grid)
+
+        # transport selector — only shown when a model has more than one
+        self._transport_row = QWidget()
+        tr = QHBoxLayout(self._transport_row)
+        tr.setContentsMargins(0, 6, 0, 0)
+        tr.setSpacing(0)
+        tr.addWidget(theme.set_role(QLabel("Connection"), "section"))
+        tr.addStretch()
+        self._transport_buttons = {}
+        self._transport_group = QButtonGroup(self)
+        self._transport_group.setExclusive(True)
+        for key, text in ((VISA, "USB / GPIB"), (LAN, "LAN"), (SERIAL, "RS-232")):
+            b = QPushButton(text)
+            b.setCheckable(True)
+            b.clicked.connect(lambda _c=False, k=key: self._show_transport(k))
+            self._transport_group.addButton(b)
+            self._transport_buttons[key] = b
+            tr.addWidget(b)
+        outer.addWidget(self._transport_row)
+
+        self._stack = QStackedWidget()
+        self._pages = {VISA: self._build_visa_page(), LAN: self._build_lan_page(),
+                       SERIAL: self._build_serial_page()}
+        for page in self._pages.values():
+            self._stack.addWidget(page)
+        outer.addWidget(self._stack, stretch=1)
+
+        self._error = theme.set_role(QLabel(""), "danger")
+        self._error.setWordWrap(True)
+        self._error.hide()
+        outer.addWidget(self._error)
+
+        # footer: simulate on the left, connect on the right
+        foot = QHBoxLayout()
+        foot.setSpacing(8)
+        self.simulate_btn = theme.set_role(QPushButton("Simulate"), "quiet")
+        self.simulate_btn.setToolTip("Run without hardware, against a simulated resistor.")
+        self.simulate_btn.clicked.connect(self._simulate)
+        foot.addWidget(self.simulate_btn)
+        self.sim_resistance = QDoubleSpinBox()
+        self.sim_resistance.setRange(1, 1e12)
+        self.sim_resistance.setDecimals(0)
+        self.sim_resistance.setSuffix(" Ω")
+        self.sim_resistance.setToolTip("Resistance the simulated instrument sees.")
+        self.sim_resistance.setMaximumWidth(150)
+        foot.addWidget(self.sim_resistance)
+        foot.addStretch()
+        self.connect_btn = theme.set_role(QPushButton("Connect"), "primary")
+        self.connect_btn.setDefault(True)
+        self.connect_btn.clicked.connect(self._connect)
+        foot.addWidget(self.connect_btn)
+        outer.addLayout(foot)
+
+    def _list_page(self, empty_hint: str, refresh_text: str, on_refresh) -> tuple:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        head = QHBoxLayout()
+        status = theme.set_role(QLabel(""), "faint")
+        head.addWidget(status)
+        head.addStretch()
+        refresh = theme.set_role(QPushButton(refresh_text), "quiet")
+        refresh.clicked.connect(on_refresh)
+        head.addWidget(refresh)
+        lay.addLayout(head)
+        lst = QListWidget()
+        lst.setMinimumHeight(120)
+        lst.itemDoubleClicked.connect(lambda _i: self._connect())
+        lay.addWidget(lst, stretch=1)
+        hint = theme.set_role(QLabel(empty_hint), "faint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        return page, lst, status, refresh, hint
+
+    def _build_visa_page(self):
+        page, self.visa_list, self.visa_status, self.visa_refresh, self.visa_hint = self._list_page(
+            "Nothing listed? Check the USB cable and that a VISA runtime (NI-VISA or "
+            "Keysight IO) is installed.", "Scan again", self.scan)
+        return page
+
+    def _build_lan_page(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lay.addWidget(theme.set_role(QLabel("IP address"), "muted"))
+        self.ip_entry = QComboBox()
+        self.ip_entry.setEditable(True)
+        self.ip_entry.lineEdit().setPlaceholderText("e.g. 192.168.0.2")
+        self.ip_entry.lineEdit().returnPressed.connect(self._connect)
+        for ip in self._lan_history():
+            self.ip_entry.addItem(ip)
+        self.ip_entry.setCurrentText(self._lan_history()[0] if self._lan_history() else "")
+        lay.addWidget(self.ip_entry)
+        hint = theme.set_role(QLabel(
+            "Recent addresses are remembered. A direct cable to the instrument usually "
+            "needs your network adapter on the same subnet."), "faint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        lay.addStretch()
+        return page
+
+    def _build_serial_page(self):
+        page, self.serial_list, self.serial_status, self.serial_refresh, self.serial_hint = self._list_page(
+            "A USB-to-serial adapter shows up here once its driver is installed.",
+            "Scan again", self.scan)
+        row = QHBoxLayout()
+        row.addWidget(theme.set_role(QLabel("Baud rate"), "muted"))
+        self.baud_combo = QComboBox()
+        self.baud_combo.addItems(_BAUD_RATES)
+        row.addWidget(self.baud_combo)
+        row.addStretch()
+        self.autodetect_btn = QPushButton("Find it for me")
+        self.autodetect_btn.setToolTip("Try every port and baud rate. Takes a little while.")
+        self.autodetect_btn.clicked.connect(self._autodetect)
+        row.addWidget(self.autodetect_btn)
+        page.layout().insertLayout(2, row)
+        return page
+
+    # ----- model & transport ---------------------------------------------
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def caps(self) -> Capabilities:
+        return registry.get(self._model)
+
+    def select_model(self, model: str):
+        self._model = model
+        self._cards[model].setChecked(True)
+        caps = self.caps
+        for key, button in self._transport_buttons.items():
+            button.setVisible(key in caps.transports)
+        self._transport_row.setVisible(True)
+        for i, key in enumerate(k for k in (VISA, LAN, SERIAL) if k in caps.transports):
+            theme.set_role(self._transport_buttons[key], "segment",
+                           edge=self._edge(i, len(caps.transports)))
+        self.sim_resistance.setValue(caps.default_simulation_resistance)
+        self._show_transport(caps.transports[0])
+        self._clear_error()
+        self.settings.setValue(_LAST_MODEL_KEY, model)
+
+    @staticmethod
+    def _edge(i, n):
+        if n == 1:
+            return "solo"
+        return "left" if i == 0 else ("right" if i == n - 1 else "mid")
+
+    def _show_transport(self, key: str):
+        self._transport = key
+        self._transport_buttons[key].setChecked(True)
+        self._stack.setCurrentWidget(self._pages[key])
+        if key == LAN:
+            self.ip_entry.setFocus()
+        else:
+            self.scan()
+
+    # ----- scanning -------------------------------------------------------
+
+    def scan(self):
+        """Refresh the list for the current transport, off the UI thread."""
+        if self._transport == LAN:
+            return
+        self._scan_serial += 1
+        token = self._scan_serial
+        caps = self.caps
+        if self._transport == SERIAL:
+            lst, status, button = self.serial_list, self.serial_status, self.serial_refresh
+            fn = discovery.list_serial
+        else:
+            lst, status, button = self.visa_list, self.visa_status, self.visa_refresh
+            fn = lambda: discovery.list_visa(caps)
+        status.setText("Looking for instruments…")
+        button.setEnabled(False)
+
+        def done(result, lst=lst, status=status, button=button, token=token):
+            if token != self._scan_serial:
+                return  # a newer scan superseded this one
+            button.setEnabled(True)
+            lst.clear()
+            if isinstance(result, Exception):
+                status.setText(f"Scan failed: {result}")
+                return
+            for found in result:
+                item = QListWidgetItem(found.label)
+                item.setData(Qt.UserRole, found.address)
+                item.setToolTip(found.address)
+                lst.addItem(item)
+            if result:
+                lst.setCurrentRow(0)
+                status.setText(f"{len(result)} found")
+            else:
+                status.setText("None found")
+
+        self._threads.append(run_in_background(self, fn, done))
+
+    def _autodetect(self):
+        self.autodetect_btn.setEnabled(False)
+        self.serial_status.setText("Trying every port and baud rate…")
+
+        def done(result):
+            self.autodetect_btn.setEnabled(True)
+            if isinstance(result, Exception) or not result:
+                self.serial_status.setText("No 6430 answered.")
+                return
+            port, baud = result
+            self.serial_status.setText(f"Found on {port} at {baud} baud")
+            self.baud_combo.setCurrentText(str(baud))
+            for i in range(self.serial_list.count()):
+                if self.serial_list.item(i).data(Qt.UserRole) == port:
+                    self.serial_list.setCurrentRow(i)
+                    break
+            else:
+                item = QListWidgetItem(port)
+                item.setData(Qt.UserRole, port)
+                self.serial_list.addItem(item)
+                self.serial_list.setCurrentItem(item)
+
+        self._threads.append(run_in_background(self, discovery.autodetect_6430, done))
+
+    # ----- actions ---------------------------------------------------------
+
+    def _selected(self, lst: QListWidget) -> Optional[str]:
+        item = lst.currentItem()
+        return item.data(Qt.UserRole) if item else None
+
+    def _connect(self):
+        self._clear_error()
+        if self._transport == LAN:
+            ip = self.ip_entry.currentText().strip()
+            if not ip:
+                return self.show_error("Enter the instrument's IP address.")
+            self._remember_ip(ip)
+            self.connect_requested.emit(self._model, discovery.visa_address_for_ip(ip),
+                                        False, None, None)
+        elif self._transport == SERIAL:
+            port = self._selected(self.serial_list)
+            if not port:
+                return self.show_error("Choose a serial port.")
+            self.connect_requested.emit(self._model, port, False, None,
+                                        int(self.baud_combo.currentText()))
+        else:
+            address = self._selected(self.visa_list)
+            if not address:
+                return self.show_error("Choose an instrument from the list.")
+            self.connect_requested.emit(self._model, address, False, None, None)
+
+    def _simulate(self):
+        self._clear_error()
+        self.connect_requested.emit(self._model, None, True, self.sim_resistance.value(), None)
+
+    def show_error(self, text: str):
+        self._error.setText(text)
+        self._error.show()
+
+    def _clear_error(self):
+        self._error.hide()
+
+    # ----- LAN history --------------------------------------------------------
+
+    def _lan_history(self) -> List[str]:
+        raw = self.settings.value(_LAN_HISTORY_KEY, "")
+        return [ip for ip in str(raw).split(",") if ip] if raw else []
+
+    def _remember_ip(self, ip: str):
+        history = [ip] + [x for x in self._lan_history() if x != ip]
+        self.settings.setValue(_LAN_HISTORY_KEY, ",".join(history[:_LAN_HISTORY_MAX]))
