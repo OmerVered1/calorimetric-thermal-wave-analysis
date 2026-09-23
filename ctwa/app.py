@@ -218,45 +218,28 @@ class LightPalette(QPalette):
 
 
 class ToggleButton(QPushButton):
-    """Toggle button with selected/unselected state - green accent"""
+    """A chip that shows which of a small set of choices is active.
+
+    Selection is expressed through Qt's own checked state, which the theme
+    styles; the old version swapped whole inline stylesheets on every change.
+    """
+
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        theme.set_role(self, "segment", edge="solo")
         self._selected = False
-        self._update_style()
+        # Checked state follows set_selected, not the click itself; otherwise a
+        # second click on the active choice would visibly deselect it.
+        self.clicked.connect(lambda: self.setChecked(self._selected))
 
     def set_selected(self, selected: bool):
-        self._selected = selected
-        self._update_style()
+        self._selected = bool(selected)
+        self.setChecked(self._selected)
 
     def is_selected(self) -> bool:
         return self._selected
-
-    def _update_style(self):
-        if self._selected:
-            self.setStyleSheet("""
-                QPushButton {
-                    background-color: #1a1a2e;
-                    color: #ffffff;
-                    border: none;
-                    padding: 6px 16px;
-                    font-weight: bold;
-                    font-size: 14px;
-                    border-radius: 5px;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QPushButton {
-                    background-color: #ffffff;
-                    color: #6b7280;
-                    border: 1px solid #d1d5db;
-                    padding: 6px 16px;
-                    font-weight: 500;
-                    font-size: 14px;
-                    border-radius: 5px;
-                }
-                QPushButton:hover { background-color: #f3f4f6; color: #1a1a2e; }
-            """)
 
 
 class DigitalDisplay(QLabel):
@@ -2953,23 +2936,17 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 10)
 
         # Header bar
-        header = QFrame()
-        header.setFixedHeight(44)
-        header.setStyleSheet("""
-            QFrame {
-                background-color: #1a1a2e;
-            }
-        """)
+        header = theme.set_role(QFrame(), "header")
+        header.setFixedHeight(56)
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 5, 20, 5)
+        header_layout.setContentsMargins(24, 8, 24, 8)
+        header_layout.setSpacing(12)
 
-        header_title = QLabel(__app_name__)
-        header_title.setStyleSheet("color: white; font-size: 18px; font-weight: bold; font-family: 'Inter'; background: transparent;")
+        header_title = theme.set_role(QLabel(__app_name__), "title")
         header_layout.addWidget(header_title)
         header_layout.addStretch()
 
-        version_label = QLabel(f"v{__version__} Created by {__author__} with claude code")
-        version_label.setStyleSheet("color: rgba(255,255,255,0.9); font-size: 11px; font-family: 'Inter'; background: transparent;")
+        version_label = theme.set_role(QLabel(f"v{__version__} · {__author__}"), "faint")
         header_layout.addWidget(version_label)
 
         layout.addWidget(header)
@@ -2981,81 +2958,55 @@ class MainWindow(QMainWindow):
 
         # Top toolbar
         toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
 
-        connect_btn = QPushButton("Connect")
+        connect_btn = QPushButton("Connect…")
         connect_btn.clicked.connect(self._show_connection_dialog)
         toolbar.addWidget(connect_btn)
 
-        self.connection_label = QLabel("Disconnected")
-        self.connection_label.setStyleSheet("color: #dc2626; font-family: 'Inter'; font-weight: bold; font-size: 15px;")
-        toolbar.addWidget(self.connection_label)
+        # Status as two quiet pills: source meter, calorimeter.
+        self.model_label = theme.set_role(QLabel(""), "muted")
+        self.smu_pill = theme.set_role(QLabel("Source meter · not connected"), "pill")
+        self.cal_pill = theme.set_role(QLabel("Calorimeter · —"), "pill")
+        toolbar.addWidget(self.smu_pill)
+        toolbar.addWidget(self.cal_pill)
+        # Older code paths still set this label; the pills are what is shown.
+        self.connection_label = QLabel()
+        self.connection_label.hide()
 
         toolbar.addStretch()
 
-        # Channel selector
-        ch_label = QLabel("Channel:")
-        ch_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        toolbar.addWidget(ch_label)
-
-        self.channel_a_btn = ToggleButton("Ch A")
+        # Channel selector — only shown on a dual-channel instrument.
+        self.channel_selector = QWidget()
+        ch_row = QHBoxLayout(self.channel_selector)
+        ch_row.setContentsMargins(0, 0, 0, 0)
+        ch_row.setSpacing(4)
+        ch_row.addWidget(theme.set_role(QLabel("Channel"), "muted"))
+        self.channel_a_btn = ToggleButton("A")
         self.channel_a_btn.set_selected(True)
         self.channel_a_btn.clicked.connect(lambda: self._set_channel("a"))
-        toolbar.addWidget(self.channel_a_btn)
-
-        self.channel_b_btn = ToggleButton("Ch B")
+        ch_row.addWidget(self.channel_a_btn)
+        self.channel_b_btn = ToggleButton("B")
         self.channel_b_btn.clicked.connect(lambda: self._set_channel("b"))
-        toolbar.addWidget(self.channel_b_btn)
+        ch_row.addWidget(self.channel_b_btn)
+        toolbar.addWidget(self.channel_selector)
 
-        # Per-channel output buttons
-        self.output_a_btn = QPushButton("OUT A: OFF")
-        self.output_a_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff; color: #1a1a2e;
-                font-family: 'Inter'; font-size: 14px; font-weight: 600;
-                padding: 8px 16px; border-radius: 6px; border: 1px solid #d1d5db;
-            }
-            QPushButton:hover { background-color: #f3f4f6; }
-        """)
+        # Per-channel output switches (channel B hidden on single-channel models)
+        self.output_a_btn = theme.set_role(QPushButton("Output · Off"), "output", live="false")
         self.output_a_btn.clicked.connect(lambda: self._toggle_output("a"))
         toolbar.addWidget(self.output_a_btn)
 
-        self.output_b_btn = QPushButton("OUT B: OFF")
-        self.output_b_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff; color: #1a1a2e;
-                font-family: 'Inter'; font-size: 14px; font-weight: 600;
-                padding: 8px 16px; border-radius: 6px; border: 1px solid #d1d5db;
-            }
-            QPushButton:hover { background-color: #f3f4f6; }
-        """)
+        self.output_b_btn = theme.set_role(QPushButton("Output B · Off"), "output", live="false")
         self.output_b_btn.clicked.connect(lambda: self._toggle_output("b"))
         toolbar.addWidget(self.output_b_btn)
 
         toolbar.addStretch()
 
-        self.start_btn = QPushButton("START SWEEP")
-        self.start_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1a1a2e; color: #ffffff;
-                font-family: 'Inter'; font-size: 14px; font-weight: bold;
-                padding: 8px 20px; border-radius: 6px; border: none;
-            }
-            QPushButton:hover { background-color: #374151; }
-            QPushButton:disabled { background-color: #e5e7eb; color: #9ca3af; }
-        """)
+        self.start_btn = theme.set_role(QPushButton("Start sweep"), "primary")
         self.start_btn.clicked.connect(self.start_sweep)
         toolbar.addWidget(self.start_btn)
 
-        self.stop_btn = QPushButton("STOP")
-        self.stop_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #dc2626; color: #ffffff;
-                font-family: 'Inter'; font-size: 14px; font-weight: bold;
-                padding: 8px 20px; border-radius: 6px; border: none;
-            }
-            QPushButton:hover { background-color: #b91c1c; }
-            QPushButton:disabled { background-color: #e5e7eb; color: #9ca3af; }
-        """)
+        self.stop_btn = theme.set_role(QPushButton("Stop"), "danger")
         self.stop_btn.clicked.connect(self.stop_sweep)
         self.stop_btn.setEnabled(False)
         toolbar.addWidget(self.stop_btn)
@@ -3870,32 +3821,26 @@ class MainWindow(QMainWindow):
         self._update_connection_label()
 
     def _update_connection_label(self):
-        """Toolbar label reflects both Keithley and calorimeter status."""
-        parts = []
+        """Toolbar pills: what source meter is attached, and the calorimeter."""
         if self.smu is None:
-            parts.append(("Keithley: Disconnected", "#dc2626"))
-        elif getattr(self, "_smu_sim_resistance", None) is not None:
-            r = self._smu_sim_resistance
-            res_str = f"{r:.0f}\u03a9" if r < 1000 else f"{r/1000:.0f}k\u03a9"
-            parts.append((f"Keithley: SIM ({res_str})", "#6b7280"))
+            text, tone = "Source meter · not connected", ""
+        elif self.smu.simulate:
+            r = getattr(self, "_smu_sim_resistance", None) or 0
+            res = (f"{r:.0f} Ω" if r < 1e3 else f"{r/1e3:.0f} kΩ" if r < 1e6
+                   else f"{r/1e6:.0f} MΩ" if r < 1e9 else f"{r/1e9:.0f} GΩ")
+            text, tone = f"{self.smu.caps.display_name} · simulated, {res}", "warn"
         else:
-            parts.append(("Keithley: Connected", "#16a34a"))
+            text, tone = f"{self.smu.caps.display_name} · connected", "ok"
+        self.smu_pill.setText(text)
+        theme.set_prop(self.smu_pill, tone=tone)
 
         if self.calorimeter_reader is None:
-            parts.append(("Calorimeter: \u2014", "#6b7280"))
+            ctext, ctone = "Calorimeter · —", ""
         else:
-            name = self.calorimeter_name or "?"
-            parts.append((f"Calorimeter: {name}", "#16a34a"))
-
-        # Render as rich text with per-segment color
-        html = "  |  ".join(
-            f"<span style='color:{color};'>{text}</span>" for text, color in parts
-        )
-        self.connection_label.setText(html)
-        # Keep styleSheet minimal \u2014 colors handled by inline spans
-        self.connection_label.setStyleSheet(
-            "font-family: 'Inter'; font-weight: bold; font-size: 14px;"
-        )
+            how = "watching" if getattr(self, "calorimeter_sniffing", False) else "connected"
+            ctext, ctone = f"{self.calorimeter_name or 'Calorimeter'} · {how}", "ok"
+        self.cal_pill.setText(ctext)
+        theme.set_prop(self.cal_pill, tone=ctone)
 
     def start_sweep(self):
         if not self.smu:
