@@ -56,7 +56,15 @@ class Capabilities:
     # Smallest current compliance the source fields accept, and how many
     # decimals they show. 1 mA / 4 on every original window but the 6430's,
     # which went to 1 pA / 6 for sub-femtoamp work.
+    # The 2450 window started in 4-wire; the other three in 2-wire.
+    default_four_wire: bool = False
+    # Choices offered for the output-off state, where the model supports it.
+    output_off_modes: Tuple[str, ...] = ()
     min_current_compliance: float = 1e-3
+    # Compliance the source fields start at. 100 mA / 20 V on every original
+    # window except the 6430's, which started at 1 mA / 10 V.
+    default_current_compliance: float = 0.1
+    default_voltage_compliance: float = 20.0
     current_decimals: int = 4
     notes: Tuple[str, ...] = field(default_factory=tuple)
 

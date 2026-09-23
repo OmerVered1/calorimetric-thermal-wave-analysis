@@ -196,3 +196,39 @@ def test_2602b_channel_b_reaches_the_driver_as_channel_b():
 def test_unknown_model_is_a_clear_error():
     with pytest.raises(ValueError, match="unknown SMU model"):
         SMU.create("2400", simulate=True)
+
+
+# ----- safety limits never cross models ---------------------------------------
+
+
+@pytest.mark.parametrize("model", ALL)
+def test_each_model_starts_from_its_own_limits(model):
+    limits = SMU.default_limits(model)
+    caps = registry.get(model)
+    assert limits.max_voltage == caps.max_voltage
+    assert limits.max_current == caps.max_current
+
+
+def test_limits_saved_on_a_2602b_are_clamped_for_a_6430():
+    """3 A from a 2602B config must not reach a 105 mA instrument."""
+    big = SMU.default_limits("2602B")
+    clamped = SMU.clamp_limits("6430", big)
+    assert clamped.max_current == pytest.approx(0.105)
+    assert clamped.min_current == pytest.approx(-0.105)
+    assert type(clamped).__module__ == "keithley6430_driver"
+
+
+def test_clamping_keeps_limits_that_are_already_tighter():
+    tight = SMU.default_limits("2450")
+    tight.max_voltage = 5.0
+    tight.min_voltage = -5.0
+    out = SMU.clamp_limits("2450", tight)
+    assert out.max_voltage == 5.0 and out.min_voltage == -5.0
+
+
+@pytest.mark.parametrize("model", ALL)
+def test_a_driver_accepts_its_own_clamped_limits(model):
+    s = SMU.create(model, simulate=True,
+                   safety_limits=SMU.clamp_limits(model, SMU.default_limits("2602B")))
+    s.connect()
+    assert s.connected

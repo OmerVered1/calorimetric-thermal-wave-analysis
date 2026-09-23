@@ -300,9 +300,13 @@ class SMU:
         self._require("guard_mode", "guard mode")
         self.driver.set_guard_mode(enabled)
 
-    def set_output_off_mode(self, mode) -> None:
+    def set_output_off_mode(self, mode: str) -> None:
+        """``"Normal"``, ``"Zero"``, ``"High-Z"`` or ``"Guard"`` — the labels
+        the 6430 window offered — mapped onto the driver's own enum."""
         self._require("output_off_mode", "output-off mode")
-        self.driver.set_output_off_mode(mode)
+        enum = self._module.OutputOffMode
+        key = mode.strip().upper().replace("-", "_")
+        self.driver.set_output_off_mode(enum[key])
 
     def __repr__(self) -> str:
         how = "simulated" if self.simulate else ("connected" if self.connected else "disconnected")

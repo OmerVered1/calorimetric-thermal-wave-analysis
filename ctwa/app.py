@@ -61,8 +61,6 @@ __organization__ = "Omer Vered MSc Research"
 __copyright__ = "Copyright 2026 Omer Vered"
 
 
-@dataclass
-
 def apply_source_limits(value_box, compliance_box, function: str, reset_compliance: bool):
     """Range the source value / compliance fields for the connected model."""
     vmin, vmax, vdec, cmin, cmax, cdec = registry.active().source_limits(function)
@@ -74,7 +72,9 @@ def apply_source_limits(value_box, compliance_box, function: str, reset_complian
     compliance_box.setRange(cmin, cmax)
     compliance_box.setSuffix(" A" if function == "Voltage" else " V")
     if reset_compliance:
-        default = 0.1 if function == "Voltage" else 20.0
+        caps = registry.active()
+        default = (caps.default_current_compliance if function == "Voltage"
+                   else caps.default_voltage_compliance)
         compliance_box.setValue(min(max(default, cmin), cmax))
 
 
@@ -83,6 +83,8 @@ def source_range_labels(function: str):
     opts = caps.voltage_ranges if function == "Voltage" else caps.current_ranges
     return ["Auto"] + [o.label for o in opts]
 
+
+@dataclass
 
 class MeasurementPoint:
     """Single measurement data point"""
@@ -384,6 +386,23 @@ class MultimeterPanel(QWidget):
         # Instrument settings row
         inst_row = QHBoxLayout()
 
+        # Terminals (2450 only). The multimeter keeps its own choice, separate
+        # from Instrument Settings, exactly as the 2450 window did.
+        self.terminal_box = QWidget()
+        term = QHBoxLayout(self.terminal_box)
+        term.setContentsMargins(0, 0, 0, 0)
+        term.addWidget(QLabel("Terminals:"))
+        self.front_btn = ToggleButton("Front")
+        self.front_btn.clicked.connect(lambda: self._set_terminal("Front"))
+        term.addWidget(self.front_btn)
+        self.rear_btn = ToggleButton("Rear")
+        self.rear_btn.clicked.connect(lambda: self._set_terminal("Rear"))
+        term.addWidget(self.rear_btn)
+        term.addSpacing(12)
+        inst_row.addWidget(self.terminal_box)
+        self._set_terminal("Rear")
+        self.terminal_box.setVisible(registry.active().terminal_select)
+
         inst_row.addWidget(QLabel("Sense:"))
         self.sense_2w = ToggleButton("2-Wire")
         self.sense_2w.set_selected(True)
@@ -573,6 +592,11 @@ class MultimeterPanel(QWidget):
         if self.running:
             self.timer.setInterval(rates[self.update_rate.currentIndex()])
 
+    def _set_terminal(self, term):
+        self.terminal = term
+        self.front_btn.set_selected(term == "Front")
+        self.rear_btn.set_selected(term == "Rear")
+
     def _set_sense(self, sense):
         self.sense = sense
         self.sense_2w.set_selected(sense == "2-Wire")
@@ -592,6 +616,10 @@ class MultimeterPanel(QWidget):
             source_val = self.source_value.value()
             compliance = self.compliance.value()
             ch = self.app.current_channel
+
+            # 2450: terminals first, as its window did.
+            if self.app.smu.caps.terminal_select:
+                self.app.smu.set_terminal(self.terminal)
 
             if self.source_type.currentText() == "Voltage":
                 self.app.smu.set_source_voltage(source_val, compliance_current=compliance, channel=ch)
@@ -824,41 +852,84 @@ class SourceSettingsWidget(QGroupBox):
 
 
 class InstrumentSettingsWidget(QGroupBox):
-    """Instrument settings: Sense mode (no terminal for 2602B)"""
+    """Instrument settings. Rows for hardware a model lacks are hidden, so the
+    same panel serves every supported SMU."""
 
     def __init__(self, parent=None):
         super().__init__("Instrument Settings", parent)
         self._setup_ui()
 
+    def _pair_row(self, label, a_text, b_text, on_pick):
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(QLabel(label))
+        a, b = ToggleButton(a_text), ToggleButton(b_text)
+        a.clicked.connect(lambda: on_pick(a_text))
+        b.clicked.connect(lambda: on_pick(b_text))
+        lay.addWidget(a)
+        lay.addWidget(b)
+        lay.addStretch()
+        return row, a, b
+
     def _setup_ui(self):
         layout = QVBoxLayout(self)
 
+        # Terminals: Front / Rear (2450)
+        self.terminal_row, self.front_btn, self.rear_btn = self._pair_row(
+            "Terminals:", "Front", "Rear", self._set_terminal)
+        layout.addWidget(self.terminal_row)
+
         # Sense: 2-Wire / 4-Wire
-        sense_layout = QHBoxLayout()
-        sense_layout.addWidget(QLabel("Sense:"))
+        self.sense_row, self.sense_2w, self.sense_4w = self._pair_row(
+            "Sense:", "2-Wire", "4-Wire", self._set_sense)
+        layout.addWidget(self.sense_row)
 
-        self.sense_2w = ToggleButton("2-Wire")
-        self.sense_2w.set_selected(True)
-        self.sense_2w.clicked.connect(lambda: self._set_sense("2-Wire"))
-        sense_layout.addWidget(self.sense_2w)
+        # High capacitance (2450)
+        self.high_cap = QCheckBox("High Capacitance Mode")
+        layout.addWidget(self.high_cap)
 
-        self.sense_4w = ToggleButton("4-Wire")
-        self.sense_4w.clicked.connect(lambda: self._set_sense("4-Wire"))
-        sense_layout.addWidget(self.sense_4w)
+        # Guard (6430)
+        self.guard_mode = QCheckBox("Guard Mode (Triax)")
+        layout.addWidget(self.guard_mode)
 
-        sense_layout.addStretch()
-        layout.addLayout(sense_layout)
-
-        # Output Off State
-        off_layout = QHBoxLayout()
+        # Output off state (6430)
+        self.off_row = QWidget()
+        off_layout = QHBoxLayout(self.off_row)
+        off_layout.setContentsMargins(0, 0, 0, 0)
         off_layout.addWidget(QLabel("Output Off:"))
         self.output_off_mode = QComboBox()
         self.output_off_mode.addItems(["Normal", "Zero", "High-Z"])
         off_layout.addWidget(self.output_off_mode)
         off_layout.addStretch()
-        layout.addLayout(off_layout)
+        layout.addWidget(self.off_row)
 
-        self.sense = "2-Wire"
+        self._model = None
+        self._set_terminal("Rear")
+        self._set_sense("2-Wire")
+        self.set_capabilities(registry.active())
+
+    def set_capabilities(self, caps):
+        self.terminal_row.setVisible(caps.terminal_select)
+        self.high_cap.setVisible(caps.high_capacitance)
+        self.guard_mode.setVisible(caps.guard_mode)
+        self.off_row.setVisible(caps.output_off_mode)
+        if caps.output_off_modes:
+            current = self.output_off_mode.currentText()
+            self.output_off_mode.clear()
+            self.output_off_mode.addItems(caps.output_off_modes)
+            i = self.output_off_mode.findText(current)
+            self.output_off_mode.setCurrentIndex(i if i >= 0 else 0)
+        # Each model starts in the sense mode its own window defaulted to —
+        # only when the model changes, never over a choice made this session.
+        if caps.model != self._model:
+            self._model = caps.model
+            self._set_sense("4-Wire" if caps.default_four_wire else "2-Wire")
+
+    def _set_terminal(self, term):
+        self.terminal = term
+        self.front_btn.set_selected(term == "Front")
+        self.rear_btn.set_selected(term == "Rear")
 
     def _set_sense(self, sense):
         self.sense = sense
@@ -916,7 +987,10 @@ class MeasureSettingsWidget(QGroupBox):
         self.auto_zero.addItems(["On", "Off", "Once"])
         az_layout.addWidget(self.auto_zero)
         az_layout.addStretch()
-        layout.addLayout(az_layout)
+        self.auto_zero_row = QWidget()
+        self.auto_zero_row.setLayout(az_layout)
+        layout.addWidget(self.auto_zero_row)
+        self.auto_zero_row.setVisible(registry.active().auto_zero)
 
 
 class TimingSettingsWidget(QGroupBox):
@@ -3497,11 +3571,22 @@ class MainWindow(QMainWindow):
         if not dual and self.current_channel != "a":
             self._set_channel("a")
         self.multimeter_panel.set_capabilities(caps)
+        self.multimeter_panel.terminal_box.setVisible(caps.terminal_select)
         self.source_settings.set_capabilities(caps)
         for box in (self.sweep_list.start_val, self.sweep_list.stop_val):
             box.setRange(-caps.max_voltage, caps.max_voltage)
-        if hasattr(self.inst_settings, "set_capabilities"):
-            self.inst_settings.set_capabilities(caps)
+        self.inst_settings.set_capabilities(caps)
+        self.measure_settings.auto_zero_row.setVisible(caps.auto_zero)
+        if getattr(self, "_caps_model", None) != caps.model:
+            # A different instrument: start from what its own window started
+            # with. Reconnecting the same model keeps this session's choices.
+            self._caps_model = caps.model
+            self.multimeter_panel._set_sense("4-Wire" if caps.default_four_wire else "2-Wire")
+            mm = self.multimeter_panel
+            apply_source_limits(mm.source_value, mm.compliance, mm.source_type.currentText(),
+                                reset_compliance=True)
+            ss = self.source_settings
+            apply_source_limits(None, ss.compliance, ss.function, reset_compliance=True)
         self.model_label.setText(caps.display_name)
 
     def _reset_instrument(self):
@@ -3661,7 +3746,8 @@ class MainWindow(QMainWindow):
             if "source" in config:
                 self.source_settings._set_function(config["source"].get("function", "Voltage"))
                 self.source_settings.mode.setCurrentText(config["source"].get("mode", "List Sweep"))
-                self.source_settings.compliance.setValue(config["source"].get("compliance", 0.1))
+                self.source_settings.compliance.setValue(
+                    config["source"].get("compliance", registry.active().default_current_compliance))
 
             if "instrument" in config:
                 self.inst_settings._set_sense(config["instrument"].get("sense", "2-Wire"))
@@ -4020,12 +4106,29 @@ class MainWindow(QMainWindow):
             # Set NPLC
             self.smu.set_nplc(nplc, channel)
 
+            caps = self.smu.caps
+            # 2450: terminals were selected before sense, as its window did.
+            if caps.terminal_select:
+                self.smu.set_terminal(self.inst_settings.terminal)
+
             # Apply sense mode
             sense = self.inst_settings.sense
             if sense == "4-Wire":
                 self.smu.set_remote_sense(True, channel)
             else:
                 self.smu.set_remote_sense(False, channel)
+
+            if caps.high_capacitance:
+                self.smu.set_high_capacitance(self.inst_settings.high_cap.isChecked())
+            if caps.guard_mode and self.inst_settings.guard_mode.isChecked():
+                # Only ever switched ON, exactly as the 6430 window did:
+                # unticking the box does not send guard OFF.
+                self.smu.set_guard_mode(True)
+            if caps.output_off_mode:
+                self.smu.set_output_off_mode(self.inst_settings.output_off_mode.currentText())
+            if caps.auto_zero:
+                az = {"On": "ON", "Off": "OFF", "Once": "ONCE"}
+                self.smu.set_auto_zero(az.get(self.measure_settings.auto_zero.currentText(), "ON"))
 
             self.smu.output_on(channel)
             # Update output buttons from main thread

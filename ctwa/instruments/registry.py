@@ -28,6 +28,7 @@ MODELS: Dict[str, Capabilities] = {
         terminal_select=True,
         high_capacitance=True,
         auto_zero=True,
+        default_four_wire=True,
     ),
     "6430": Capabilities(
         model="6430",
@@ -47,9 +48,12 @@ MODELS: Dict[str, Capabilities] = {
         auto_zero=True,
         guard_mode=True,
         output_off_mode=True,
+        output_off_modes=("Normal", "Zero", "High-Z", "Guard"),
         default_simulation_resistance=1e9,
         current_noise_floor=1e-18,
         min_current_compliance=1e-12,
+        default_current_compliance=1e-3,
+        default_voltage_compliance=10.0,
         current_decimals=6,
     ),
     "2602B": Capabilities(
