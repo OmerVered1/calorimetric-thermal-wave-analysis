@@ -206,14 +206,11 @@ QPushButton[role="segment"]:checked {{ background: {p.text}; color: {p.canvas}; 
 QPushButton[role="segment"][edge="solo"] {{ border-radius: {RADIUS}px; }}
 
 /* instrument picker cards */
-QPushButton[role="model-card"] {{
+QFrame[role="model-card"] {{
     background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS_LG}px;
-    text-align: left; padding: 0;
 }}
-QPushButton[role="model-card"]:hover {{ border-color: {p.border}; background: {p.card}; }}
-QPushButton[role="model-card"]:checked {{
-    background: {p.card}; border: 2px solid {p.accent}; color: {p.text};
-}}
+QFrame[role="model-card"]:hover {{ border: 1px solid {p.border}; }}
+QFrame[role="model-card"][selected="true"] {{ border: 2px solid {p.accent}; background: {p.card}; }}
 QLabel[role="card-title"] {{ font-size: 14px; font-weight: 600; color: {p.text}; background: transparent; }}
 QLabel[role="faint"] {{ background: transparent; }}
 

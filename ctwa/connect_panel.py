@@ -56,43 +56,84 @@ class _Job(QObject):
         self.done.emit(result)
 
 
+_live_threads = set()
+
+
 def run_in_background(owner: QObject, fn: Callable, on_done: Callable) -> QThread:
-    """Run ``fn`` on a worker thread and deliver its result on the UI thread."""
-    thread = QThread(owner)
+    """Run ``fn`` on a worker thread and deliver its result on the UI thread.
+
+    The thread is owned by the application, not by ``owner``. A VISA scan or a
+    serial auto-detect cannot be interrupted, so if the dialog that started it
+    is closed first, a thread owned by the dialog would be destroyed while still
+    running — which makes Qt abort the whole program. Here the thread outlives
+    the dialog, and its result is simply dropped if ``owner`` is gone.
+    """
+    from PyQt5.QtCore import QCoreApplication
+    import sip
+
+    thread = QThread(QCoreApplication.instance())
     job = _Job(fn)
     job.moveToThread(thread)
     thread.started.connect(job.run)
-    job.done.connect(on_done)
+
+    def deliver(result):
+        if not sip.isdeleted(owner):
+            on_done(result)
+
+    job.done.connect(deliver)
     job.done.connect(thread.quit)
     job.done.connect(job.deleteLater)
     thread.finished.connect(thread.deleteLater)
+    thread.finished.connect(lambda: _live_threads.discard(thread))
     thread._job = job  # keep it alive for the thread's lifetime
+    _live_threads.add(thread)
     thread.start()
     return thread
 
 
-class ModelCard(QPushButton):
-    """A checkable card: model name over its one-line summary."""
+def wait_for_background(timeout_ms: int = 3000) -> None:
+    """Called at exit, so no scan is still running when Qt tears down."""
+    for thread in list(_live_threads):
+        thread.wait(timeout_ms)
+
+
+class ModelCard(QFrame):
+    """A selectable card: model name over its one-line summary.
+
+    A frame rather than a push button: Qt sizes a QPushButton from its own
+    text, so labels laid out inside one get clipped whatever height is asked
+    for — the first version of this dialog showed four empty boxes.
+    """
+
+    clicked = pyqtSignal()
 
     def __init__(self, caps: Capabilities, parent=None):
         super().__init__(parent)
         self.caps = caps
-        self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(64)
-        theme.set_role(self, "model-card")
+        self.setFocusPolicy(Qt.StrongFocus)
+        theme.set_role(self, "model-card", selected="false")
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(2)
-        name = QLabel(caps.display_name)
-        name.setAttribute(Qt.WA_TransparentForMouseEvents)
-        theme.set_role(name, "card-title")
-        summary = QLabel(caps.summary)
-        summary.setAttribute(Qt.WA_TransparentForMouseEvents)
+        lay.setContentsMargins(14, 11, 14, 11)
+        lay.setSpacing(3)
+        lay.addWidget(theme.set_role(QLabel(caps.display_name), "card-title"))
+        summary = theme.set_role(QLabel(caps.summary), "faint")
         summary.setWordWrap(True)
-        theme.set_role(summary, "faint")
-        lay.addWidget(name)
         lay.addWidget(summary)
+
+    def set_selected(self, on: bool):
+        theme.set_prop(self, selected="true" if on else "false")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            self.clicked.emit()
+        else:
+            super().keyPressEvent(event)
 
 
 class SMUConnectPanel(QWidget):
@@ -120,12 +161,9 @@ class SMUConnectPanel(QWidget):
         grid = QGridLayout()
         grid.setSpacing(8)
         self._cards = {}
-        self._card_group = QButtonGroup(self)
-        self._card_group.setExclusive(True)
         for i, model in enumerate(registry.MODEL_ORDER):
             card = ModelCard(registry.get(model))
-            card.clicked.connect(lambda _c=False, m=model: self.select_model(m))
-            self._card_group.addButton(card)
+            card.clicked.connect(lambda m=model: self.select_model(m))
             self._cards[model] = card
             grid.addWidget(card, i // 2, i % 2)
         outer.addLayout(grid)
@@ -261,7 +299,8 @@ class SMUConnectPanel(QWidget):
 
     def select_model(self, model: str):
         self._model = model
-        self._cards[model].setChecked(True)
+        for key, card in self._cards.items():
+            card.set_selected(key == model)
         caps = self.caps
         for key, button in self._transport_buttons.items():
             button.setVisible(key in caps.transports)

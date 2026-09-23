@@ -4524,7 +4524,10 @@ def main():
     window = MainWindow()
     window.show()
 
-    sys.exit(app.exec_())
+    code = app.exec_()
+    from ctwa.connect_panel import wait_for_background
+    wait_for_background()
+    sys.exit(code)
 
 
 if __name__ == "__main__":
