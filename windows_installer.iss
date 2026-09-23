@@ -1,6 +1,6 @@
-; Inno Setup script for Keithley SMU Control Suite (Windows installer)
+; Inno Setup script for Calorimetric Thermal Wave Analysis Program (Windows installer)
 ; Build prerequisites:
-;   1. PyInstaller has produced  dist\Keithley SMU Control Suite\  (folder
+;   1. PyInstaller has produced  dist\Calorimetric Thermal Wave Analysis Program\  (folder
 ;      containing the .exe and all its dependencies).
 ;   2. Inno Setup 6+ is installed (or ISCC.exe is on PATH).
 ; Usage:
@@ -13,22 +13,23 @@
 #endif
 
 [Setup]
-AppName=Keithley SMU Control Suite
+AppId={{E6842112-0CFB-49C8-AFF4-66B21CC5A2A2}
+AppName=Calorimetric Thermal Wave Analysis Program
 AppVersion={#AppVersion}
-AppVerName=Keithley SMU Control Suite {#AppVersion}
+AppVerName=Calorimetric Thermal Wave Analysis Program {#AppVersion}
 AppPublisher=Omer Vered
-AppPublisherURL=https://github.com/OmerVered1/keithley-smu-control
-AppSupportURL=https://github.com/OmerVered1/keithley-smu-control/issues
-AppUpdatesURL=https://github.com/OmerVered1/keithley-smu-control/releases
-DefaultDirName={autopf}\Keithley SMU Control Suite
-DefaultGroupName=Keithley SMU Control Suite
+AppPublisherURL=https://github.com/OmerVered1/calorimetric-thermal-wave-analysis
+AppSupportURL=https://github.com/OmerVered1/calorimetric-thermal-wave-analysis/issues
+AppUpdatesURL=https://github.com/OmerVered1/calorimetric-thermal-wave-analysis/releases
+DefaultDirName={autopf}\Calorimetric Thermal Wave Analysis Program
+DefaultGroupName=Calorimetric Thermal Wave Analysis Program
 DisableProgramGroupPage=yes
 OutputDir=installer_out
-OutputBaseFilename=Keithley-SMU-Control-Suite-Setup-{#AppVersion}
+OutputBaseFilename=CTWA-Setup-{#AppVersion}
 #if FileExists("assets\app_icon.ico")
 SetupIconFile=assets\app_icon.ico
 #endif
-UninstallDisplayIcon={app}\Keithley SMU Control Suite.exe
+UninstallDisplayIcon={app}\Calorimetric Thermal Wave Analysis Program.exe
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -45,12 +46,12 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 
 [Files]
 ; Bundle the entire PyInstaller output folder.
-Source: "dist\Keithley SMU Control Suite\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\Calorimetric Thermal Wave Analysis Program\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Keithley SMU Control Suite"; Filename: "{app}\Keithley SMU Control Suite.exe"
-Name: "{group}\Uninstall Keithley SMU Control Suite"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Keithley SMU Control Suite"; Filename: "{app}\Keithley SMU Control Suite.exe"; Tasks: desktopicon
+Name: "{group}\Calorimetric Thermal Wave Analysis Program"; Filename: "{app}\Calorimetric Thermal Wave Analysis Program.exe"
+Name: "{group}\Uninstall Calorimetric Thermal Wave Analysis Program"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\Calorimetric Thermal Wave Analysis Program"; Filename: "{app}\Calorimetric Thermal Wave Analysis Program.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Keithley SMU Control Suite.exe"; Description: "Launch Keithley SMU Control Suite"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Calorimetric Thermal Wave Analysis Program.exe"; Description: "Launch Calorimetric Thermal Wave Analysis Program"; Flags: nowait postinstall skipifsilent

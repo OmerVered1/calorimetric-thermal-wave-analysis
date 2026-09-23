@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for Keithley SMU Control Suite.
+PyInstaller spec for Calorimetric Thermal Wave Analysis Program.
 
 Cross-platform: produces a .app bundle on macOS and a folder-based EXE
 distribution on Windows / Linux. The BUNDLE step is skipped on non-darwin
@@ -85,7 +85,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Keithley SMU Control Suite',
+    name='Calorimetric Thermal Wave Analysis Program',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -103,17 +103,17 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Keithley SMU Control Suite',
+    name='Calorimetric Thermal Wave Analysis Program',
 )
 
 if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
-        name='Keithley SMU Control Suite.app',
+        name='Calorimetric Thermal Wave Analysis Program.app',
         icon=icon_path,
-        bundle_identifier='com.omervered.keithley-smu-control',
+        bundle_identifier='com.omervered.ctwa',
         info_plist={
             'NSHighResolutionCapable': True,
-            'CFBundleShortVersionString': '3.6.0',  # bump per release
+            'CFBundleShortVersionString': '1.0.0',  # bump per release
         },
     )

@@ -1,5 +1,5 @@
 """
-In-app updater for the Keithley SMU Control Suite.
+In-app updater for the Calorimetric Thermal Wave Analysis Program.
 
 Hits the GitHub Releases API, compares the latest tag to the running
 version, and if newer downloads the platform-appropriate asset and
@@ -23,11 +23,11 @@ from PyQt5.QtWidgets import QMessageBox, QApplication
 
 
 _GITHUB_LATEST_API = (
-    "https://api.github.com/repos/OmerVered1/keithley-smu-control/releases/latest"
+    "https://api.github.com/repos/OmerVered1/calorimetric-thermal-wave-analysis/releases/latest"
 )
 
-_WINDOWS_ASSET = "Keithley-SMU-Control-Suite-Windows-Setup.exe"
-_MACOS_ASSET = "Keithley-SMU-Control-Suite-macOS.zip"
+_WINDOWS_ASSET = "CTWA-Windows-Setup.exe"
+_MACOS_ASSET = "CTWA-macOS.zip"
 
 
 def _parse_version(v: str) -> tuple:
@@ -46,7 +46,7 @@ def _fetch_latest_release(timeout: float = 10.0) -> dict:
     req = urllib.request.Request(
         _GITHUB_LATEST_API,
         headers={"Accept": "application/vnd.github+json",
-                 "User-Agent": "keithley-smu-control-updater"},
+                 "User-Agent": "calorimetric-thermal-wave-analysis-updater"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read())

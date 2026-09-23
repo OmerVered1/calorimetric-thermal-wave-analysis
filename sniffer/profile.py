@@ -370,16 +370,31 @@ def user_profile_dir() -> Path:
     into an instrument recorder, and re-deriving one means repeating an
     experiment.
     """
+    return _app_data_base() / APP_DATA_DIR / "calorimeter_profiles"
+
+
+# Fork note (CTWA): the folder is named after this program. The predecessor,
+# Keithley SMU Control Suite, kept its profiles under its own name; that folder
+# is still read (never written) so profiles saved there carry over, and both
+# programs can stay installed side by side without touching each other's data.
+APP_DATA_DIR = "Calorimetric Thermal Wave Analysis Program"
+LEGACY_APP_DATA_DIR = "Keithley SMU Control Suite"
+
+
+def _app_data_base() -> Path:
     import os
     import sys
 
     if sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA") or Path.home())
-    elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    else:
-        base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-    return base / "Keithley SMU Control Suite" / "calorimeter_profiles"
+        return Path(os.environ.get("APPDATA") or Path.home())
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+
+
+def legacy_profile_dir() -> Path:
+    """The predecessor program's profile folder. Read-only from here."""
+    return _app_data_base() / LEGACY_APP_DATA_DIR / "calorimeter_profiles"
 
 
 def load_profiles(directory: Optional[Path] = None) -> List[DeviceProfile]:
@@ -392,7 +407,8 @@ def load_profiles(directory: Optional[Path] = None) -> List[DeviceProfile]:
     if directory is not None:
         directories = [Path(directory)]
     else:
-        directories = [bundled_profile_dir(), user_profile_dir()]
+        # Later folders win on a name clash: bundled < legacy < this program's.
+        directories = [bundled_profile_dir(), legacy_profile_dir(), user_profile_dir()]
 
     by_name: Dict[str, DeviceProfile] = {}
     for folder in directories:

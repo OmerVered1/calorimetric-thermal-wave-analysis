@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from sniffer.profile import user_profile_dir
+from sniffer.profile import legacy_profile_dir, user_profile_dir
 
 
 DEFAULT_PORT = 1210
@@ -33,6 +33,11 @@ DEFAULT_PORT = 1210
 def setups_path() -> Path:
     """Where the setup store lives: beside the user's calorimeter profiles."""
     return user_profile_dir().parent / "calorimeter_setups.json"
+
+
+def legacy_setups_path() -> Path:
+    """The predecessor program's setup store, read once to seed this one."""
+    return legacy_profile_dir().parent / "calorimeter_setups.json"
 
 
 @dataclass
@@ -92,7 +97,24 @@ class SetupStore:
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path) if path is not None else setups_path()
         self._setups: Dict[str, CalorimeterSetup] = {}
+        if path is None:
+            self._seed_from_legacy()
         self.load()
+
+    def _seed_from_legacy(self) -> None:
+        """On first run, copy the predecessor's setups so none are lost.
+
+        A copy rather than a shared file: the old program stays installed and
+        in use, and two programs writing one file would eventually clobber it.
+        """
+        legacy = legacy_setups_path()
+        if self.path.exists() or not legacy.is_file():
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_bytes(legacy.read_bytes())
+        except OSError:
+            pass
 
     # ----- persistence --------------------------------------------------
 

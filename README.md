@@ -1,4 +1,20 @@
-﻿# Keithley SMU Control Suite
+﻿# Calorimetric Thermal Wave Analysis Program
+
+Drives a Keithley SMU as the heater source for radial Ångström thermal-wave
+measurements in a Calvet calorimeter, and records the calorimeter alongside it.
+
+> **Status: 1.0.0 in development.** Forked from
+> [keithley-smu-control](https://github.com/OmerVered1/keithley-smu-control) v3.6.0,
+> which stays installed and in use until this program has been proven against
+> real hardware. The two install side by side and keep separate settings; saved
+> calorimeter profiles and setups from the old program are carried over
+> automatically, and the old program's files are never written.
+
+---
+
+*The notes below describe the inherited v3.6.0 structure and are being
+rewritten as the four instrument apps merge into one.*
+
 
 Professional control and I-V characterization software for Keithley Source Measure Units (SMUs).
 

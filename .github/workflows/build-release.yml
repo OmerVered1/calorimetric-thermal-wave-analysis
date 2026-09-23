@@ -28,13 +28,13 @@ jobs:
       - name: Zip macOS app
         run: |
           cd dist
-          zip -qr "../Keithley-SMU-Control-Suite-macOS.zip" "Keithley SMU Control Suite.app"
+          zip -qr "../CTWA-macOS.zip" "Calorimetric Thermal Wave Analysis Program.app"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-app
-          path: Keithley-SMU-Control-Suite-macOS.zip
+          path: CTWA-macOS.zip
 
   build-windows:
     runs-on: windows-latest
@@ -56,7 +56,7 @@ jobs:
 
       - name: Zip Windows folder build
         run: |
-          Compress-Archive -Path "dist\Keithley SMU Control Suite" -DestinationPath "Keithley-SMU-Control-Suite-Windows.zip"
+          Compress-Archive -Path "dist\Calorimetric Thermal Wave Analysis Program" -DestinationPath "CTWA-Windows.zip"
 
       - name: Resolve installer version from git tag
         id: ver
@@ -79,21 +79,21 @@ jobs:
       - name: Rename installer to canonical filename
         shell: pwsh
         run: |
-          $src = "installer_out\Keithley-SMU-Control-Suite-Setup-${{ steps.ver.outputs.version }}.exe"
-          $dst = "Keithley-SMU-Control-Suite-Windows-Setup.exe"
+          $src = "installer_out\CTWA-Setup-${{ steps.ver.outputs.version }}.exe"
+          $dst = "CTWA-Windows-Setup.exe"
           Copy-Item $src $dst
 
       - name: Upload Windows zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe
-          path: Keithley-SMU-Control-Suite-Windows.zip
+          path: CTWA-Windows.zip
 
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: Keithley-SMU-Control-Suite-Windows-Setup.exe
+          path: CTWA-Windows-Setup.exe
 
   release:
     needs: [build-macos, build-windows]
@@ -120,20 +120,20 @@ jobs:
       - name: Attach binaries to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Keithley SMU Control Suite ${{ github.ref_name }}
+          name: Calorimetric Thermal Wave Analysis Program ${{ github.ref_name }}
           body: |
-            ## Keithley SMU Control Suite ${{ github.ref_name }}
+            ## Calorimetric Thermal Wave Analysis Program ${{ github.ref_name }}
 
             Unified launcher for Keithley 2450, 6430, 2602B, and 2611A SourceMeter instruments.
 
             ### Downloads
-            - **macOS**: `Keithley-SMU-Control-Suite-macOS.zip` — extract and run the `.app`.
-              First launch may need: right-click → Open, or `xattr -dr com.apple.quarantine "Keithley SMU Control Suite.app"`.
-            - **Windows installer (recommended)**: `Keithley-SMU-Control-Suite-Windows-Setup.exe` — run, optionally create a desktop shortcut.
-            - **Windows portable**: `Keithley-SMU-Control-Suite-Windows.zip` — unzip and run the `.exe` directly, no install.
+            - **macOS**: `CTWA-macOS.zip` — extract and run the `.app`.
+              First launch may need: right-click → Open, or `xattr -dr com.apple.quarantine "Calorimetric Thermal Wave Analysis Program.app"`.
+            - **Windows installer (recommended)**: `CTWA-Windows-Setup.exe` — run, optionally create a desktop shortcut.
+            - **Windows portable**: `CTWA-Windows.zip` — unzip and run the `.exe` directly, no install.
 
             Created by Omer Vered with Claude Code.
           files: |
-            Keithley-SMU-Control-Suite-macOS.zip
-            Keithley-SMU-Control-Suite-Windows.zip
-            Keithley-SMU-Control-Suite-Windows-Setup.exe
+            CTWA-macOS.zip
+            CTWA-Windows.zip
+            CTWA-Windows-Setup.exe
