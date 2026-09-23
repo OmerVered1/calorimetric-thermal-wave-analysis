@@ -392,3 +392,36 @@ def fast_curve(curve) -> None:
     """
     curve.setClipToView(True)
     curve.setDownsampling(auto=True, method="peak")
+
+
+def pen(color: str, width: float = 1.6, dashed: bool = False):
+    import pyqtgraph as pg
+    from PyQt5.QtCore import Qt
+    p = pg.mkPen(color, width=width)
+    if dashed:
+        p.setStyle(Qt.DashLine)
+    return p
+
+
+def style_plot(widget, title: str = None) -> None:
+    """Card-coloured plot area, quiet axes, muted labels — one look for every graph."""
+    import pyqtgraph as pg
+
+    widget.setBackground(P.card)
+    item = widget.getPlotItem() if hasattr(widget, "getPlotItem") else widget
+    for name in ("left", "bottom", "right", "top"):
+        axis = item.getAxis(name)
+        axis.setPen(pg.mkPen(P.hairline))
+        axis.setTextPen(pg.mkPen(P.text_muted))
+    item.showGrid(x=True, y=True, alpha=0.18)
+    if title:
+        item.setTitle(title, color=P.text_muted, size="11pt")
+
+
+def series_color(name: str) -> str:
+    """Stable colour for a named quantity, shared by readouts and traces."""
+    return {
+        "Heat Flow": P.series[0], "Sample Temperature": P.series[1],
+        "External Temperature": P.series[2], "Voltage": P.series[3],
+        "Current": P.series[4], "Resistance": P.series[5], "Power": P.series[6],
+    }.get(name, P.series[7])

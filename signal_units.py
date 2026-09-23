@@ -81,15 +81,17 @@ def unit_options(unit: str) -> List[Tuple[str, Callable[[float], float]]]:
 
 # Distinct enough to tell apart on one plot, and dark enough to read on the
 # white plot background. Order matters: it is what fixes a signal's color.
+# The program's plot palette (ctwa/theme.py): distinct, calm, readable on the
+# light canvas. Order is what fixes a signal's colour between sessions.
 PALETTE: List[str] = [
-    "#dc2626",  # red
-    "#2563eb",  # blue
-    "#ea580c",  # orange
-    "#16a34a",  # green
-    "#8b5cf6",  # violet
-    "#0891b2",  # cyan
-    "#f59e0b",  # amber
-    "#be185d",  # magenta
+    "#C96442",  # clay       — heat flow
+    "#3B6EA8",  # slate blue — sample T
+    "#B8862B",  # ochre      — external T
+    "#3F7A4F",  # moss
+    "#8A5A9E",  # plum
+    "#2F8C8C",  # teal
+    "#6F6D66",  # graphite
+    "#A64D79",  # berry
 ]
 
 

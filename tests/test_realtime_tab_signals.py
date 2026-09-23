@@ -31,7 +31,9 @@ DROP_SIGNALS = [
 
 def test_defaults_match_the_legacy_three_channels(tab):
     assert [s.key for s in tab._cal_specs] == ["hf", "t", "ext_t"]
-    assert [s.color for s in tab._cal_specs] == ["#dc2626", "#2563eb", "#ea580c"]
+    # The first three palette colours, in order, so a signal keeps its colour.
+    from signal_units import PALETTE
+    assert [s.color for s in tab._cal_specs] == PALETTE[:3]
 
 
 def test_setting_profile_signals_replaces_the_calorimeter_rows(tab):

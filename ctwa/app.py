@@ -486,17 +486,18 @@ class MultimeterPanel(QWidget):
 
         # Recording Graph
         self.record_graph = pg.PlotWidget()
-        self.record_graph.setBackground('#ffffff')
-        self.record_graph.setLabel('left', 'Value', color='#1a1a2e')
-        self.record_graph.setLabel('bottom', 'Time (s)', color='#1a1a2e')
-        self.record_graph.setTitle("Recording Graph", color='#1a1a2e', size='14pt')
+        theme.style_plot(self.record_graph, "Recording")
+        self.record_graph.setLabel('left', 'Value', color=theme.P.text_muted)
+        self.record_graph.setLabel('bottom', 'Time (s)', color=theme.P.text_muted)
         self.record_graph.addLegend()
         self.record_graph.showGrid(x=True, y=True, alpha=0.2)
         self.record_graph.setMinimumHeight(200)
 
-        self.voltage_plot = self.record_graph.plot([], [], pen=pg.mkPen('#16a34a', width=2), name='Voltage (V)')
-        self.current_plot = self.record_graph.plot([], [], pen=pg.mkPen('#d97706', width=2), name='Current (A)')
-        self.power_plot = self.record_graph.plot([], [], pen=pg.mkPen('#c026d3', width=2), name='Power (W)')
+        self.voltage_plot = self.record_graph.plot([], [], pen=theme.pen(theme.series_color("Voltage")), name='Voltage (V)')
+        self.current_plot = self.record_graph.plot([], [], pen=theme.pen(theme.series_color("Current")), name='Current (A)')
+        self.power_plot = self.record_graph.plot([], [], pen=theme.pen(theme.series_color("Power")), name='Power (W)')
+        for curve in (self.voltage_plot, self.current_plot, self.power_plot):
+            theme.fast_curve(curve)
 
         layout.addWidget(self.record_graph)
 
@@ -1419,23 +1420,17 @@ def _axis_unit_factor(variable: str, unit: str) -> float:
 class DualAxisGraph(pg.PlotWidget):
     """Graph widget with dual Y-axis support"""
 
-    COLORS = {
-        "Voltage": "#16a34a",
-        "Current": "#d97706",
-        "Resistance": "#0891b2",
-        "Power": "#c026d3"
-    }
+    COLORS = {name: theme.series_color(name) for name in ("Voltage", "Current", "Resistance", "Power")}
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setBackground('#ffffff')
-        self.showGrid(x=True, y=True, alpha=0.3)
+        theme.style_plot(self)
 
         self.data_points: List[MeasurementPoint] = []
 
-        self.setLabel('left', 'Current', units='A', color='#d97706')
-        self.setLabel('bottom', 'Voltage', units='V', color='#1a1a2e')
+        self.setLabel('left', 'Current', units='A', color=self.COLORS["Current"])
+        self.setLabel('bottom', 'Voltage', units='V', color=theme.P.text_muted)
 
         self.view_box2 = pg.ViewBox()
         self.plotItem.scene().addItem(self.view_box2)
@@ -1443,8 +1438,10 @@ class DualAxisGraph(pg.PlotWidget):
         self.view_box2.setXLink(self.plotItem)
         self.plotItem.showAxis('right')
 
-        self.curve1 = self.plot([], [], pen=pg.mkPen('#d97706', width=2), name='Y1')
-        self.curve2 = pg.PlotDataItem([], [], pen=pg.mkPen('#0891b2', width=2), name='Y2')
+        self.curve1 = self.plot([], [], pen=theme.pen(self.COLORS["Current"]), name='Y1')
+        self.curve2 = pg.PlotDataItem([], [], pen=theme.pen(self.COLORS["Resistance"]), name='Y2')
+        theme.fast_curve(self.curve1)
+        theme.fast_curve(self.curve2)
         self.view_box2.addItem(self.curve2)
 
         self.plotItem.vb.sigResized.connect(self._update_views)
@@ -1473,11 +1470,11 @@ class DualAxisGraph(pg.PlotWidget):
 
         self.setLabel('bottom', x, units=x_unit)
         if y1 != "None":
-            self.setLabel('left', y1, units=y1_unit, color=self.COLORS.get(y1, "#fff"))
-            self.curve1.setPen(pg.mkPen(self.COLORS.get(y1, "#fff"), width=2))
+            self.setLabel('left', y1, units=y1_unit, color=self.COLORS.get(y1, theme.P.text))
+            self.curve1.setPen(theme.pen(self.COLORS.get(y1, theme.P.text)))
         if y2 != "None":
-            self.plotItem.getAxis('right').setLabel(y2, units=y2_unit, color=self.COLORS.get(y2, "#fff"))
-            self.curve2.setPen(pg.mkPen(self.COLORS.get(y2, "#fff"), width=2))
+            self.plotItem.getAxis('right').setLabel(y2, units=y2_unit, color=self.COLORS.get(y2, theme.P.text))
+            self.curve2.setPen(theme.pen(self.COLORS.get(y2, theme.P.text)))
             self.plotItem.showAxis('right')
         else:
             self.plotItem.hideAxis('right')
@@ -2264,10 +2261,9 @@ class WaveToolDialog(QDialog):
         layout.addWidget(self.info_label)
 
         self.preview_graph = pg.PlotWidget()
-        self.preview_graph.setBackground('#ffffff')
-        self.preview_graph.setLabel('left', 'Output Value', color='#1a1a2e')
-        self.preview_graph.setLabel('bottom', 'Time (s)', color='#1a1a2e')
-        self.preview_graph.setTitle("Waveform Preview", color='#1a1a2e', size='14pt')
+        theme.style_plot(self.preview_graph, "Waveform preview")
+        self.preview_graph.setLabel('left', 'Output Value', color=theme.P.text_muted)
+        self.preview_graph.setLabel('bottom', 'Time (s)', color=theme.P.text_muted)
         self.preview_graph.showGrid(x=True, y=True, alpha=0.3)
         self.preview_graph.setMinimumHeight(200)
         layout.addWidget(self.preview_graph)
@@ -2527,7 +2523,7 @@ class WaveToolDialog(QDialog):
             theme.set_role(self.info_label, "card-title")
 
             self.preview_graph.clear()
-            self.preview_graph.plot(self.time_values, self.waveform_values, pen=pg.mkPen('#16a34a', width=2))
+            self.preview_graph.plot(self.time_values, self.waveform_values, pen=theme.pen(theme.P.accent, 2))
             self.preview_graph.setLabel('left', f'Output ({export_unit})')
 
             if n_segs > 1:
@@ -2537,7 +2533,7 @@ class WaveToolDialog(QDialog):
                     seg_duration = seg["cycles"] * period_sec
                     time_offset += seg_duration
                     boundary_line = pg.InfiniteLine(pos=time_offset, angle=90,
-                        pen=pg.mkPen('#ff6b6b', width=1, style=Qt.DashLine))
+                        pen=theme.pen(theme.P.text_faint, 1, dashed=True))
                     self.preview_graph.addItem(boundary_line)
 
     def _generate_and_accept(self):

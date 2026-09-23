@@ -51,6 +51,11 @@ from PyQt5.QtWidgets import (
 import pyqtgraph as pg
 
 from calorimeter_reader import CalorimeterSignal
+
+
+def _series_color(name):
+    from ctwa import theme
+    return theme.series_color(name)
 from signal_units import color_for_index, unit_options
 
 
@@ -79,13 +84,13 @@ class SignalSpec:
 # The SMU's own signals. Fixed in code because they come from the instrument
 # driver, not off the wire — no profile can rename or re-unit them.
 KEITHLEY_SPECS: list[SignalSpec] = [
-    SignalSpec("v",     "Voltage",              "#16a34a",
+    SignalSpec("v",     "Voltage", _series_color("Voltage"),
                [("V", _mul(1)), ("mV", _mul(1000)), ("µV", _mul(1e6)), ("kV", _mul(1e-3))]),
-    SignalSpec("i",     "Current",              "#f59e0b",
+    SignalSpec("i",     "Current", _series_color("Current"),
                [("A", _mul(1)), ("mA", _mul(1000)), ("µA", _mul(1e6)), ("nA", _mul(1e9))]),
-    SignalSpec("r",     "Resistance",           "#8b5cf6",
+    SignalSpec("r",     "Resistance", _series_color("Resistance"),
                [("Ω", _mul(1)), ("kΩ", _mul(1e-3)), ("MΩ", _mul(1e-6)), ("mΩ", _mul(1000))]),
-    SignalSpec("p",     "Power",                "#0891b2",
+    SignalSpec("p",     "Power", _series_color("Power"),
                [("W", _mul(1)), ("mW", _mul(1000)), ("µW", _mul(1e6)), ("kW", _mul(1e-3))]),
 ]
 
@@ -367,7 +372,8 @@ class RealTimeTab(QWidget):
 
     def _build_plot(self) -> pg.PlotWidget:
         self._plot = pg.PlotWidget()
-        self._plot.setBackground("w")
+        from ctwa import theme
+        theme.style_plot(self._plot)
         self._plot.showGrid(x=True, y=True, alpha=0.3)
         plot_item = self._plot.plotItem
         plot_item.setLabel("bottom", "Time since connect (s)")
@@ -405,7 +411,10 @@ class RealTimeTab(QWidget):
             s.view_box.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
             plot_item.scene().addItem(s.view_box)
             s.view_box.setXLink(plot_item.vb)
-            s.curve = pg.PlotDataItem(pen=pg.mkPen(spec.color, width=1))
+            from ctwa import theme
+            s.curve = pg.PlotDataItem(pen=theme.pen(spec.color, 1.4))
+            # Real Time runs for hours; without these every sample redraws them all.
+            theme.fast_curve(s.curve)
             s.view_box.addItem(s.curve)
             if s.ys_base:
                 s.curve.setData(s.xs, s.display_ys())
