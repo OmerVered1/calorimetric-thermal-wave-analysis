@@ -16,6 +16,7 @@ colours are desaturated so a green "connected" reads as information, not alarm.
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 
@@ -90,7 +91,20 @@ def fonts():
     return ui, serif, mono
 
 
-def stylesheet() -> str:
+def stylesheet(scale: float = 1.0) -> str:
+    """The application stylesheet. ``scale`` shrinks every font size, for the
+    window's responsive mode on small screens; 1.0 is full size."""
+    return _scaled(_stylesheet(), scale)
+
+
+def _scaled(css: str, scale: float) -> str:
+    if abs(scale - 1.0) < 1e-3:
+        return css
+    return re.sub(r"font-size:\s*(\d+)px",
+                  lambda m: f"font-size: {max(9, round(int(m.group(1)) * scale))}px", css)
+
+
+def _stylesheet() -> str:
     ui, serif, mono = fonts()
     p = P
     return f"""
@@ -289,11 +303,23 @@ QScrollArea {{ border: none; background: transparent; }}
 """
 
 
-def apply(app: QApplication) -> None:
-    """Install the palette and stylesheet on the application."""
+_current_scale = None
+
+
+def apply(app: QApplication, scale: float = 1.0) -> None:
+    """Install the palette and stylesheet on the application.
+
+    Cheap to call repeatedly: re-styling the whole application is the expensive
+    part (Qt re-polishes every widget), so it only happens when ``scale``
+    actually changes.
+    """
+    global _current_scale
+    if _current_scale is not None and abs(scale - _current_scale) < 1e-3:
+        return
+    _current_scale = scale
     app.setStyle("Fusion")  # consistent base on every OS; QSS paints over it
     ui, _serif, _mono = fonts()
-    app.setFont(QFont(ui, 10))
+    app.setFont(QFont(ui, max(8, round(10 * scale))))
     pal = QPalette()
     pal.setColor(QPalette.Window, QColor(P.canvas))
     pal.setColor(QPalette.Base, QColor(P.card))
@@ -306,7 +332,20 @@ def apply(app: QApplication) -> None:
     pal.setColor(QPalette.HighlightedText, QColor(P.text))
     pal.setColor(QPalette.PlaceholderText, QColor(P.text_faint))
     app.setPalette(pal)
-    app.setStyleSheet(stylesheet())
+    app.setStyleSheet(stylesheet(scale))
+
+
+def ui_font(size_pt: float = 10, bold: bool = False) -> QFont:
+    """The UI font at a given size — for the few places that set one directly."""
+    f = QFont(fonts()[0], round(size_pt))
+    f.setBold(bold)
+    return f
+
+
+def mono_font(size_pt: float = 10, bold: bool = False) -> QFont:
+    f = QFont(fonts()[2], round(size_pt))
+    f.setBold(bold)
+    return f
 
 
 def set_role(widget: QWidget, role: str, **props) -> QWidget:

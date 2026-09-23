@@ -48,6 +48,9 @@ MODELS: Dict[str, Capabilities] = {
         guard_mode=True,
         output_off_mode=True,
         default_simulation_resistance=1e9,
+        current_noise_floor=1e-18,
+        min_current_compliance=1e-12,
+        current_decimals=6,
     ),
     "2602B": Capabilities(
         model="2602B",
@@ -81,6 +84,21 @@ MODELS: Dict[str, Capabilities] = {
 
 # Order shown in the model picker.
 MODEL_ORDER = ("2602B", "2611A", "2450", "6430")
+
+
+_active: Capabilities = None
+
+
+def set_active(caps: Capabilities) -> None:
+    """The model the window is showing. Set on connect."""
+    global _active
+    _active = caps
+
+
+def active() -> Capabilities:
+    """The connected model's capabilities, or the default model's before any
+    connection — so input fields always carry a real instrument's limits."""
+    return _active if _active is not None else MODELS[MODEL_ORDER[0]]
 
 
 def get(model: str) -> Capabilities:

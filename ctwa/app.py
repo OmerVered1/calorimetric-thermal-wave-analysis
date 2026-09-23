@@ -62,6 +62,28 @@ __copyright__ = "Copyright 2026 Omer Vered"
 
 
 @dataclass
+
+def apply_source_limits(value_box, compliance_box, function: str, reset_compliance: bool):
+    """Range the source value / compliance fields for the connected model."""
+    vmin, vmax, vdec, cmin, cmax, cdec = registry.active().source_limits(function)
+    if value_box is not None:
+        value_box.setDecimals(vdec)
+        value_box.setRange(vmin, vmax)
+        value_box.setSuffix(" V" if function == "Voltage" else " A")
+    compliance_box.setDecimals(cdec)
+    compliance_box.setRange(cmin, cmax)
+    compliance_box.setSuffix(" A" if function == "Voltage" else " V")
+    if reset_compliance:
+        default = 0.1 if function == "Voltage" else 20.0
+        compliance_box.setValue(min(max(default, cmin), cmax))
+
+
+def source_range_labels(function: str):
+    caps = registry.active()
+    opts = caps.voltage_ranges if function == "Voltage" else caps.current_ranges
+    return ["Auto"] + [o.label for o in opts]
+
+
 class MeasurementPoint:
     """Single measurement data point"""
     index: int
@@ -195,28 +217,6 @@ class ExperimentStore:
         self._persist()
 
 
-class LightPalette(QPalette):
-    """Light theme: black text on white surfaces with subtle grays for borders."""
-    def __init__(self):
-        super().__init__()
-        self.setColor(QPalette.Window, QColor(255, 255, 255))          # #ffffff
-        self.setColor(QPalette.WindowText, QColor(26, 26, 46))         # #1a1a2e (near-black)
-        self.setColor(QPalette.Base, QColor(255, 255, 255))            # #ffffff
-        self.setColor(QPalette.AlternateBase, QColor(243, 244, 246))   # #f3f4f6
-        self.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))     # #ffffff
-        self.setColor(QPalette.ToolTipText, QColor(26, 26, 46))        # #1a1a2e
-        self.setColor(QPalette.Text, QColor(26, 26, 46))               # #1a1a2e
-        self.setColor(QPalette.Button, QColor(243, 244, 246))          # #f3f4f6
-        self.setColor(QPalette.ButtonText, QColor(26, 26, 46))         # #1a1a2e
-        self.setColor(QPalette.BrightText, QColor(220, 38, 38))        # #dc2626
-        self.setColor(QPalette.Link, QColor(37, 99, 235))              # #2563eb
-        self.setColor(QPalette.Highlight, QColor(59, 130, 246))        # #3b82f6
-        self.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
-        self.setColor(QPalette.Disabled, QPalette.WindowText, QColor(156, 163, 175))  # #9ca3af
-        self.setColor(QPalette.Disabled, QPalette.Text, QColor(156, 163, 175))
-        self.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(156, 163, 175))
-
-
 class ToggleButton(QPushButton):
     """A chip that shows which of a small set of choices is active.
 
@@ -282,6 +282,10 @@ class DigitalDisplay(QLabel):
             text = f"{value*1e6:.{self.decimals}f} \u00b5{self.unit}"
         elif abs_val >= 1e-9:
             text = f"{value*1e9:.{self.decimals}f} n{self.unit}"
+        elif abs_val >= 1e-12:
+            text = f"{value*1e12:.{self.decimals}f} p{self.unit}"
+        elif abs_val >= 1e-15:
+            text = f"{value*1e15:.{self.decimals}f} f{self.unit}"
         elif abs_val == 0:
             text = f"0.{'0'*self.decimals} {self.unit}"
         else:
@@ -356,18 +360,12 @@ class MultimeterPanel(QWidget):
 
         settings.addWidget(QLabel("Value:"))
         self.source_value = QDoubleSpinBox()
-        self.source_value.setRange(-40, 40)
-        self.source_value.setDecimals(4)
         self.source_value.setValue(0)
-        self.source_value.setSuffix(" V")
         settings.addWidget(self.source_value)
 
         settings.addWidget(QLabel("Limit:"))
         self.compliance = QDoubleSpinBox()
-        self.compliance.setRange(0.001, 3.0)
-        self.compliance.setDecimals(4)
-        self.compliance.setValue(0.1)
-        self.compliance.setSuffix(" A")
+        apply_source_limits(self.source_value, self.compliance, "Voltage", reset_compliance=True)
         settings.addWidget(self.compliance)
 
         settings.addWidget(QLabel("V Range:"))
@@ -563,20 +561,12 @@ class MultimeterPanel(QWidget):
             found = combo.findText(previous)
             combo.setCurrentIndex(found if found >= 0 else 0)
             combo.blockSignals(False)
+        if hasattr(self, "source_value"):
+            apply_source_limits(self.source_value, self.compliance,
+                                self.source_type.currentText(), reset_compliance=False)
 
     def _update_source_units(self, source_type):
-        if source_type == "Voltage":
-            self.source_value.setSuffix(" V")
-            self.source_value.setRange(-40, 40)
-            self.compliance.setSuffix(" A")
-            self.compliance.setRange(0.001, 3.0)
-            self.compliance.setValue(0.1)
-        else:
-            self.source_value.setSuffix(" A")
-            self.source_value.setRange(-3, 3)
-            self.compliance.setSuffix(" V")
-            self.compliance.setRange(0.1, 40)
-            self.compliance.setValue(20)
+        apply_source_limits(self.source_value, self.compliance, source_type, reset_compliance=True)
 
     def _update_rate_changed(self):
         rates = [1000, 200, 100, 50]
@@ -682,7 +672,8 @@ class MultimeterPanel(QWidget):
             # Same noise-floor guard as _run_sweep: R is undefined when V or
             # I are at measurement noise level (nV / pA). Power is always
             # fine at V=0 (P=0) so it doesn't need the extra V guard.
-            if voltage is not None and current is not None and abs(current) > 1e-9 and abs(voltage) > 1e-6:
+            floor = self.app.smu.caps.current_noise_floor if self.app.smu else 1e-9
+            if voltage is not None and current is not None and abs(current) > floor and abs(voltage) > 1e-6:
                 resistance = voltage / current
                 power = abs(voltage * current)
                 self.resistance_display.set_value(resistance)
@@ -806,10 +797,7 @@ class SourceSettingsWidget(QGroupBox):
         limit_layout = QHBoxLayout()
         limit_layout.addWidget(QLabel("Limit:"))
         self.compliance = QDoubleSpinBox()
-        self.compliance.setRange(0.001, 3.0)
-        self.compliance.setDecimals(4)
-        self.compliance.setValue(0.1)
-        self.compliance.setSuffix(" A")
+        apply_source_limits(None, self.compliance, "Voltage", reset_compliance=True)
         limit_layout.addWidget(self.compliance)
         limit_layout.addStretch()
         layout.addLayout(limit_layout)
@@ -821,18 +809,18 @@ class SourceSettingsWidget(QGroupBox):
         self.volt_btn.set_selected(func_name == "Voltage")
         self.curr_btn.set_selected(func_name == "Current")
 
-        if func_name == "Voltage":
-            self.compliance.setSuffix(" A")
-            self.compliance.setRange(0.001, 3.0)
-            self.compliance.setValue(0.1)
-            self.range.clear()
-            self.range.addItems(["Auto", "100 mV", "1 V", "6 V", "40 V"])
-        else:
-            self.compliance.setSuffix(" V")
-            self.compliance.setRange(0.1, 40)
-            self.compliance.setValue(20)
-            self.range.clear()
-            self.range.addItems(["Auto", "100 nA", "1 \u00b5A", "10 \u00b5A", "100 \u00b5A", "1 mA", "10 mA", "100 mA", "1 A", "3 A"])
+        apply_source_limits(None, self.compliance, func_name, reset_compliance=True)
+        self.range.clear()
+        self.range.addItems(source_range_labels(func_name))
+
+    def set_capabilities(self, caps):
+        """Re-range for a newly connected model, keeping the chosen function."""
+        apply_source_limits(None, self.compliance, self.function, reset_compliance=False)
+        current = self.range.currentText()
+        self.range.clear()
+        self.range.addItems(source_range_labels(self.function))
+        i = self.range.findText(current)
+        self.range.setCurrentIndex(i if i >= 0 else 0)
 
 
 class InstrumentSettingsWidget(QGroupBox):
@@ -1301,13 +1289,14 @@ class SweepListWidget(QGroupBox):
         linear_form.setLabelAlignment(Qt.AlignLeft)
         linear_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         self.start_val = QDoubleSpinBox()
-        self.start_val.setRange(-40, 40)
+        _v = registry.active().max_voltage
+        self.start_val.setRange(-_v, _v)
         self.start_val.setDecimals(4)
         self.start_val.setValue(0)
         linear_form.addRow("Start:", self.start_val)
 
         self.stop_val = QDoubleSpinBox()
-        self.stop_val.setRange(-40, 40)
+        self.stop_val.setRange(-_v, _v)
         self.stop_val.setDecimals(4)
         self.stop_val.setValue(5)
         linear_form.addRow("Stop:", self.stop_val)
@@ -3508,6 +3497,9 @@ class MainWindow(QMainWindow):
         if not dual and self.current_channel != "a":
             self._set_channel("a")
         self.multimeter_panel.set_capabilities(caps)
+        self.source_settings.set_capabilities(caps)
+        for box in (self.sweep_list.start_val, self.sweep_list.stop_val):
+            box.setRange(-caps.max_voltage, caps.max_voltage)
         if hasattr(self.inst_settings, "set_capabilities"):
             self.inst_settings.set_capabilities(caps)
         self.model_label.setText(caps.display_name)
@@ -3702,6 +3694,7 @@ class MainWindow(QMainWindow):
         caps = registry.get(model)
         if self.smu is not None:
             self.disconnect_instrument(quiet=True)
+        registry.set_active(caps)
 
         limits = self._limits_by_model.get(model) or SMU.default_limits(model)
         smu = SMU.create(model, simulate=simulate,
@@ -4108,7 +4101,7 @@ class MainWindow(QMainWindow):
                         # observed on both sim and real hardware, e.g. rows
                         # at every waveform trough). Leave R = None → empty
                         # cell in CSV, cleaner for downstream analysis.
-                        if abs(current) > 1e-9 and abs(voltage) > 1e-6:
+                        if abs(current) > self.smu.caps.current_noise_floor and abs(voltage) > 1e-6:
                             resistance = voltage / current
 
                     if self.measure_settings.measure_p.isChecked() and voltage is not None and current is not None:
@@ -4400,9 +4393,7 @@ class MainWindow(QMainWindow):
             self._current_ui_scale = scale
             app = QApplication.instance()
             if app is not None:
-                app.setStyleSheet(build_global_stylesheet(scale))
-                f = QFont("Inter", max(9, round(15 * scale)))
-                app.setFont(f)
+                theme.apply(app, scale)
 
     def closeEvent(self, event):
         self.multimeter_panel.stop_live()
@@ -4421,274 +4412,11 @@ class MainWindow(QMainWindow):
 
 
 # Global stylesheet for dark theme with green/amber accents
-_GLOBAL_STYLESHEET_TEMPLATE = """
-    QMainWindow, QWidget {
-        background-color: #ffffff;
-        color: #1a1a2e;
-    }
-    QLabel {
-        color: #1a1a2e;
-        font-size: __FONT_14__;
-    }
-    QPushButton {
-        font-size: __FONT_14__;
-        color: #1a1a2e;
-        background-color: #f3f4f6;
-        border: 1px solid #d1d5db;
-        padding: 6px 14px;
-        border-radius: 5px;
-        font-weight: 500;
-    }
-    QPushButton:hover {
-        background-color: #e5e7eb;
-        border-color: #9ca3af;
-    }
-    QPushButton:disabled {
-        background-color: #f3f4f6;
-        color: #9ca3af;
-        border-color: #e5e7eb;
-    }
-    QCheckBox, QRadioButton {
-        font-size: __FONT_14__;
-        color: #1a1a2e;
-        font-weight: 500;
-    }
-    QCheckBox:disabled, QRadioButton:disabled {
-        color: #9ca3af;
-    }
-    QGroupBox {
-        font-size: __FONT_14__;
-        font-weight: bold;
-        color: #1a1a2e;
-        border: 1px solid #d1d5db;
-        border-radius: 8px;
-        margin-top: 16px;
-        padding: 16px;
-        padding-top: 14px;
-        background-color: transparent;
-    }
-    QGroupBox::title {
-        subcontrol-origin: margin;
-        left: 12px;
-        padding: 0 8px;
-        color: #1a1a2e;
-        background-color: #ffffff;
-        font-size: __FONT_14__;
-        font-weight: bold;
-    }
-    QTableWidget, QListWidget {
-        font-size: __FONT_13__;
-        color: #1a1a2e;
-        background-color: #ffffff;
-        border: 1px solid #d1d5db;
-        alternate-background-color: #f9fafb;
-    }
-    QTableWidget::item, QListWidget::item {
-        color: #1a1a2e;
-    }
-    QTableWidget::item:selected, QListWidget::item:selected {
-        background-color: #dbeafe;
-        color: #1a1a2e;
-    }
-    QHeaderView::section {
-        background-color: #f3f4f6;
-        color: #1a1a2e;
-        font-weight: bold;
-        font-size: __FONT_13__;
-        padding: 8px;
-        border: 1px solid #d1d5db;
-    }
-    QToolTip {
-        font-size: __FONT_13__;
-        background-color: #1a1a2e;
-        color: #ffffff;
-        border: 1px solid #1a1a2e;
-        padding: 6px;
-    }
-    QMenuBar {
-        font-size: __FONT_14__;
-        background-color: #f3f4f6;
-        color: #1a1a2e;
-        border-bottom: 1px solid #d1d5db;
-    }
-    QMenuBar::item {
-        color: #1a1a2e;
-    }
-    QMenuBar::item:selected {
-        background-color: #e5e7eb;
-    }
-    QMenu {
-        font-size: __FONT_14__;
-        background-color: #ffffff;
-        color: #1a1a2e;
-        border: 1px solid #d1d5db;
-    }
-    QMenu::item {
-        color: #1a1a2e;
-        padding: 6px 20px;
-    }
-    QMenu::item:selected {
-        background-color: #dbeafe;
-        color: #1a1a2e;
-    }
-    QTabWidget::pane {
-        border: 1px solid #d1d5db;
-        background-color: #ffffff;
-        border-top: none;
-    }
-    QTabBar::tab {
-        font-size: __FONT_14__;
-        padding: 10px 24px;
-        background-color: #f3f4f6;
-        color: #6b7280;
-        border: 1px solid #d1d5db;
-        border-bottom: none;
-        margin-right: 2px;
-        font-weight: 500;
-    }
-    QTabBar::tab:selected {
-        background-color: #ffffff;
-        color: #1a1a2e;
-        font-weight: bold;
-        border-bottom: 2px solid #1a1a2e;
-        border-color: #d1d5db;
-    }
-    QTabBar::tab:hover {
-        background-color: #e5e7eb;
-        color: #1a1a2e;
-    }
-    QComboBox {
-        font-size: __FONT_14__;
-        color: #1a1a2e;
-        background-color: #ffffff;
-        border: 1px solid #d1d5db;
-        padding: 6px 10px;
-        border-radius: 5px;
-    }
-    QComboBox:hover {
-        border-color: #6b7280;
-    }
-    QComboBox:disabled {
-        background-color: #f3f4f6;
-        color: #9ca3af;
-    }
-    QComboBox QAbstractItemView {
-        background-color: #ffffff;
-        color: #1a1a2e;
-        selection-background-color: #dbeafe;
-        selection-color: #1a1a2e;
-    }
-    QSpinBox, QDoubleSpinBox {
-        font-size: __FONT_14__;
-        color: #1a1a2e;
-        background-color: #ffffff;
-        border: 1px solid #d1d5db;
-        padding: 4px 6px;
-        padding-right: 22px;
-        border-radius: 5px;
-    }
-    QSpinBox:hover, QDoubleSpinBox:hover {
-        border-color: #6b7280;
-    }
-    QSpinBox:disabled, QDoubleSpinBox:disabled {
-        background-color: #f3f4f6;
-        color: #9ca3af;
-    }
-    /* Spinbox up/down buttons: only style the area, let Fusion paint the arrows */
-    QSpinBox::up-button, QDoubleSpinBox::up-button,
-    QSpinBox::down-button, QDoubleSpinBox::down-button,
-    QComboBox::drop-down {
-        background-color: transparent;
-        border: none;
-    }
-    QTextEdit, QLineEdit {
-        font-size: __FONT_13__;
-        color: #1a1a2e;
-        background-color: #ffffff;
-        border: 1px solid #d1d5db;
-        border-radius: 4px;
-        padding: 4px 6px;
-    }
-    QScrollBar:vertical {
-        background-color: #f3f4f6;
-        width: 12px;
-        border-radius: 6px;
-    }
-    QScrollBar::handle:vertical {
-        background-color: #d1d5db;
-        border-radius: 6px;
-        min-height: 30px;
-    }
-    QScrollBar::handle:vertical:hover {
-        background-color: #9ca3af;
-    }
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-        height: 0px;
-    }
-    QScrollBar:horizontal {
-        background-color: #f3f4f6;
-        height: 12px;
-        border-radius: 6px;
-    }
-    QScrollBar::handle:horizontal {
-        background-color: #d1d5db;
-        border-radius: 6px;
-        min-width: 30px;
-    }
-    QScrollBar::handle:horizontal:hover {
-        background-color: #9ca3af;
-    }
-    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-        width: 0px;
-    }
-    QStatusBar {
-        background-color: #f3f4f6;
-        color: #4b5563;
-        border-top: 1px solid #d1d5db;
-    }
-    QProgressBar {
-        border: 1px solid #d1d5db;
-        border-radius: 4px;
-        background-color: #ffffff;
-        text-align: center;
-        color: #1a1a2e;
-        font-weight: bold;
-    }
-    QProgressBar::chunk {
-        background-color: #1a1a2e;
-        border-radius: 3px;
-    }
-    QSplitter::handle {
-        background-color: #e5e7eb;
-    }
-    QSplitter::handle:hover {
-        background-color: #d1d5db;
-    }
-"""
-
-
-def build_global_stylesheet(scale: float = 1.0) -> str:
-    """Render the global stylesheet with all font sizes scaled by `scale`."""
-    def px(base: int) -> str:
-        return f"{max(8, round(base * scale))}px"
-    return (_GLOBAL_STYLESHEET_TEMPLATE
-            .replace("__FONT_14__", px(14))
-            .replace("__FONT_13__", px(13)))
-
-
-# Backwards-compat alias: existing callers (launcher) import GLOBAL_STYLESHEET.
-GLOBAL_STYLESHEET = build_global_stylesheet(1.0)
-
 
 def main():
     app = QApplication(sys.argv)
-    app.setPalette(LightPalette())
-    app.setStyle('Fusion')
-
-    app.setStyleSheet(build_global_stylesheet(1.0))
-
-    # Set Inter font AFTER stylesheet — on macOS, setStyleSheet() resets app font
-    app.setFont(QFont("Inter", 15))
+    app.setApplicationName(__app_name__)
+    theme.apply(app)
 
     window = MainWindow()
     window.show()
