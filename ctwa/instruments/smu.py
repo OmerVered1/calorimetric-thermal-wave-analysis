@@ -24,7 +24,9 @@ bench.
 
 from __future__ import annotations
 
+import functools
 import importlib
+import threading
 from typing import Any, Optional
 
 from . import registry
@@ -50,6 +52,11 @@ class SMU:
         self.driver = driver
         self._module = module
         self._tsp = convention == "tsp"
+        # Three things can talk to the instrument at once: the sweep thread, the
+        # live multimeter's reader thread, and the UI (an Output click). A query
+        # is a write followed by a read, and two interleaved on one bus hand each
+        # caller the other's answer. Every call below holds this lock.
+        self._lock = threading.RLock()
 
     # ----- construction --------------------------------------------------
 
@@ -311,3 +318,20 @@ class SMU:
     def __repr__(self) -> str:
         how = "simulated" if self.simulate else ("connected" if self.connected else "disconnected")
         return f"<SMU {self.caps.display_name} {how}>"
+
+
+
+def _serialised(fn):
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
+# Wrap every public method that reaches the driver. Properties, static helpers
+# and the constructor are left alone.
+for _name, _attr in list(vars(SMU).items()):
+    if _name.startswith("_") or not callable(_attr) or isinstance(_attr, (staticmethod, classmethod)):
+        continue
+    setattr(SMU, _name, _serialised(_attr))

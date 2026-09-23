@@ -290,6 +290,62 @@ class DigitalDisplay(QLabel):
         self.setStyleSheet(f"color: {color};")
 
 
+class LiveReader(QThread):
+    """Reads the instrument for the live multimeter, off the UI thread.
+
+    The original windows read inside a QTimer slot, i.e. on the UI thread, so the
+    whole window froze for the length of every reading. Over USB that is a
+    stutter; on the 6430's 9600-baud serial link it is most of each cycle. The
+    readings, their order and their rate are unchanged — only where they wait.
+    """
+
+    reading = pyqtSignal(object, object)   # voltage, current (either may be None)
+    failed = pyqtSignal(str)
+
+    def __init__(self, smu, channel: str, measure: str, period_ms: int):
+        super().__init__()
+        self._smu = smu
+        self._channel = channel
+        self._measure = measure
+        self._period = period_ms / 1000.0
+        self._stop = threading.Event()
+
+    def set_period_ms(self, period_ms: int):
+        self._period = period_ms / 1000.0
+
+    def set_measure(self, measure: str):
+        self._measure = measure
+
+    def set_channel(self, channel: str):
+        self._channel = channel
+
+    def stop(self):
+        self._stop.set()
+
+    def run(self):
+        # First reading one period after start, as the timer did.
+        next_at = time.monotonic() + self._period
+        while not self._stop.wait(max(0.0, next_at - time.monotonic())):
+            next_at += self._period
+            try:
+                voltage = current = None
+                if self._measure in ("Voltage", "Resistance", "All"):
+                    voltage = self._smu.measure_voltage(self._channel)
+                if self._measure in ("Current", "Resistance", "All"):
+                    current = self._smu.measure_current(self._channel)
+            except Exception as exc:
+                self.failed.emit(str(exc))
+                continue
+            if self._stop.is_set():
+                return
+            self.reading.emit(voltage, current)
+            # If a reading took longer than the period, carry on from now rather
+            # than firing a burst to catch up.
+            if next_at < time.monotonic():
+                next_at = time.monotonic()
+
+
+
 class MultimeterPanel(QWidget):
     """Live multimeter mode panel with channel support"""
 
@@ -298,8 +354,7 @@ class MultimeterPanel(QWidget):
         self.app = parent
         self.running = False
         self.recording = False
-        self.timer = QTimer()
-        self.timer.timeout.connect(self._update_reading)
+        self._reader: Optional[LiveReader] = None
         self.reading_count = 0
         self.record_start_time = None
         self.recorded_data = []
@@ -329,6 +384,8 @@ class MultimeterPanel(QWidget):
 
         settings.addWidget(QLabel("Measure:"))
         self.measure_type = QComboBox()
+        self.measure_type.currentTextChanged.connect(
+            lambda m: self._reader.set_measure(m) if self._reader else None)
         self.measure_type.addItems(["Voltage", "Current", "Resistance", "All"])
         self.measure_type.setCurrentText("All")
         settings.addWidget(self.measure_type)
@@ -526,8 +583,8 @@ class MultimeterPanel(QWidget):
 
     def _update_rate_changed(self):
         rates = [1000, 200, 100, 50]
-        if self.running:
-            self.timer.setInterval(rates[self.update_rate.currentIndex()])
+        if self.running and self._reader is not None:
+            self._reader.set_period_ms(rates[self.update_rate.currentIndex()])
 
     def _set_terminal(self, term):
         self.terminal = term
@@ -586,13 +643,20 @@ class MultimeterPanel(QWidget):
             self.record_btn.setEnabled(True)
 
             rates = [1000, 200, 100, 50]
-            self.timer.start(rates[self.update_rate.currentIndex()])
+            self._reader = LiveReader(self.app.smu, ch, self.measure_type.currentText(),
+                                      rates[self.update_rate.currentIndex()])
+            self._reader.reading.connect(self._on_reading)
+            self._reader.failed.connect(lambda msg: print(f"Measurement error: {msg}"))
+            self._reader.start()
 
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
     def stop_live(self):
-        self.timer.stop()
+        reader, self._reader = self._reader, None
+        if reader is not None:
+            reader.stop()
+            reader.wait(3000)   # a reading already in flight finishes first
         self.running = False
 
         if self.app.smu:
@@ -609,24 +673,12 @@ class MultimeterPanel(QWidget):
         self.record_btn.setEnabled(False)
         self.save_record_btn.setEnabled(len(self.recorded_data) > 0)
 
-    def _update_reading(self):
-        if not self.app.smu:
+    def _on_reading(self, voltage, current):
+        """A reading arrived from the LiveReader (runs on the UI thread)."""
+        if not self.app.smu or not self.running:
             return
 
         try:
-            voltage = None
-            current = None
-            ch = self.app.current_channel
-            smu = self.app.smu
-
-            measure = self.measure_type.currentText()
-
-            if measure in ["Voltage", "Resistance", "All"]:
-                voltage = smu.measure_voltage(ch)
-
-            if measure in ["Current", "Resistance", "All"]:
-                current = smu.measure_current(ch)
-
             if voltage is not None:
                 self.voltage_display.set_value(voltage)
             if current is not None:
@@ -2761,6 +2813,9 @@ class MainWindow(QMainWindow):
     def _set_channel(self, channel: str):
         """Switch the active channel"""
         self.current_channel = channel
+        reader = getattr(self.multimeter_panel, "_reader", None)
+        if reader is not None:
+            reader.set_channel(channel)
         self.channel_a_btn.set_selected(channel == "a")
         self.channel_b_btn.set_selected(channel == "b")
         self.multimeter_panel.update_channel_display()
