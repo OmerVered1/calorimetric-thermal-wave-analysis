@@ -612,6 +612,47 @@ class Keithley2450:
         self._write(f"SENS:{'VOLT' if self._source_function == SourceFunction.CURRENT else 'CURR'}:RSEN {mode.value}")
         logger.info(f"Sense mode set to: {mode.name}")
     
+    # ---- Settings the 2450 window used to send as raw SCPI ----------------
+    #
+    # These were written straight from the GUI with smu._write(...), bypassing
+    # the driver. They move here so the single merged window can reach them
+    # through the common SMU interface. Each emits exactly the command sequence
+    # the GUI sent, which is what every measurement so far was taken with.
+
+    def set_remote_sense(self, four_wire: bool):
+        """4-wire (remote) sensing on BOTH current and voltage.
+
+        Unlike set_sense_mode, which touches only the measured function: the
+        GUI set both, because 4-wire wiring read as 2-wire gives wildly wrong
+        I and R readings, and the SMU otherwise keeps whatever mode a previous
+        sweep or session left behind.
+        """
+        state = "ON" if four_wire else "OFF"
+        self._write(f"SENS:CURR:RSEN {state}")
+        self._write(f"SENS:VOLT:RSEN {state}")
+
+    def set_measure_range(self, function: MeasureFunction, range_value: float):
+        """Fixed measurement range (does not by itself switch auto-range off)."""
+        self._write(f"SENS:{function.value}:RANG {range_value}")
+
+    def set_measure_range_auto(self, function: MeasureFunction, auto: bool = True):
+        self._write(f"SENS:{function.value}:RANG:AUTO {'ON' if auto else 'OFF'}")
+
+    def set_nplc(self, nplc: float, function: Optional[MeasureFunction] = None):
+        """Integration time in power-line cycles; both functions unless given."""
+        if function:
+            self._write(f"SENS:{function.value}:NPLC {nplc}")
+        else:
+            self._write(f"SENS:CURR:NPLC {nplc}")
+            self._write(f"SENS:VOLT:NPLC {nplc}")
+
+    def set_high_capacitance(self, enabled: bool):
+        self._write(f"SOUR:VOLT:HCAP {'ON' if enabled else 'OFF'}")
+
+    def set_auto_zero(self, state: str = "ON"):
+        """ "ON", "OFF" or "ONCE"."""
+        self._write(f"SENS:AZER {state}")
+
     def measure_voltage(self) -> float:
         """Measure voltage"""
         self._write("SENS:FUNC 'VOLT'")

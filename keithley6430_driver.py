@@ -772,6 +772,11 @@ class Keithley6430:
         self._write(f":SYST:RSEN {mode.value}")
         logger.info(f"Sense mode set to: {'4-Wire' if mode == SenseMode.FOUR_WIRE else '2-Wire'}")
 
+    def set_remote_sense(self, four_wire: bool):
+        """4-wire sensing. The 6430 has one system-wide setting, so this is
+        set_sense_mode under the common interface's name."""
+        self.set_sense_mode(SenseMode.FOUR_WIRE if four_wire else SenseMode.TWO_WIRE)
+
     def set_measure_range(self, function: MeasureFunction, range_value: float):
         """Set measurement range"""
         self._write(f":SENS:{function.value}:RANG {range_value}")
