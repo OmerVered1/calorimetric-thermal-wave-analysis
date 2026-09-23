@@ -68,6 +68,19 @@ RADIUS = 8
 RADIUS_LG = 12
 
 
+def asset(name: str) -> str:
+    """Path to a bundled icon, in the forward-slash form Qt stylesheets need.
+
+    Works from source and from a PyInstaller build, where data files live
+    under sys._MEIPASS rather than next to this module.
+    """
+    from pathlib import Path
+
+    base = getattr(sys, "_MEIPASS", None)
+    root = Path(base) / "ctwa" / "assets" if base else Path(__file__).resolve().parent / "assets"
+    return (root / name).as_posix()
+
+
 def _pick(candidates, fallback):
     families = set(QFontDatabase().families())
     for name in candidates:
@@ -224,7 +237,9 @@ QPlainTextEdit:focus, QTextEdit:focus {{ border: 1px solid {p.accent}; }}
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
     background: {p.canvas}; color: {p.text_faint}; border-color: {p.hairline};
 }}
-QComboBox::drop-down {{ border: none; width: 22px; }}
+QComboBox::drop-down {{ border: none; width: 24px; }}
+QComboBox::down-arrow {{ image: url("{asset('chevron-down.svg')}"); width: 12px; height: 12px; }}
+QComboBox::down-arrow:disabled {{ image: url("{asset('chevron-down-faint.svg')}"); }}
 QComboBox QAbstractItemView {{
     background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS}px;
     padding: 4px; outline: none; selection-background-color: {p.accent_soft}; selection-color: {p.text};
@@ -238,7 +253,11 @@ QCheckBox::indicator, QRadioButton::indicator {{
 }}
 QCheckBox::indicator {{ border-radius: 4px; }}
 QRadioButton::indicator {{ border-radius: 8px; }}
-QCheckBox::indicator:checked {{ background: {p.accent}; border-color: {p.accent}; }}
+QCheckBox::indicator:checked {{
+    background: {p.accent}; border-color: {p.accent}; image: url("{asset('check.svg')}");
+}}
+QCheckBox::indicator:hover {{ border-color: {p.text_faint}; }}
+QCheckBox::indicator:disabled {{ background: {p.canvas}; border-color: {p.hairline}; }}
 QRadioButton::indicator:checked {{ background: {p.card}; border: 5px solid {p.accent}; }}
 
 /* ---------- lists & tables ----------------------------------------- */

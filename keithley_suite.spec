@@ -25,7 +25,8 @@ a = Analysis(
     ['launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets'), ('calorimeter_profiles', 'calorimeter_profiles')],
+    datas=[('assets', 'assets'), ('calorimeter_profiles', 'calorimeter_profiles'),
+           ('ctwa/assets', 'ctwa/assets')],
     hiddenimports=[
         'keithley2450_pyqt',
         'keithley2450_driver',
