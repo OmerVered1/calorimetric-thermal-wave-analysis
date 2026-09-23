@@ -251,19 +251,9 @@ class DigitalDisplay(QLabel):
         super().__init__("----")
         self.unit = unit
         self.decimals = decimals
-        self.color = "#22c55e"
-        self.setStyleSheet("""
-            QLabel {
-                background-color: transparent;
-                color: #22c55e;
-                font-family: 'Inter', sans-serif;
-                font-size: 28px;
-                font-weight: bold;
-                padding: 10px 15px;
-                border: none;
-                qproperty-alignment: AlignRight;
-            }
-        """)
+        self.color = theme.P.text
+        theme.set_role(self, "readout")
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.setMinimumHeight(50)
 
     def set_value(self, value: float):
@@ -295,19 +285,9 @@ class DigitalDisplay(QLabel):
         self.setText(text)
 
     def set_color(self, color: str):
+        """Colour identifies the quantity, matching its trace on the graphs."""
         self.color = color
-        self.setStyleSheet(f"""
-            QLabel {{
-                background-color: transparent;
-                color: {color};
-                font-family: 'Inter', sans-serif;
-                font-size: 28px;
-                font-weight: bold;
-                padding: 10px 15px;
-                border: none;
-                qproperty-alignment: AlignRight;
-            }}
-        """)
+        self.setStyleSheet(f"color: {color};")
 
 
 class MultimeterPanel(QWidget):
@@ -331,8 +311,7 @@ class MultimeterPanel(QWidget):
         layout.setSpacing(20)
 
         # Title
-        title = QLabel("Live Multimeter")
-        title.setFont(QFont("Google Sans", 28, QFont.Bold))
+        title = theme.set_role(QLabel("Live multimeter"), "heading")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
@@ -340,7 +319,7 @@ class MultimeterPanel(QWidget):
         ch_layout = QHBoxLayout()
         ch_layout.addStretch()
         self.channel_indicator = QLabel("Channel A")
-        self.channel_indicator.setStyleSheet("color: #1a1a2e; font-size: 18px; font-weight: bold;")
+        theme.set_role(self.channel_indicator, "muted")
         ch_layout.addWidget(self.channel_indicator)
         ch_layout.addStretch()
         layout.addLayout(ch_layout)
@@ -423,28 +402,28 @@ class MultimeterPanel(QWidget):
         v_group = QGroupBox("Voltage")
         v_layout = QVBoxLayout(v_group)
         self.voltage_display = DigitalDisplay("V", 6)
-        self.voltage_display.set_color("#22c55e")
+        self.voltage_display.set_color(theme.P.series[3])
         v_layout.addWidget(self.voltage_display)
         displays.addWidget(v_group, 0, 0)
 
         i_group = QGroupBox("Current")
         i_layout = QVBoxLayout(i_group)
         self.current_display = DigitalDisplay("A", 6)
-        self.current_display.set_color("#d97706")
+        self.current_display.set_color(theme.P.series[4])
         i_layout.addWidget(self.current_display)
         displays.addWidget(i_group, 0, 1)
 
         r_group = QGroupBox("Resistance")
         r_layout = QVBoxLayout(r_group)
         self.resistance_display = DigitalDisplay("\u03a9", 4)
-        self.resistance_display.set_color("#0891b2")
+        self.resistance_display.set_color(theme.P.series[5])
         r_layout.addWidget(self.resistance_display)
         displays.addWidget(r_group, 1, 0)
 
         p_group = QGroupBox("Power")
         p_layout = QVBoxLayout(p_group)
         self.power_display = DigitalDisplay("W", 6)
-        self.power_display.set_color("#c026d3")
+        self.power_display.set_color(theme.P.series[6])
         p_layout.addWidget(self.power_display)
         displays.addWidget(p_group, 1, 1)
 
@@ -467,29 +446,13 @@ class MultimeterPanel(QWidget):
         # Buttons
         btn_layout = QHBoxLayout()
 
-        self.start_btn = QPushButton("START")
-        self.start_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1a1a2e; color: #ffffff;
-                font-family: 'Inter'; font-size: 14px; font-weight: bold;
-                padding: 8px 20px; border-radius: 6px; border: none;
-            }
-            QPushButton:hover { background-color: #374151; }
-            QPushButton:disabled { background-color: #e5e7eb; color: #9ca3af; }
-        """)
+        self.start_btn = QPushButton("Start")
+        theme.set_role(self.start_btn, "primary")
         self.start_btn.clicked.connect(self.start_live)
         btn_layout.addWidget(self.start_btn)
 
-        self.stop_btn = QPushButton("STOP")
-        self.stop_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #dc2626; color: #ffffff;
-                font-family: 'Inter'; font-size: 14px; font-weight: bold;
-                padding: 8px 20px; border-radius: 6px; border: none;
-            }
-            QPushButton:hover { background-color: #b91c1c; }
-            QPushButton:disabled { background-color: #e5e7eb; color: #9ca3af; }
-        """)
+        self.stop_btn = QPushButton("Stop")
+        theme.set_role(self.stop_btn, "danger")
         self.stop_btn.clicked.connect(self.stop_live)
         self.stop_btn.setEnabled(False)
         btn_layout.addWidget(self.stop_btn)
@@ -499,50 +462,23 @@ class MultimeterPanel(QWidget):
         # Recording buttons
         record_layout = QHBoxLayout()
 
-        self.record_btn = QPushButton("RECORD")
-        self.record_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f3f4f6; color: #1a1a2e;
-                font-family: 'Inter'; font-size: 14px; font-weight: bold;
-                padding: 8px 20px; border-radius: 6px; border: 1px solid #d1d5db;
-            }
-            QPushButton:hover { background-color: #e5e7eb; }
-            QPushButton:disabled { background-color: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
-        """)
+        self.record_btn = QPushButton("Record")
         self.record_btn.clicked.connect(self._start_recording)
         self.record_btn.setEnabled(False)
         record_layout.addWidget(self.record_btn)
 
-        self.pause_record_btn = QPushButton("PAUSE")
-        self.pause_record_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f3f4f6; color: #1a1a2e;
-                font-family: 'Inter'; font-size: 14px; font-weight: bold;
-                padding: 8px 20px; border-radius: 6px; border: 1px solid #d1d5db;
-            }
-            QPushButton:hover { background-color: #e5e7eb; }
-            QPushButton:disabled { background-color: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
-        """)
+        self.pause_record_btn = QPushButton("Pause")
         self.pause_record_btn.clicked.connect(self._pause_recording)
         self.pause_record_btn.setEnabled(False)
         record_layout.addWidget(self.pause_record_btn)
 
-        self.save_record_btn = QPushButton("SAVE CSV")
-        self.save_record_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f3f4f6; color: #1a1a2e;
-                font-family: 'Inter'; font-size: 14px; font-weight: bold;
-                padding: 8px 20px; border-radius: 6px; border: 1px solid #d1d5db;
-            }
-            QPushButton:hover { background-color: #e5e7eb; }
-            QPushButton:disabled { background-color: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
-        """)
+        self.save_record_btn = QPushButton("Save CSV")
         self.save_record_btn.clicked.connect(self._save_recording)
         self.save_record_btn.setEnabled(False)
         record_layout.addWidget(self.save_record_btn)
 
         self.record_status = QLabel("Recording: Stopped | Points: 0")
-        self.record_status.setStyleSheet("color: #9ca3af;")
+        theme.set_role(self.record_status, "faint")
         record_layout.addWidget(self.record_status)
         record_layout.addStretch()
 
@@ -730,7 +666,7 @@ class MultimeterPanel(QWidget):
         self.pause_record_btn.setEnabled(True)
         self.save_record_btn.setEnabled(False)
         self.record_status.setText("Recording: Active | Points: 0")
-        self.record_status.setStyleSheet("color: #e83e8c; font-weight: bold;")
+        theme.set_role(self.record_status, "pill", tone="accent")
         self.voltage_plot.setData([], [])
         self.current_plot.setData([], [])
         self.power_plot.setData([], [])
@@ -741,7 +677,7 @@ class MultimeterPanel(QWidget):
         self.pause_record_btn.setEnabled(False)
         self.save_record_btn.setEnabled(len(self.recorded_data) > 0)
         self.record_status.setText(f"Recording: Paused | Points: {len(self.recorded_data)}")
-        self.record_status.setStyleSheet("color: #fd7e14;")
+        theme.set_role(self.record_status, "pill", tone="warn")
 
     def _save_recording(self):
         if not self.recorded_data:
@@ -1103,7 +1039,7 @@ class ExperimentsSidebar(QGroupBox):
         layout.setSpacing(8)
 
         self.current_label = QLabel("(Untitled)")
-        self.current_label.setStyleSheet("font-weight: bold; color: #1a1a2e;")
+        theme.set_role(self.current_label, "card-title")
         layout.addWidget(self.current_label)
 
         self.list_widget = QListWidget()
@@ -1338,24 +1274,6 @@ class SweepListWidget(QGroupBox):
         self.table.setHorizontalHeaderLabels(["#", "Value"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setMaximumHeight(200)
-        self.table.setStyleSheet("""
-            QTableWidget {
-                background-color: #ffffff;
-                color: #1a1a2e;
-                gridline-color: #d1d5db;
-                font-size: 13px;
-                alternate-background-color: #f9fafb;
-            }
-            QTableWidget::item { color: #1a1a2e; }
-            QHeaderView::section {
-                background-color: #f3f4f6;
-                color: #1a1a2e;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 6px;
-                border: 1px solid #d1d5db;
-            }
-        """)
         layout.addWidget(self.table)
 
         # Linear sweep settings (form layout so labels stack above values when narrow)
@@ -1414,14 +1332,6 @@ class SweepListWidget(QGroupBox):
         wave_btn = QPushButton("Custom Signal Design")
         wave_btn.setMinimumWidth(0)
         wave_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        wave_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #17a2b8; color: white;
-                font-family: 'Inter'; font-size: 14px;
-                font-weight: bold; padding: 8px 10px;
-            }
-            QPushButton:hover { background-color: #138496; }
-        """)
         wave_btn.clicked.connect(self.wave_generator_requested.emit)
         layout.addWidget(wave_btn)
 
@@ -1636,24 +1546,6 @@ class DataTableWidget(QTableWidget):
             header.setSectionResizeMode(i, QHeaderView.Stretch)
 
         self.setAlternatingRowColors(True)
-        self.setStyleSheet("""
-            QTableWidget {
-                background-color: #ffffff;
-                alternate-background-color: #f9fafb;
-                color: #1a1a2e;
-                gridline-color: #d1d5db;
-                font-size: 13px;
-            }
-            QTableWidget::item { color: #1a1a2e; padding: 4px; }
-            QHeaderView::section {
-                background-color: #f3f4f6;
-                color: #1a1a2e;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 8px 5px;
-                border: 1px solid #d1d5db;
-            }
-        """)
 
     def add_point(self, point: MeasurementPoint):
         row = self.rowCount()
@@ -1814,13 +1706,13 @@ class ConnectionDialog(QDialog):
         cal_layout.addLayout(cal_ctrl_row)
 
         self.cal_status_label = QLabel("Not connected")
-        self.cal_status_label.setStyleSheet("color: #6b7280; font-size: 13px;")
+        theme.set_role(self.cal_status_label, "muted")
         cal_layout.addWidget(self.cal_status_label)
 
         cal_note = QLabel(
             "Read-only monitor. Configure and start experiments in Calisto first."
         )
-        cal_note.setStyleSheet("color: #6b7280; font-size: 12px; font-style: italic;")
+        theme.set_role(cal_note, "faint")
         cal_layout.addWidget(cal_note)
 
         layout.addWidget(cal_group)
@@ -1842,10 +1734,10 @@ class ConnectionDialog(QDialog):
         if ip:
             self.cal_host.setText(ip)
             self.cal_status_label.setText(f"Found {name} at {ip}")
-            self.cal_status_label.setStyleSheet("color: #16a34a; font-size: 13px;")
+            theme.set_role(self.cal_status_label, "ok")
         else:
             self.cal_status_label.setText(f"Discover failed: {diag}")
-            self.cal_status_label.setStyleSheet("color: #dc2626; font-size: 13px;")
+            theme.set_role(self.cal_status_label, "danger")
 
     # ---- Saved setups ---------------------------------------------------
 
@@ -1990,7 +1882,7 @@ class ConnectionDialog(QDialog):
         available, reason = probe_port_free(host)
         if not available:
             self.cal_status_label.setText(f"Cannot connect: {reason}")
-            self.cal_status_label.setStyleSheet("color: #dc2626; font-size: 13px;")
+            theme.set_role(self.cal_status_label, "danger")
             return
 
         self.app.connect_calorimeter(name, host, float(self.cal_interval.value()))
@@ -2003,7 +1895,7 @@ class ConnectionDialog(QDialog):
             host = self.app.calorimeter_host or "?"
             mode = "sniffing" if self.app.calorimeter_sniffing else "connected"
             self.cal_status_label.setText(f"{mode.capitalize()}: {name} @ {host}")
-            self.cal_status_label.setStyleSheet("color: #16a34a; font-size: 13px;")
+            theme.set_role(self.cal_status_label, "ok")
             self.cal_connect_btn.setText(
                 "Stop Sniffing" if self.app.calorimeter_sniffing else "Disconnect Calorimeter"
             )
@@ -2364,12 +2256,11 @@ class WaveToolDialog(QDialog):
         layout.addWidget(self._segments_splitter)
 
         preview_btn = QPushButton("Preview Waveform")
-        preview_btn.setStyleSheet("background-color: #f3f4f6; color: #1a1a2e; border: 1px solid #d1d5db; font-family: 'Inter'; font-size: 15px; padding: 12px; font-weight: bold;")
         preview_btn.clicked.connect(self._preview)
         layout.addWidget(preview_btn)
 
         self.info_label = QLabel("Configure parameters and click Preview")
-        self.info_label.setStyleSheet("color: #6b7280; font-style: italic;")
+        theme.set_role(self.info_label, "muted")
         layout.addWidget(self.info_label)
 
         self.preview_graph = pg.PlotWidget()
@@ -2383,7 +2274,7 @@ class WaveToolDialog(QDialog):
 
         btn_layout = QHBoxLayout()
         generate_btn = QPushButton("Generate && Import to Sweep List")
-        generate_btn.setStyleSheet("background-color: #1a1a2e; color: #ffffff; font-family: 'Inter'; font-size: 15px; padding: 12px; font-weight: bold;")
+        theme.set_role(generate_btn, "primary")
         generate_btn.clicked.connect(self._generate_and_accept)
         btn_layout.addWidget(generate_btn)
 
@@ -2633,7 +2524,7 @@ class WaveToolDialog(QDialog):
                 f"Duration: {combined_t[-1]:.2f}s | "
                 f"Output: {min(combined_values):.4f} to {max(combined_values):.4f} {export_unit}"
             )
-            self.info_label.setStyleSheet("color: #1a1a2e; font-weight: bold;")
+            theme.set_role(self.info_label, "card-title")
 
             self.preview_graph.clear()
             self.preview_graph.plot(self.time_values, self.waveform_values, pen=pg.mkPen('#16a34a', width=2))
@@ -3267,7 +3158,7 @@ class MainWindow(QMainWindow):
             )
 
         self.progress_label = QLabel("")
-        self.progress_label.setStyleSheet("font-family: 'Inter'; color: #9ca3af;")
+        theme.set_role(self.progress_label, "faint")
         self.status.addPermanentWidget(self.progress_label)
 
         self.progress = QProgressBar()
