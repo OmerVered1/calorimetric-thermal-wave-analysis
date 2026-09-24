@@ -14,8 +14,9 @@ Design language: a dense desktop instrument panel.
 * One accent, heater amber, spent on the primary action. A deeper amber marks
   keyboard focus and checked boxes, where the pale fill would be too faint to
   see on a light grey.
-* IBM Plex Sans for the interface and Plex Mono for readouts, bundled so the
-  program looks the same on the lab PC and a laptop.
+* Google Sans for everything, bundled so the program looks the same on every
+  lab PC. Numbers use a copy with fixed-width digits ("CTWA Sans Tabular"),
+  so readouts don't shift sideways as they change. See assets/fonts/README.md.
 * Every clickable control has hover, pressed, keyboard-focus and disabled
   states, all instant: a stylesheet has no transitions.
 """
@@ -52,6 +53,10 @@ class Palette:
     # colour works on the canvas, a panel and a card alike.
     hover: str = "rgba(27, 28, 30, 0.06)"
     press: str = "rgba(27, 28, 30, 0.12)"
+    # Unselected folder tabs: a step darker than what they sit on
+    tab_chip: str = "rgba(27, 28, 30, 0.07)"
+    tab_chip_hover: str = "rgba(27, 28, 30, 0.03)"
+    tab_chip_press: str = "rgba(27, 28, 30, 0.13)"
     button_hover: str = "#F1F2F3"
     button_press: str = "#E1E3E6"
     # Heater amber
@@ -94,8 +99,8 @@ RADIUS_CARD = 6   # cards and panels
 W_MEDIUM = 500
 W_SEMIBOLD = 600
 
-UI_FAMILY = "IBM Plex Sans"
-MONO_FAMILY = "IBM Plex Mono"
+UI_FAMILY = "CTWA Sans"              # Google Sans, renamed as its trademark notice asks
+NUMERIC_FAMILY = "CTWA Sans Tabular"  # the same, with fixed-width digits
 
 
 def asset(name: str) -> str:
@@ -116,7 +121,7 @@ _fonts_loaded = None
 
 
 def _load_fonts() -> bool:
-    """Register the bundled Plex files once. False if any failed to load."""
+    """Register the bundled font files once. False if any failed to load."""
     global _fonts_loaded
     if _fonts_loaded is None:
         from pathlib import Path
@@ -126,15 +131,17 @@ def _load_fonts() -> bool:
         for f in files:
             if QFontDatabase.addApplicationFont(f.as_posix()) < 0:
                 ok = False
-        _fonts_loaded = ok and UI_FAMILY in QFontDatabase.families()
+        families = QFontDatabase.families()
+        _fonts_loaded = ok and UI_FAMILY in families and NUMERIC_FAMILY in families
     return _fonts_loaded
 
 
 def fonts():
-    """Font families in use: (ui, mono). The system's own only if Plex failed
-    to load, which would mean the assets folder is missing from a build."""
+    """Font families in use: (ui, numeric). The system's own only if the
+    bundled ones failed to load, which would mean the assets folder is missing
+    from a build."""
     if _load_fonts():
-        return UI_FAMILY, MONO_FAMILY
+        return UI_FAMILY, NUMERIC_FAMILY
     if sys.platform == "darwin":
         return "Helvetica Neue", "Menlo"
     if sys.platform == "win32":
@@ -143,7 +150,7 @@ def fonts():
 
 
 def stylesheet() -> str:
-    ui, mono = fonts()
+    ui, mono = fonts()   # "mono" here: the fixed-width-digit numeric family
     p = P
     return f"""
 /* ---------- base ---------------------------------------------------- */
@@ -370,27 +377,36 @@ QHeaderView::section {{
 QHeaderView::section:hover {{ background: {p.button_hover}; }}
 QTableCornerButton::section {{ background: {p.card}; border: none; }}
 
-/* ---------- tabs ---------------------------------------------------- */
+/* ---------- tabs: folder tabs ----------------------------------------
+   Unselected tabs are grey chips. The selected one takes the page's own
+   colour and drops its lower edge, so it reads as the top of the page below.
+   The chip colour is an overlay, so the same rules work on the window
+   background (main tabs) and on a panel (tabs inside a page or a dialog). */
 QTabWidget::pane {{
-    background: {p.panel}; border: 1px solid {p.border}; border-radius: {RADIUS_CARD}px; top: -1px;
+    background: {p.panel}; border: 1px solid {p.border};
+    border-radius: {RADIUS_CARD}px; border-top-left-radius: 0px; top: -1px;
 }}
 QTabWidget QTabWidget::pane, QDialog QTabWidget::pane {{
     background: transparent; border: none; border-top: 1px solid {p.border}; border-radius: 0px;
 }}
+QTabWidget::tab-bar {{ left: 0px; }}
 QTabBar {{ qproperty-drawBase: 0; background: transparent; }}
 QTabBar::tab {{
-    background: transparent; color: {p.text_muted};
-    border: 1px solid transparent; border-radius: {RADIUS}px;
-    padding: 3px 12px; margin: 0px 2px 5px 0px; min-height: 16px;
+    background: {p.tab_chip}; color: {p.text_muted};
+    border: 1px solid {p.border}; border-bottom: none;
+    border-top-left-radius: 5px; border-top-right-radius: 5px;
+    padding: 4px 14px 5px 14px; margin: 3px 2px 0px 0px; min-height: 16px;
 }}
-QTabBar::tab:hover    {{ background: {p.hover}; color: {p.text}; }}
-QTabBar::tab:pressed  {{ background: {p.press}; padding: 4px 12px 2px 12px; }}
+QTabBar::tab:hover    {{ background: {p.tab_chip_hover}; color: {p.text}; }}
+QTabBar::tab:pressed  {{ background: {p.tab_chip_press}; padding: 5px 14px 4px 14px; }}
 QTabBar::tab:selected {{
-    background: {p.raised}; color: {p.text}; font-weight: {W_SEMIBOLD};
-    border: 1px solid {p.border}; border-bottom-color: {p.border_strong};
+    background: {p.panel}; color: {p.text}; font-weight: {W_SEMIBOLD};
+    border: 1px solid {p.border}; border-bottom: 1px solid {p.panel};
+    margin-top: 0px; padding-bottom: 7px;
 }}
-QTabBar::tab:focus    {{ border: 2px solid {p.accent_strong}; padding: 2px 11px; }}
-QTabBar::tab:disabled {{ color: {p.text_faint}; background: transparent; }}
+QTabBar::tab:focus    {{ border: 2px solid {p.accent_strong}; border-bottom: none; padding: 3px 13px 5px 13px; }}
+QTabBar::tab:selected:focus {{ border-bottom: 1px solid {p.panel}; padding: 3px 13px 7px 13px; }}
+QTabBar::tab:disabled {{ color: {p.text_faint}; }}
 
 /* ---------- chrome -------------------------------------------------- */
 QMenuBar {{ background: {p.panel}; border-bottom: 1px solid {p.border}; }}
@@ -503,7 +519,7 @@ def apply(app: QApplication) -> None:
         return
     _applied = True
     app.setStyle("Fusion")  # the same base on every OS; the stylesheet paints over it
-    ui, _mono = fonts()
+    ui, _numeric = fonts()
     base = QFont(ui)
     base.setPixelSize(12)
     app.setFont(base)
@@ -535,7 +551,8 @@ def ui_font(size_px: int = 12, bold: bool = False) -> QFont:
     return f
 
 
-def mono_font(size_px: int = 12, bold: bool = False) -> QFont:
+def numeric_font(size_px: int = 12, bold: bool = False) -> QFont:
+    """For numbers that change in place: tables, readouts, figures."""
     f = QFont(fonts()[1])
     f.setPixelSize(size_px)
     if bold:

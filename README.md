@@ -100,6 +100,7 @@ ctwa/
   connect_panel.py           # Connect dialog: model, transport, address
   theme.py                   # Palette, stylesheet and plot styling in one place
   assets/                    # Stylesheet icons (check mark, chevrons)
+  assets/fonts/              # Google Sans builds used for all text; see its README
   instruments/
     capabilities.py          # What each model has: channels, ranges, limits, extras
     registry.py              # Model list and how each one connects
@@ -129,6 +130,7 @@ updater.py, _version.py      # In-app updates from this repo's GitHub releases
 keithley_suite.spec          # PyInstaller build
 windows_installer.iss        # Inno Setup installer
 requirements.txt             # All dependencies
+tools/build_fonts.py         # Rebuilds assets/fonts from Google's Google Sans release
 tests/                       # pytest suite
 ```
 

@@ -1351,7 +1351,7 @@ class SweepListWidget(QWidget):
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.setFont(theme.mono_font(12))
+        self.table.setFont(theme.numeric_font(12))
         layout.addWidget(self.table, stretch=1)
 
         self.empty_hint = theme.set_role(QLabel(
@@ -1611,7 +1611,7 @@ class DataTableWidget(QTableWidget):
         self.setHorizontalHeaderLabels(self.COLUMNS)
         self.verticalHeader().setVisible(False)
         self.verticalHeader().setDefaultSectionSize(22)
-        self.setFont(theme.mono_font(12))
+        self.setFont(theme.numeric_font(12))
 
         header = self.horizontalHeader()
         for i in range(len(self.COLUMNS)):
@@ -2155,7 +2155,7 @@ class LicenseDialog(QDialog):
 
         license_text = QTextEdit()
         license_text.setReadOnly(True)
-        license_text.setFont(theme.mono_font(11))
+        license_text.setFont(theme.numeric_font(11))
         license_text.setPlainText(self._get_license_text())
         layout.addWidget(license_text)
 
@@ -3147,7 +3147,7 @@ class MainWindow(QMainWindow):
         # Experiments tab and are hidden on the others.
         sweep_actions = QWidget()
         sa = QHBoxLayout(sweep_actions)
-        sa.setContentsMargins(0, 0, 0, 5)
+        sa.setContentsMargins(0, 0, 0, 4)
         sa.setSpacing(6)
 
         self.start_btn = theme.set_role(QPushButton("Start sweep"), "primary")

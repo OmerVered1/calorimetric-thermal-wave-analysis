@@ -83,7 +83,10 @@ a = Analysis(
     runtime_hooks=[],
     # Other Qt bindings installed alongside must not be bundled: pyqtgraph
     # probes for them, and PyInstaller refuses a build with two.
-    excludes=['PyQt5', 'PyQt6', 'PySide2'],
+    excludes=['PyQt5', 'PyQt6', 'PySide2',
+              # Pulled in only through optional imports in other packages
+              # when they happen to be installed; never used here.
+              'torch', 'tensorboard', 'matplotlib'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
