@@ -230,7 +230,7 @@ class SMUConnectPanel(QWidget):
         self.sim_resistance.setDecimals(0)
         self.sim_resistance.setSuffix(" Ω")
         self.sim_resistance.setToolTip("Resistance the simulated instrument sees.")
-        self.sim_resistance.setMinimumWidth(110)
+        self.sim_resistance.setMinimumWidth(theme.scaled(110))
         foot.addWidget(self.sim_resistance)
         foot.addStretch()
         self.connect_btn = theme.set_role(QPushButton("Connect"), "primary")

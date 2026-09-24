@@ -130,7 +130,7 @@ def _theme():
 
 
 # Side panel width: fixed range, the plot takes the rest.
-CONTROLS_MIN_W, CONTROLS_MAX_W = 320, 380
+CONTROLS_MIN_W, CONTROLS_MAX_W = _theme().scaled(320), _theme().scaled(380)
 
 EMPTY_NOTHING = ("Nothing to plot yet.\n"
                  "Connect a calorimeter or start a sweep, and signals appear here as they arrive.")

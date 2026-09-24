@@ -95,6 +95,24 @@ P = Palette()
 RADIUS = 4        # controls
 RADIUS_CARD = 6   # cards and panels
 
+# Type scale, in pixels. TEXT is the one to change: every other size, and the
+# widths of fields and panels that hold text (see ``scaled``), follow it.
+TEXT = 14                  # body: labels, inputs, buttons, lists, tables
+TEXT_SMALL = TEXT - 2      # section titles, captions, status bar, plot ticks
+TEXT_AXIS = TEXT - 1       # plot axis titles
+TEXT_HEADING = TEXT + 1
+TEXT_TITLE = TEXT + 3
+TEXT_READOUT = 2 * TEXT    # the multimeter's big numbers
+ROW_HEIGHT = TEXT + 12     # table rows
+
+# The layout was drawn at 12 px text; widths that hold text grow with it.
+_DESIGN_TEXT = 12
+
+
+def scaled(px: int) -> int:
+    """A width drawn for 12 px text, at the current text size."""
+    return round(px * TEXT / _DESIGN_TEXT)
+
 # Stylesheet font weights, on the CSS scale Qt 6 uses directly.
 W_MEDIUM = 500
 W_SEMIBOLD = 600
@@ -156,7 +174,7 @@ def stylesheet() -> str:
 /* ---------- base ---------------------------------------------------- */
 QWidget {{
     font-family: "{ui}";
-    font-size: 12px;
+    font-size: {TEXT}px;
     color: {p.text};
 }}
 QMainWindow {{ background: {p.canvas}; }}
@@ -167,12 +185,12 @@ QToolTip {{
 }}
 
 /* ---------- text roles ---------------------------------------------- */
-QLabel[role="title"]      {{ font-size: 15px; font-weight: {W_SEMIBOLD}; }}
-QLabel[role="heading"]    {{ font-size: 13px; font-weight: {W_SEMIBOLD}; }}
-QLabel[role="card-title"] {{ font-size: 12px; font-weight: {W_SEMIBOLD}; background: transparent; }}
-QLabel[role="section"]    {{ font-size: 11px; font-weight: {W_SEMIBOLD}; color: {p.text_muted}; }}
+QLabel[role="title"]      {{ font-size: {TEXT_TITLE}px; font-weight: {W_SEMIBOLD}; }}
+QLabel[role="heading"]    {{ font-size: {TEXT_HEADING}px; font-weight: {W_SEMIBOLD}; }}
+QLabel[role="card-title"] {{ font-size: {TEXT}px; font-weight: {W_SEMIBOLD}; background: transparent; }}
+QLabel[role="section"]    {{ font-size: {TEXT_SMALL}px; font-weight: {W_SEMIBOLD}; color: {p.text_muted}; }}
 QLabel[role="muted"]      {{ color: {p.text_muted}; }}
-QLabel[role="faint"]      {{ color: {p.text_faint}; font-size: 11px; background: transparent; }}
+QLabel[role="faint"]      {{ color: {p.text_faint}; font-size: {TEXT_SMALL}px; background: transparent; }}
 QLabel[role="mono"]       {{ font-family: "{mono}"; }}
 QLabel[role="ok"]         {{ color: {p.ok}; }}
 QLabel[role="warn"]       {{ color: {p.warn}; }}
@@ -180,7 +198,7 @@ QLabel[role="danger"]     {{ color: {p.danger}; }}
 
 /* status chips: source meter, calorimeter, recording */
 QLabel[role="pill"] {{
-    padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: {W_SEMIBOLD};
+    padding: 2px 8px; border-radius: 4px; font-size: {TEXT_SMALL}px; font-weight: {W_SEMIBOLD};
     background: {p.hover}; color: {p.text_muted};
 }}
 QLabel[role="pill"][tone="ok"]     {{ background: {p.ok_soft};     color: {p.ok}; }}
@@ -190,13 +208,13 @@ QLabel[role="pill"][tone="accent"] {{ background: {p.accent_soft}; color: {p.acc
 
 /* big numeric readouts and small figures */
 QLabel[role="readout"] {{
-    font-family: "{mono}"; font-size: 24px; color: {p.text}; background: transparent;
+    font-family: "{mono}"; font-size: {TEXT_READOUT}px; color: {p.text}; background: transparent;
 }}
 QLabel[role="readout-label"] {{
-    font-size: 11px; font-weight: {W_SEMIBOLD}; color: {p.text_muted}; background: transparent;
+    font-size: {TEXT_SMALL}px; font-weight: {W_SEMIBOLD}; color: {p.text_muted}; background: transparent;
 }}
-QLabel[role="stat-label"] {{ font-size: 11px; color: {p.text_muted}; background: transparent; }}
-QLabel[role="stat-value"] {{ font-family: "{mono}"; font-size: 12px; background: transparent; }}
+QLabel[role="stat-label"] {{ font-size: {TEXT_SMALL}px; color: {p.text_muted}; background: transparent; }}
+QLabel[role="stat-value"] {{ font-family: "{mono}"; font-size: {TEXT}px; background: transparent; }}
 QLabel[role="stat-value"][tone="danger"] {{ color: {p.danger}; font-weight: {W_SEMIBOLD}; }}
 
 /* ---------- surfaces ------------------------------------------------ */
@@ -212,7 +230,7 @@ QFrame[role="swatch"] {{ border: none; border-radius: 4px; }}
 QGroupBox {{
     background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS_CARD}px;
     margin-top: 0px; padding: 26px 10px 8px 10px;
-    font-size: 11px; font-weight: {W_SEMIBOLD}; color: {p.text_muted};
+    font-size: {TEXT_SMALL}px; font-weight: {W_SEMIBOLD}; color: {p.text_muted};
 }}
 QGroupBox::title {{
     subcontrol-origin: padding; subcontrol-position: top left;
@@ -269,7 +287,7 @@ QPushButton[role="quiet"]:disabled, QToolButton[role="quiet"]:disabled {{
 }}
 
 /* output switch: reads as a state, not an action */
-QPushButton[role="output"] {{ font-weight: {W_SEMIBOLD}; min-width: 84px; }}
+QPushButton[role="output"] {{ font-weight: {W_SEMIBOLD}; min-width: {scaled(84)}px; }}
 QPushButton[role="output"][live="true"] {{
     background: {p.ok}; color: white; border-color: {p.ok_hover}; border-bottom-color: #1F4F2E;
 }}
@@ -372,7 +390,7 @@ QHeaderView {{ background: {p.card}; border: none; }}
 QHeaderView::section {{
     background: {p.card}; color: {p.text_muted}; border: none;
     border-bottom: 1px solid {p.border}; border-right: 1px solid {p.hairline};
-    padding: 3px 6px; font-size: 11px; font-weight: {W_SEMIBOLD};
+    padding: 3px 6px; font-size: {TEXT_SMALL}px; font-weight: {W_SEMIBOLD};
 }}
 QHeaderView::section:hover {{ background: {p.button_hover}; }}
 QTableCornerButton::section {{ background: {p.card}; border: none; }}
@@ -424,7 +442,7 @@ QStatusBar {{
     min-height: 22px;
 }}
 QStatusBar::item {{ border: none; }}
-QStatusBar QLabel {{ color: {p.text_muted}; font-size: 11px; padding: 0px 4px; }}
+QStatusBar QLabel {{ color: {p.text_muted}; font-size: {TEXT_SMALL}px; padding: 0px 4px; }}
 
 QSplitter::handle {{ background: transparent; }}
 QSplitter::handle:horizontal {{ width: 8px; }}
@@ -438,7 +456,7 @@ QProgressBar {{
 QProgressBar::chunk {{ background: {p.accent}; border-radius: 3px; }}
 QProgressBar[role="labelled"] {{
     max-height: 20px; min-height: 20px; border: 1px solid {p.border}; background: {p.raised};
-    color: {p.text}; font-size: 11px; text-align: center;
+    color: {p.text}; font-size: {TEXT_SMALL}px; text-align: center;
 }}
 QProgressBar[role="labelled"]::chunk {{ background: {p.accent_soft}; }}
 
@@ -521,7 +539,7 @@ def apply(app: QApplication) -> None:
     app.setStyle("Fusion")  # the same base on every OS; the stylesheet paints over it
     ui, _numeric = fonts()
     base = QFont(ui)
-    base.setPixelSize(12)
+    base.setPixelSize(TEXT)
     app.setFont(base)
     pal = QPalette()
     pal.setColor(QPalette.Window, QColor(P.panel))
@@ -542,7 +560,7 @@ def apply(app: QApplication) -> None:
     app.installEventFilter(_interactions)
 
 
-def ui_font(size_px: int = 12, bold: bool = False) -> QFont:
+def ui_font(size_px: int = TEXT, bold: bool = False) -> QFont:
     """The UI font at a pixel size — for the few places that set one directly."""
     f = QFont(fonts()[0])
     f.setPixelSize(size_px)
@@ -551,7 +569,7 @@ def ui_font(size_px: int = 12, bold: bool = False) -> QFont:
     return f
 
 
-def numeric_font(size_px: int = 12, bold: bool = False) -> QFont:
+def numeric_font(size_px: int = TEXT, bold: bool = False) -> QFont:
     """For numbers that change in place: tables, readouts, figures."""
     f = QFont(fonts()[1])
     f.setPixelSize(size_px)
@@ -648,8 +666,8 @@ def style_axis(axis) -> None:
 
     axis.setPen(pg.mkPen(P.border))
     axis.setTextPen(pg.mkPen(P.text_muted))
-    axis.setStyle(tickFont=ui_font(10), tickTextOffset=4)
-    axis.label.setFont(ui_font(11))
+    axis.setStyle(tickFont=numeric_font(TEXT_SMALL), tickTextOffset=4)
+    axis.label.setFont(ui_font(TEXT_AXIS))
 
 
 def style_plot(widget, title: str = None) -> None:
@@ -660,7 +678,12 @@ def style_plot(widget, title: str = None) -> None:
         style_axis(item.getAxis(name))
     item.showGrid(x=True, y=True, alpha=0.15)
     if title:
-        item.setTitle(title, color=P.text_muted, size="9pt")
+        item.setTitle(title, color=P.text_muted, size=f"{TEXT_SMALL}px")
+
+
+def legend(plot, **kwargs):
+    """A plot legend in the program's text size."""
+    return plot.addLegend(labelTextSize=f"{TEXT_SMALL}px", **kwargs)
 
 
 def series_color(name: str) -> str:

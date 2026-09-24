@@ -403,11 +403,11 @@ class MultimeterPanel(QWidget):
 
         self.source_value = QDoubleSpinBox()
         self.source_value.setValue(0)
-        self.source_value.setMinimumWidth(96)
+        self.source_value.setMinimumWidth(theme.scaled(96))
         field(settings, "Value", self.source_value)
 
         self.compliance = QDoubleSpinBox()
-        self.compliance.setMinimumWidth(96)
+        self.compliance.setMinimumWidth(theme.scaled(96))
         apply_source_limits(self.source_value, self.compliance, "Voltage", reset_compliance=True)
         field(settings, "Limit", self.compliance)
 
@@ -461,7 +461,7 @@ class MultimeterPanel(QWidget):
         inst_row.addWidget(self.update_rate)
 
         self.readings_label = theme.set_role(QLabel("0 readings"), "muted")
-        self.readings_label.setMinimumWidth(84)
+        self.readings_label.setMinimumWidth(theme.scaled(84))
         self.readings_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         inst_row.addWidget(self.readings_label)
         inst_row.addSpacing(4)
@@ -469,7 +469,7 @@ class MultimeterPanel(QWidget):
         # One button that is Start while idle and Stop while running: a pair
         # always had one of them greyed out, which read as broken.
         self.run_btn = QPushButton()
-        self.run_btn.setMinimumWidth(72)
+        self.run_btn.setMinimumWidth(theme.scaled(72))
         self.run_btn.clicked.connect(lambda: self.stop_live() if self.running else self.start_live())
         inst_row.addWidget(self.run_btn)
         self._show_running(False)
@@ -523,7 +523,7 @@ class MultimeterPanel(QWidget):
         self.record_graph = pg.PlotWidget()
         theme.style_plot(self.record_graph)
         self.record_graph.setLabel('bottom', 'Time (s)', color=theme.P.text_muted)
-        self.record_graph.addLegend(offset=(8, 8))
+        theme.legend(self.record_graph, offset=(8, 8))
         self.record_graph.setMinimumHeight(160)
 
         self.voltage_plot = self.record_graph.plot([], [], pen=theme.pen(theme.series_color("Voltage")), name='Voltage (V)')
@@ -783,7 +783,7 @@ def _hbox_widget(*widgets, spacing: int = 8) -> QWidget:
     return w
 
 
-FIELD_WIDTH = 130
+FIELD_WIDTH = theme.scaled(130)
 
 
 class SourceSettingsWidget(QGroupBox):
@@ -931,8 +931,14 @@ class MeasureSettingsWidget(QGroupBox):
         self.measure_i.setChecked(True)
         self.measure_r = QCheckBox("Resistance")
         self.measure_p = QCheckBox("Power")
-        FormRow(form, "Quantities", _hbox_widget(self.measure_v, self.measure_i,
-                                             self.measure_r, self.measure_p, spacing=12))
+        quantities = QWidget()
+        qg = QGridLayout(quantities)
+        qg.setContentsMargins(0, 0, 0, 0)
+        qg.setHorizontalSpacing(14)
+        qg.setVerticalSpacing(4)
+        for i, box in enumerate((self.measure_v, self.measure_i, self.measure_r, self.measure_p)):
+            qg.addWidget(box, i // 2, i % 2)
+        FormRow(form, "Quantities", quantities)
 
         self.measure_range = QComboBox()
         self.measure_range.addItems(["Auto", "100 nA", "1 \u00b5A", "10 \u00b5A", "100 \u00b5A", "1 mA", "10 mA", "100 mA", "1 A", "3 A"])
@@ -1328,7 +1334,7 @@ class SweepListWidget(QWidget):
             if gen_row.count():
                 gen_row.addSpacing(8)
             gen_row.addWidget(theme.set_role(QLabel(label), "muted"))
-            box.setMinimumWidth(96)
+            box.setMinimumWidth(theme.scaled(96))
             gen_row.addWidget(box)
         gen_row.addSpacing(8)
         gen_btn = QPushButton("Fill linear")
@@ -1347,7 +1353,7 @@ class SweepListWidget(QWidget):
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["#", "Value"])
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(22)
+        self.table.verticalHeader().setDefaultSectionSize(theme.ROW_HEIGHT)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -1503,7 +1509,7 @@ class DualAxisGraph(pg.PlotWidget):
         self.y1_unit = "A"
         self.y2_unit = ""
 
-        self.addLegend()
+        theme.legend(self)
 
     def _update_views(self):
         self.view_box2.setGeometry(self.plotItem.vb.sceneBoundingRect())
@@ -1610,7 +1616,7 @@ class DataTableWidget(QTableWidget):
         self.setColumnCount(len(self.COLUMNS))
         self.setHorizontalHeaderLabels(self.COLUMNS)
         self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(22)
+        self.verticalHeader().setDefaultSectionSize(theme.ROW_HEIGHT)
         self.setFont(theme.numeric_font(12))
 
         header = self.horizontalHeader()
@@ -1663,7 +1669,7 @@ class ConnectionDialog(QDialog):
         super().__init__(parent)
         self.app = parent
         self.setWindowTitle("Connect")
-        self.setMinimumSize(600, 560)
+        self.setMinimumSize(theme.scaled(600), 600)   # height unscaled: see MIN_WINDOW_H
         self._setup_ui()
         self._refresh_calorimeter_status()
 
@@ -2056,7 +2062,7 @@ class SafetyDialog(QDialog):
         self.caps = registry.get(model)
         self.limits = limits if limits is not None else SMU.default_limits(model)
         self.setWindowTitle("Safety limits")
-        self.setMinimumWidth(380)
+        self.setMinimumWidth(theme.scaled(380))
         self._setup_ui()
 
     def _setup_ui(self):
@@ -2155,7 +2161,7 @@ class LicenseDialog(QDialog):
 
         license_text = QTextEdit()
         license_text.setReadOnly(True)
-        license_text.setFont(theme.numeric_font(11))
+        license_text.setFont(theme.ui_font(theme.TEXT_SMALL + 1))
         license_text.setPlainText(self._get_license_text())
         layout.addWidget(license_text)
 
@@ -2237,8 +2243,8 @@ class WaveToolDialog(QDialog):
     def __init__(self, parent=None, get_resistance_fn=None):
         super().__init__(parent)
         self.setWindowTitle("Design waveform")
-        self.setMinimumSize(900, 640)
-        self.resize(1080, 800)
+        self.setMinimumSize(theme.scaled(900), 640)   # height unscaled: see MIN_WINDOW_H
+        self.resize(theme.scaled(1000), 800)
         self.waveform_values = []
         self.time_values = []
         self.segments = []
@@ -2285,8 +2291,10 @@ class WaveToolDialog(QDialog):
         self.live_r_check = QCheckBox("Live R")
         self.live_r_check.setToolTip("Continuously update R from the multimeter (must be running)")
         self.live_r_check.toggled.connect(self._toggle_live_resistance)
-        FormRow(global_form, "Heater R", _hbox_widget(
-            self.resistance, self.res_unit, self.measure_r_btn, self.live_r_check, spacing=6))
+        FormRow(global_form, "Heater R", _hbox_widget(self.resistance, self.res_unit, spacing=6))
+        # Its own row: beside the field, the card was wide enough to squeeze
+        # the segment editor once the text size went up.
+        FormRow(global_form, "", _hbox_widget(self.measure_r_btn, self.live_r_check, spacing=10))
 
         self.design_mode = QComboBox()
         self.design_mode.addItems(["Power (W)", "Voltage (V)", "Current (A)"])
@@ -2303,7 +2311,7 @@ class WaveToolDialog(QDialog):
         self._segments_splitter.setChildrenCollapsible(False)
 
         seg_list_panel = QGroupBox("Segments")
-        seg_list_panel.setMaximumWidth(340)
+        seg_list_panel.setMaximumWidth(theme.scaled(340))
         seg_list_layout = QVBoxLayout(seg_list_panel)
         seg_list_layout.setSpacing(6)
         self.segment_list = QListWidget()
@@ -2323,7 +2331,7 @@ class WaveToolDialog(QDialog):
             btn.setToolTip(tooltip)
             btn.clicked.connect(handler)
             if len(text) == 1:
-                btn.setFixedWidth(30)
+                btn.setFixedWidth(theme.scaled(30))
             seg_btn_layout.addWidget(btn)
         seg_btn_layout.addStretch()
         seg_list_layout.addLayout(seg_btn_layout)
@@ -2889,10 +2897,12 @@ class WaveToolDialog(QDialog):
         super().closeEvent(event)
 
 
-MIN_WINDOW_W, MIN_WINDOW_H = 1100, 680
+# 640 high so it still fits a 1080p screen at Windows' 150 % scaling
+# (about 1280 x 670 usable).
+MIN_WINDOW_W, MIN_WINDOW_H = 1100, 640
 
 # Side panels keep their width as the window grows; the workspace takes the rest.
-SIDEBAR_MIN_W, SIDEBAR_MAX_W = 210, 280
+SIDEBAR_MIN_W, SIDEBAR_MAX_W = theme.scaled(210), theme.scaled(280)
 
 
 class MainWindow(QMainWindow):
@@ -3294,15 +3304,21 @@ class MainWindow(QMainWindow):
         for which in ("x", "y1", "y2"):
             self._on_axis_variable_changed(which)
 
+        # Presets in one menu: four buttons made the bar too wide for the
+        # smallest window once the text size went up.
         axis_layout.addSpacing(8)
-        axis_layout.addWidget(theme.set_role(QLabel("Presets"), "muted"))
-        for preset, (x, y1, y2) in [("I-V", ("Voltage", "Current", "None")),
-                                     ("I-t", ("Time", "Current", "None")),
-                                     ("V,P-t", ("Time", "Voltage", "Power")),
-                                     ("I,R-t", ("Time", "Current", "Resistance"))]:
-            btn = theme.set_role(QPushButton(preset), "quiet")
-            btn.clicked.connect(lambda checked, x=x, y1=y1, y2=y2: self._set_graph_preset(x, y1, y2))
-            axis_layout.addWidget(btn)
+        presets_btn = QToolButton()
+        presets_btn.setText("Presets \u25be")
+        presets_btn.setToolTip("Set X, Y1 and Y2 in one go")
+        presets_btn.setPopupMode(QToolButton.InstantPopup)
+        presets_menu = QMenu(presets_btn)
+        for preset, (x, y1, y2) in [("I against V", ("Voltage", "Current", "None")),
+                                     ("I against time", ("Time", "Current", "None")),
+                                     ("V and P against time", ("Time", "Voltage", "Power")),
+                                     ("I and R against time", ("Time", "Current", "Resistance"))]:
+            presets_menu.addAction(preset, lambda x=x, y1=y1, y2=y2: self._set_graph_preset(x, y1, y2))
+        presets_btn.setMenu(presets_menu)
+        axis_layout.addWidget(presets_btn)
 
         axis_layout.addStretch()
 
