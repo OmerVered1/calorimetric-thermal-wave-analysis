@@ -1066,7 +1066,7 @@ class ExperimentsSidebar(QGroupBox):
         # Title with the actions beside it, then what is loaded now
         head = QHBoxLayout()
         head.setSpacing(4)
-        head.addWidget(theme.set_role(QLabel("Experiments"), "section"))
+        head.addWidget(theme.set_role(QLabel("Saved"), "section"))
         head.addStretch()
 
         new_btn = QPushButton("New")
@@ -1446,7 +1446,7 @@ class SweepListWidget(QWidget):
 
 # Display-unit options per axis variable. Maps unit name -> factor to
 # multiply by when converting from base SI (V/A/Ω/W/s) to the chosen
-# display unit. Used by the I-V Sweep graph axis-unit dropdowns; table
+# display unit. Used by the Experiments tab graph axis-unit dropdowns; table
 # and CSV remain in fixed units (Power in mW, everything else in base).
 GRAPH_AXIS_UNITS = {
     "Voltage":    [("V", 1.0), ("mV", 1e3)],
@@ -3145,8 +3145,8 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(toolbar_frame)
 
-        # Sweep actions sit beside the tabs, since they belong to the I-V
-        # Sweep tab and are hidden on the others.
+        # Sweep actions sit beside the tabs, since they belong to the
+        # Experiments tab and are hidden on the others.
         sweep_actions = QWidget()
         sa = QHBoxLayout(sweep_actions)
         sa.setContentsMargins(0, 0, 0, 5)
@@ -3165,7 +3165,7 @@ class MainWindow(QMainWindow):
         self.export_btn.clicked.connect(self.export_csv)
         sa.addWidget(self.export_btn)
 
-        # Buttons that only make sense on the I-V Sweep tab
+        # Buttons that only make sense on the Experiments tab
         self._sweep_only_widgets = [self.start_btn, self.stop_btn, self.export_btn]
 
         content = QWidget()
@@ -3176,6 +3176,7 @@ class MainWindow(QMainWindow):
         # Main tabs
         tabs = QTabWidget()
         self.main_tabs = tabs
+        self._experiments_tab = None   # set below; adding the first tab already fires currentChanged
         tabs.setCornerWidget(sweep_actions, Qt.TopRightCorner)
         tabs.currentChanged.connect(self._on_main_tab_changed)
 
@@ -3187,7 +3188,7 @@ class MainWindow(QMainWindow):
         mm_scroll.setWidget(self.multimeter_panel)
         tabs.addTab(mm_scroll, "Multimeter")
 
-        # Tab 2: I-V Sweep
+        # Tab 2: Experiments — saved experiments, settings, sweep values, graph
         sweep_tab = QWidget()
         sweep_outer = QVBoxLayout(sweep_tab)
         sweep_outer.setContentsMargins(8, 8, 8, 8)
@@ -3207,7 +3208,7 @@ class MainWindow(QMainWindow):
         self.experiments_sidebar.notes_changed.connect(self._on_notes_changed)
         iv_outer_splitter.addWidget(self.experiments_sidebar)
 
-        # Three sub-tabs inside I-V Sweep: Settings / Sweep Values / Graph
+        # Three sub-tabs inside Experiments: Settings / Sweep values / Graph
         iv_sub_tabs = QTabWidget()
 
         # --- Sub-tab 1: Settings — two columns, so it fits without scrolling
@@ -3339,7 +3340,8 @@ class MainWindow(QMainWindow):
         iv_outer_splitter.setChildrenCollapsible(False)
         sweep_outer.addWidget(iv_outer_splitter)
 
-        tabs.addTab(sweep_tab, "I-V Sweep")
+        self._experiments_tab = sweep_tab
+        tabs.addTab(sweep_tab, "Experiments")
 
         # Tab 3: Real Time — unified live view of calorimeter (HF, T) and any
         # running K2602B sweep (V, I, R, P). Connection is managed from the
@@ -3387,7 +3389,8 @@ class MainWindow(QMainWindow):
         self._on_main_tab_changed(self.main_tabs.currentIndex())
 
     def _on_main_tab_changed(self, index: int):
-        is_sweep_tab = self.main_tabs.tabText(index) == "I-V Sweep"
+        # By widget, not by title: renaming the tab once broke a title check.
+        is_sweep_tab = self.main_tabs.widget(index) is self._experiments_tab
         for w in self._sweep_only_widgets:
             w.setVisible(is_sweep_tab)
 
