@@ -37,6 +37,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
+    QScrollArea,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -180,11 +182,11 @@ class RealTimeTab(QWidget):
         for key in KEITHLEY_KEYS:
             self._series[key].visible = False
 
-        # Row-widgets we need to refer to later, keyed by signal key
+        # Row-widgets we need to refer to later, keyed by signal key. Each
+        # signal's latest value sits on the line under its row.
         self._control_rows: dict[str, dict] = {}
-        self._status_labels: dict[str, QLabel] = {}
-        self._status_layout: QHBoxLayout | None = None
-        self._status_widget: QWidget | None = None
+        self._value_labels: dict[str, QLabel] = {}
+        self._results_holder: QVBoxLayout | None = None
 
         self._setup_ui()
 
@@ -214,7 +216,6 @@ class RealTimeTab(QWidget):
         self._series.update(keithley_series)
 
         self._populate_controls()
-        self._populate_status_labels()
         self._build_plot_items()
         self._rebuild_axes()
 
@@ -253,8 +254,13 @@ class RealTimeTab(QWidget):
 
         # Controls on the left at a fixed width range, plot on the right
         # taking the rest. Neither collapses: a desktop layout, not a page.
+        # The signal list scrolls on its own if the window is too short for it.
         splitter = QSplitter(Qt.Horizontal)
-        controls = self._build_controls_panel()
+        controls = QScrollArea()
+        controls.setWidgetResizable(True)
+        controls.setFrameShape(QFrame.NoFrame)
+        controls.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        controls.setWidget(self._build_controls_panel())
         controls.setMinimumWidth(CONTROLS_MIN_W)
         controls.setMaximumWidth(CONTROLS_MAX_W)
         splitter.addWidget(controls)
@@ -263,15 +269,36 @@ class RealTimeTab(QWidget):
         splitter.setStretchFactor(1, 1)
         splitter.setChildrenCollapsible(False)
         splitter.setSizes([CONTROLS_MIN_W + 20, 900])
-        outer.addWidget(splitter, stretch=1)
+
+        # Plot above, the experiment's point-by-point table below it
+        vertical = QSplitter(Qt.Vertical)
+        vertical.addWidget(splitter)
+        results = QWidget()
+        self._results_holder = QVBoxLayout(results)
+        self._results_holder.setContentsMargins(0, 0, 0, 0)
+        self._results_holder.setSpacing(4)
+        self._results_holder.addWidget(_theme().set_role(QLabel("Experiment points"), "section"))
+        vertical.addWidget(results)
+        vertical.setStretchFactor(0, 3)
+        vertical.setStretchFactor(1, 1)
+        vertical.setChildrenCollapsible(False)
+        self._results_widget = results
+        results.hide()   # until the app hands over its table
+        outer.addWidget(vertical, stretch=1)
 
         outer.addLayout(self._build_action_row())
+
+    def set_results_table(self, table: QWidget) -> None:
+        """Show the experiment's data table under the plot."""
+        table.setMinimumHeight(_theme().ROW_HEIGHT * 4)
+        self._results_holder.addWidget(table, stretch=1)
+        self._results_widget.show()
 
     def _build_controls_panel(self) -> QGroupBox:
         group = QGroupBox("Signals")
         grid = QGridLayout(group)
         grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(5)
+        grid.setVerticalSpacing(0)
         self._controls_grid = grid
         self._populate_controls()
         return group
@@ -286,12 +313,14 @@ class RealTimeTab(QWidget):
                 w.setParent(None)
                 w.deleteLater()
         self._control_rows = {}
+        self._value_labels = {}
 
         theme = _theme()
         # Header row
         headers = ["", "", "Signal", "Unit", "Auto-scale"]
         for col, text in enumerate(headers):
             grid.addWidget(theme.set_role(QLabel(text), "faint"), 0, col)
+        grid.setRowMinimumHeight(0, theme.ROW_HEIGHT - 4)
 
         row = 1
         for spec in self._specs:
@@ -328,62 +357,27 @@ class RealTimeTab(QWidget):
             )
             grid.addWidget(auto_cb, row, 4, alignment=Qt.AlignHCenter)
 
+            # The latest value, on its own line under the name
+            value_lbl = theme.set_role(QLabel(""), "signal-value")
+            grid.addWidget(value_lbl, row + 1, 2, 1, 3)
+            self._value_labels[spec.key] = value_lbl
+            grid.setRowMinimumHeight(row + 1, theme.TEXT + 4)
+            grid.setRowMinimumHeight(row + 2, 8)   # breathing room before the next signal
+
             self._control_rows[spec.key] = {
                 "show": show_cb,
                 "dot": dot,
                 "name": name_lbl,
                 "unit": unit_combo,
                 "auto": auto_cb,
+                "value": value_lbl,
             }
-            row += 1
+            for w in self._control_rows[spec.key].values():
+                w.setVisible(s.available)
+            row += 3
 
         grid.setColumnStretch(2, 1)
         grid.setRowStretch(row, 1)
-
-    def create_status_values_widget(self) -> QWidget:
-        """Compact per-signal value strip meant to sit in the app status bar.
-
-        Text (signal name) is black; the numeric value + unit are colored.
-        Only signals currently `available` are shown. The widget itself is
-        created once and handed to the status bar; changing the signal set
-        repopulates it in place rather than replacing it.
-        """
-        w = QWidget()
-        layout = QHBoxLayout(w)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
-        # Hold the widget, not just its layout: the caller reparents it into
-        # the status bar, but if it ever does not, Python would collect the
-        # QWidget and take the layout we repopulate through with it.
-        self._status_widget = w
-        self._status_layout = layout
-        self._populate_status_labels()
-        return w
-
-    def _populate_status_labels(self) -> None:
-        layout = self._status_layout
-        if layout is None:
-            return
-        try:
-            layout.count()
-        except RuntimeError:
-            # Host destroyed the strip; nothing to repopulate.
-            self._status_layout = None
-            self._status_labels = {}
-            return
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
-        self._status_labels = {}
-        for spec in self._specs:
-            lbl = QLabel()
-            lbl.setTextFormat(Qt.RichText)
-            layout.addWidget(lbl)
-            self._status_labels[spec.key] = lbl
-            lbl.setVisible(self._series[spec.key].available)
 
     def _build_plot_area(self) -> QWidget:
         """The plot, with a message laid over it while there is nothing to show."""
@@ -445,7 +439,7 @@ class RealTimeTab(QWidget):
             theme.fast_curve(s.curve)
             s.view_box.addItem(s.curve)
             if s.ys_base:
-                s.curve.setData(s.xs, s.display_ys())
+                s.curve.setData(s.xs, s.display_ys(), connect="finite")
             # Right-side axis for this signal, created once, reused.
             # Axis line = black, tick numbers = colored, label = mixed
             # (name black + unit colored) via HTML in setLabel.
@@ -584,7 +578,7 @@ class RealTimeTab(QWidget):
         s.visible = checked
         if s.curve is not None:
             if checked:
-                s.curve.setData(s.xs, s.display_ys())
+                s.curve.setData(s.xs, s.display_ys(), connect="finite")
             else:
                 s.curve.setData([], [])
         self._rebuild_axes()
@@ -604,7 +598,7 @@ class RealTimeTab(QWidget):
         if visible and visible[0] is s:
             left_axis.setLabel(new_label)
         if s.curve is not None and s.visible:
-            s.curve.setData(s.xs, s.display_ys())
+            s.curve.setData(s.xs, s.display_ys(), connect="finite")
         if s.ys_base:
             self._update_value_label(s)
 
@@ -629,11 +623,8 @@ class RealTimeTab(QWidget):
             s.available = avail
             row = self._control_rows.get(spec.key)
             if row is not None:
-                for w in (row["show"], row["dot"], row["name"], row["unit"], row["auto"]):
+                for w in row.values():
                     w.setVisible(avail)
-            labels = getattr(self, "_status_labels", None)
-            if labels is not None and spec.key in labels:
-                labels[spec.key].setVisible(avail)
             if not avail:
                 s.visible = False
         self._rebuild_axes()
@@ -649,23 +640,23 @@ class RealTimeTab(QWidget):
             s.ys_base.clear()
             if s.curve is not None:
                 s.curve.setData([], [])
-            # Clear the status-bar readout too. _update_value_label bails on an
-            # empty series, so a value left here would sit there looking live
+            # Clear the value under the signal too. _update_value_label bails on
+            # an empty series, so a value left here would sit there looking live
             # while the plot is empty — which is exactly how a silently-failing
             # sniff session managed to look like a working one.
-            lbl = self._status_labels.get(s.spec.key)
+            lbl = self._value_labels.get(s.spec.key)
             if lbl is not None:
                 lbl.setText("")
         self._rebuild_axes()
 
-    def clear_status_values(self, keys) -> None:
-        """Blank the status-bar values for these signals, leaving the plot.
+    def clear_values(self, keys) -> None:
+        """Blank the latest values shown for these signals, leaving the plot.
 
         Used when the source meter changes: its last sweep stays on the plot,
-        but a value in the status bar reads as current, and it no longer is.
+        but a value under its name reads as current, and it no longer is.
         """
         for key in keys:
-            lbl = self._status_labels.get(key)
+            lbl = self._value_labels.get(key)
             if lbl is not None:
                 lbl.setText("")
 
@@ -677,6 +668,22 @@ class RealTimeTab(QWidget):
         for spec in self._cal_specs:
             if spec.key in readings:
                 self._append(spec.key, wall_ts, float(readings[spec.key]))
+
+    def mark_gap(self, wall_ts: float, keys=KEITHLEY_KEYS) -> None:
+        """Break these signals' traces here, e.g. while an experiment is paused.
+
+        Without a break the curve joins the last point before the pause to the
+        first after it, drawing values that were never measured (the output
+        was off). A NaN splits the line; it is never shown as a value or saved.
+        """
+        for key in keys:
+            s = self._series.get(key)
+            if s is None or not s.xs or s.ys_base[-1] != s.ys_base[-1]:
+                continue   # nothing drawn yet, or already broken here
+            s.xs.append(wall_ts - (self._t_ref or wall_ts))
+            s.ys_base.append(float("nan"))
+            if s.visible and s.curve is not None:
+                s.curve.setData(s.xs, s.display_ys(), connect="finite")
 
     def push_keithley_sample(self, wall_ts: float, v, i, r, p) -> None:
         for key, value in (("v", v), ("i", i), ("r", r), ("p", p)):
@@ -698,7 +705,7 @@ class RealTimeTab(QWidget):
         if len(s.xs) == 1:
             self._rebuild_axes()   # its first sample: it gets an axis now
         if s.visible and s.curve is not None:
-            s.curve.setData(s.xs, s.display_ys())
+            s.curve.setData(s.xs, s.display_ys(), connect="finite")
         self._update_value_label(s)
         # Follow mode: X ranges from 0 to the latest sample time — t=0 pinned
         # to the left, right edge auto-expands as new data arrives.
@@ -714,24 +721,14 @@ class RealTimeTab(QWidget):
     def _update_value_label(self, s: Series) -> None:
         if not s.ys_base:
             return
-        labels = getattr(self, "_status_labels", None)
-        if labels is None:
-            return
-        lbl = labels.get(s.spec.key)
+        lbl = self._value_labels.get(s.spec.key)
         if lbl is None:
             return
         transform = s.spec.units[s.unit_index][1]
         display_val = transform(s.ys_base[-1])
         # 9 significant digits preserves the full float32 wire precision
         # without cluttering the display with FP-noise trailing digits.
-        val_str = f"{display_val:.9g}"
-        unit = s.current_unit_label()
-        theme = _theme()
-        lbl.setText(
-            f"<span style='color:{s.spec.color};'>\u25cf</span> "
-            f"<span style='color:{theme.P.text_muted};'>{s.spec.name}</span> "
-            f"<span style='color:{theme.P.text};font-family:\"{theme.fonts()[1]}\";'>{val_str} {unit}</span>"
-        )
+        lbl.setText(f"{display_val:.9g} {s.current_unit_label()}")
 
     # ---- Actions -----------------------------------------------------------
 
@@ -741,9 +738,9 @@ class RealTimeTab(QWidget):
             s.ys_base.clear()
             if s.curve is not None:
                 s.curve.setData([], [])
-            labels = getattr(self, "_status_labels", None)
-            if labels is not None and s.spec.key in labels:
-                labels[s.spec.key].setText("")
+            lbl = self._value_labels.get(s.spec.key)
+            if lbl is not None:
+                lbl.setText("")
         self._rebuild_axes()
 
     def _on_save_csv(self) -> None:
@@ -762,6 +759,8 @@ class RealTimeTab(QWidget):
             if not s.available:
                 continue
             for x, y in zip(s.xs, s.ys_base):
+                if y != y:
+                    continue   # a gap marker (see mark_gap), not a sample
                 timeline.setdefault(x, {})[s.spec.key] = y
 
         try:

@@ -17,9 +17,7 @@ def app():
 
 @pytest.fixture
 def tab(app):
-    t = rt.RealTimeTab()
-    t.create_status_values_widget()   # the app always builds this strip
-    return t
+    return rt.RealTimeTab()
 
 
 DROP_SIGNALS = [
@@ -43,9 +41,9 @@ def test_setting_profile_signals_replaces_the_calorimeter_rows(tab):
     ]
     # Keithley signals survive untouched
     assert [s.key for s in tab._specs[-4:]] == ["v", "i", "r", "p"]
-    # Control rows and status labels follow the new set
+    # Control rows and the values shown under them follow the new set
     assert set(tab._control_rows) == {s.key for s in tab._specs}
-    assert set(tab._status_labels) == {s.key for s in tab._specs}
+    assert set(tab._value_labels) == {s.key for s in tab._specs}
 
 
 def test_old_keys_are_gone_after_a_profile_change(tab):
@@ -107,9 +105,30 @@ def test_unknown_unit_signal_gets_a_single_unit_entry(tab):
     assert [u for u, _ in spec.units] == ["counts/s"]
 
 
-def test_reference_reset_clears_the_status_readout(tab):
-    """The stale-value bug: labels must not survive a buffer clear."""
+def test_reference_reset_clears_the_shown_value(tab):
+    """The stale-value bug: a value must not survive a buffer clear."""
     tab.push_calorimeter_sample(1000.0, {"hf": 32.27})
-    assert tab._status_labels["hf"].text() != ""
+    assert tab._value_labels["hf"].text() == "32.27 mW"
     tab.set_reference_now("connect")
-    assert tab._status_labels["hf"].text() == ""
+    assert tab._value_labels["hf"].text() == ""
+
+
+def test_clearing_source_meter_values_leaves_the_calorimeter(tab):
+    tab.push_calorimeter_sample(1000.0, {"hf": 32.27})
+    tab.push_keithley_sample(1000.0, 1.0, 0.01, 100.0, 0.01)
+    tab.clear_values(("v", "i", "r", "p"))
+    assert tab._value_labels["v"].text() == ""
+    assert tab._value_labels["hf"].text() == "32.27 mW"
+
+
+def test_a_gap_breaks_the_trace_without_becoming_a_value(tab):
+    """Pausing marks a gap: the line must not join across it, the shown value
+    must stay the last real one, and the gap must never reach a saved CSV."""
+    import math
+    tab.push_keithley_sample(1000.0, 1.0, 0.01, 100.0, 0.01)
+    tab.mark_gap(1001.0)
+    tab.mark_gap(1001.5)   # a second mark at the same gap adds nothing
+    tab.push_keithley_sample(1003.0, 1.2, 0.012, 100.0, 0.0144)
+    s = tab._series["v"]
+    assert sum(1 for y in s.ys_base if math.isnan(y)) == 1
+    assert tab._value_labels["v"].text() == "1.2 V"

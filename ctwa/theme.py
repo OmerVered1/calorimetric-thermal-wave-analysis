@@ -213,6 +213,9 @@ QLabel[role="readout"] {{
 QLabel[role="readout-label"] {{
     font-size: {TEXT_SMALL}px; font-weight: {W_SEMIBOLD}; color: {p.text_muted}; background: transparent;
 }}
+QLabel[role="signal-value"] {{
+    font-family: "{mono}"; font-size: {TEXT}px; color: {p.text}; background: transparent;
+}}
 QLabel[role="stat-label"] {{ font-size: {TEXT_SMALL}px; color: {p.text_muted}; background: transparent; }}
 QLabel[role="stat-value"] {{ font-family: "{mono}"; font-size: {TEXT}px; background: transparent; }}
 QLabel[role="stat-value"][tone="danger"] {{ color: {p.danger}; font-weight: {W_SEMIBOLD}; }}

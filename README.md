@@ -48,9 +48,12 @@ only when that model is connected.
 
 - Live multimeter mode with large digital displays
 - I-V sweep characterization (Linear, List, Log)
-- Dual Y-axis graphing with presets
 - Wave generator tool for custom waveforms
-- Real Time tab: SMU and calorimeter signals on one time axis
+- Real Time tab: SMU and calorimeter signals on one time axis, each signal's
+  latest value under its name, and the experiment's points in a table below
+- Start, pause and stop an experiment from the Experiments or Real Time tab.
+  Pausing turns the output off and keeps the calorimeter reading; Resume
+  continues from the next point, and the pause shows as a gap in the data
 - Calorimeter panel (Setaram C80 / Drop): direct connect, or sniff mode
   alongside Calisto — see [Calorimeter setups](#calorimeter-setups)
 - CSV export with auto-save

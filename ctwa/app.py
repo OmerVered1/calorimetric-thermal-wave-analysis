@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QMenu, QFormLayout, QScrollArea, QAbstractSpinBox,
     QInputDialog, QToolButton
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QThread, QSettings
+from PySide6.QtCore import Qt, QTimer, Signal, QThread, QSettings, QSize
 from PySide6.QtGui import QFont, QColor, QPalette, QIcon, QKeySequence, QAction, QShortcut
 
 import pyqtgraph as pg
@@ -159,6 +159,10 @@ def _sweep_csv_row(point, cal_channels) -> list:
 
 EXPERIMENTS_FILE = os.path.join(os.path.expanduser("~"), "Documents",
                                 "K2602B_Experiments", "experiments.json")
+
+# Where each run's CSV goes unless the user picks another folder. Every sweep
+# streams one here, auto-save on or off; the test suite points this elsewhere.
+DEFAULT_SAVE_DIR = os.path.join(os.path.expanduser("~"), "Documents", "K2602B_Data")
 
 
 class ExperimentStore:
@@ -1357,7 +1361,7 @@ class SweepListWidget(QWidget):
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.setFont(theme.numeric_font(12))
+        self.table.setFont(theme.numeric_font())
         layout.addWidget(self.table, stretch=1)
 
         self.empty_hint = theme.set_role(QLabel(
@@ -1450,142 +1454,6 @@ class SweepListWidget(QWidget):
         return self.sweep_values
 
 
-# Display-unit options per axis variable. Maps unit name -> factor to
-# multiply by when converting from base SI (V/A/Ω/W/s) to the chosen
-# display unit. Used by the Experiments tab graph axis-unit dropdowns; table
-# and CSV remain in fixed units (Power in mW, everything else in base).
-GRAPH_AXIS_UNITS = {
-    "Voltage":    [("V", 1.0), ("mV", 1e3)],
-    "Current":    [("A", 1.0), ("mA", 1e3), ("µA", 1e6), ("nA", 1e9)],
-    "Resistance": [("Ω", 1.0), ("kΩ", 1e-3), ("MΩ", 1e-6)],
-    "Power":      [("mW", 1e3), ("W", 1.0), ("µW", 1e6)],
-    "Time":       [("s", 1.0), ("min", 1.0/60.0), ("hour", 1.0/3600.0), ("ms", 1e3)],
-    "Index":      [("", 1.0)],
-    "None":       [("", 1.0)],
-}
-
-
-def _axis_unit_factor(variable: str, unit: str) -> float:
-    for u, f in GRAPH_AXIS_UNITS.get(variable, [("", 1.0)]):
-        if u == unit:
-            return f
-    return 1.0
-
-
-class DualAxisGraph(pg.PlotWidget):
-    """Graph widget with dual Y-axis support"""
-
-    COLORS = {name: theme.series_color(name) for name in ("Voltage", "Current", "Resistance", "Power")}
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        theme.style_plot(self)
-
-        self.data_points: List[MeasurementPoint] = []
-
-        self.setLabel('left', 'Current', units='A', color=self.COLORS["Current"])
-        self.setLabel('bottom', 'Voltage', units='V', color=theme.P.text_muted)
-
-        self.view_box2 = pg.ViewBox()
-        self.plotItem.scene().addItem(self.view_box2)
-        self.plotItem.getAxis('right').linkToView(self.view_box2)
-        self.view_box2.setXLink(self.plotItem)
-        self.plotItem.hideAxis('right')   # Y2 starts as "None"
-        theme.style_axis(self.plotItem.getAxis('right'))
-
-        self.curve1 = self.plot([], [], pen=theme.pen(self.COLORS["Current"]), name='Y1')
-        self.curve2 = pg.PlotDataItem([], [], pen=theme.pen(self.COLORS["Resistance"]), name='Y2')
-        theme.fast_curve(self.curve1)
-        theme.fast_curve(self.curve2)
-        self.view_box2.addItem(self.curve2)
-
-        self.plotItem.vb.sigResized.connect(self._update_views)
-
-        self.x_axis = "Voltage"
-        self.y1_axis = "Current"
-        self.y2_axis = "None"
-        self.x_unit = "V"
-        self.y1_unit = "A"
-        self.y2_unit = ""
-
-        theme.legend(self)
-
-    def _update_views(self):
-        self.view_box2.setGeometry(self.plotItem.vb.sceneBoundingRect())
-        self.view_box2.linkedViewChanged(self.plotItem.vb, self.view_box2.XAxis)
-
-    def set_axes(self, x: str, y1: str, y2: str,
-                 x_unit: str = "", y1_unit: str = "", y2_unit: str = ""):
-        self.x_axis = x
-        self.y1_axis = y1
-        self.y2_axis = y2
-        self.x_unit = x_unit
-        self.y1_unit = y1_unit
-        self.y2_unit = y2_unit
-
-        self.setLabel('bottom', x, units=x_unit)
-        if y1 != "None":
-            self.setLabel('left', y1, units=y1_unit, color=self.COLORS.get(y1, theme.P.text))
-            self.curve1.setPen(theme.pen(self.COLORS.get(y1, theme.P.text)))
-        if y2 != "None":
-            self.plotItem.getAxis('right').setLabel(y2, units=y2_unit, color=self.COLORS.get(y2, theme.P.text))
-            self.curve2.setPen(theme.pen(self.COLORS.get(y2, theme.P.text)))
-            self.plotItem.showAxis('right')
-        else:
-            self.plotItem.hideAxis('right')
-            self.curve2.setData([], [])
-
-        self._update_plot()
-
-    def add_point(self, point: MeasurementPoint):
-        self.data_points.append(point)
-
-    def clear_data(self):
-        self.data_points = []
-        self.curve1.setData([], [])
-        self.curve2.setData([], [])
-
-    def _get_data(self, axis: str, unit: str = "") -> List[float]:
-        data = []
-        for p in self.data_points:
-            if axis == "Index":
-                data.append(p.index)
-            elif axis == "Time":
-                data.append(p.timestamp)
-            elif axis == "Voltage":
-                data.append(p.voltage if p.voltage is not None else 0)
-            elif axis == "Current":
-                data.append(p.current if p.current is not None else 0)
-            elif axis == "Resistance":
-                if p.resistance and abs(p.resistance) < 1e12:
-                    data.append(p.resistance)
-                else:
-                    data.append(float('nan'))
-            elif axis == "Power":
-                data.append(p.power if p.power is not None else 0)
-        factor = _axis_unit_factor(axis, unit)
-        if factor != 1.0:
-            data = [v * factor for v in data]
-        return data
-
-    def _update_plot(self):
-        if not self.data_points:
-            return
-        x_data = self._get_data(self.x_axis, self.x_unit)
-        if self.y1_axis != "None":
-            y1_data = self._get_data(self.y1_axis, self.y1_unit)
-            self.curve1.setData(x_data, y1_data)
-        if self.y2_axis != "None":
-            y2_data = self._get_data(self.y2_axis, self.y2_unit)
-            self.curve2.setData(x_data, y2_data)
-
-    def update_live(self):
-        self._update_plot()
-        self.enableAutoRange()
-        self.view_box2.enableAutoRange()
-
-
 def si_format(value: Optional[float], unit: str, digits: int = 6) -> str:
     """Engineering notation with an SI prefix: 0.0150064 A -> '15.0064 mA'."""
     if value is None:
@@ -1617,7 +1485,7 @@ class DataTableWidget(QTableWidget):
         self.setHorizontalHeaderLabels(self.COLUMNS)
         self.verticalHeader().setVisible(False)
         self.verticalHeader().setDefaultSectionSize(theme.ROW_HEIGHT)
-        self.setFont(theme.numeric_font(12))
+        self.setFont(theme.numeric_font())
 
         header = self.horizontalHeader()
         for i in range(len(self.COLUMNS)):
@@ -2751,7 +2619,7 @@ class WaveToolDialog(QDialog):
             theme.set_prop(out[key], tone="danger" if key in problems else "")
         if problems:
             self.info_label.setText("Over the safety limits: " + "; ".join(problems.values())
-                                    + ". The sweep would stop at the first such point.")
+                                    + ". Start experiment will refuse this list until it is within them.")
             self.info_label.show()
 
     def _generate_and_accept(self):
@@ -2909,6 +2777,8 @@ class MainWindow(QMainWindow):
     """Main application window — Dual-channel 2602B control"""
 
     measurement_update = Signal(object)
+    sweep_paused = Signal(bool)   # from the sweep thread: output held off / back on
+    sweep_finished = Signal(str)  # from the sweep thread when it ends; "" or the error
 
     def __init__(self):
         super().__init__()
@@ -2923,11 +2793,14 @@ class MainWindow(QMainWindow):
         self.current_channel = "a"
         self.running = False
         self.abort_flag = False
+        self._pause_requested = threading.Event()
+        self._paused_seconds = 0.0
+        self._paused_since = None
 
         self.run_number = 0
         self.run_start_datetime = None
         self.auto_save_enabled = True
-        self.auto_save_path = os.path.join(os.path.expanduser("~"), "Documents", "K2602B_Data")
+        self.auto_save_path = DEFAULT_SAVE_DIR
 
         # Experiments: named bundles of settings + sweep list + wave config + notes
         self.experiment_store = ExperimentStore()
@@ -3160,21 +3033,33 @@ class MainWindow(QMainWindow):
         sa.setContentsMargins(0, 0, 0, 4)
         sa.setSpacing(6)
 
-        self.start_btn = theme.set_role(QPushButton("Start sweep"), "primary")
+        icon_size = QSize(theme.scaled(11), theme.scaled(11))
+        self.start_btn = theme.set_role(QPushButton("Start experiment"), "primary")
+        self.start_btn.setIcon(QIcon(theme.asset("icon-play-on-accent.svg")))
+        self.start_btn.setIconSize(icon_size)
         self.start_btn.clicked.connect(self.start_sweep)
         sa.addWidget(self.start_btn)
 
+        self.pause_btn = QPushButton("Pause")
+        self.pause_btn.setIconSize(icon_size)
+        self.pause_btn.setToolTip("Pause: the output turns off and the calorimeter keeps "
+                                  "reading. Resume continues from the next point.")
+        self.pause_btn.clicked.connect(self.toggle_pause)
+        sa.addWidget(self.pause_btn)
+
         self.stop_btn = theme.set_role(QPushButton("Stop"), "danger")
+        self.stop_btn.setIcon(QIcon(theme.asset("icon-stop.svg")))
+        self.stop_btn.setIconSize(icon_size)
         self.stop_btn.clicked.connect(self.stop_sweep)
-        self.stop_btn.setEnabled(False)
         sa.addWidget(self.stop_btn)
 
         self.export_btn = QPushButton("Export CSV\u2026")
         self.export_btn.clicked.connect(self.export_csv)
         sa.addWidget(self.export_btn)
 
-        # Buttons that only make sense on the Experiments tab
-        self._sweep_only_widgets = [self.start_btn, self.stop_btn, self.export_btn]
+        # Experiment controls: shown on the Experiments and Real Time tabs
+        self._sweep_only_widgets = [self.start_btn, self.pause_btn, self.stop_btn, self.export_btn]
+        self._show_experiment_running(False)
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
@@ -3261,92 +3146,6 @@ class MainWindow(QMainWindow):
         sweep_scroll.setWidget(self.sweep_list)
         iv_sub_tabs.addTab(sweep_scroll, "Sweep values")
 
-        # --- Sub-tab 3: Graph ---
-        graph_tab = QWidget()
-        graph_tab_layout = QVBoxLayout(graph_tab)
-        graph_tab_layout.setContentsMargins(0, 0, 0, 0)
-
-        axis_bar = QWidget()
-        axis_layout = QHBoxLayout(axis_bar)
-        axis_layout.setContentsMargins(0, 8, 0, 6)
-        axis_layout.setSpacing(6)
-
-        axis_layout.addWidget(theme.set_role(QLabel("X"), "muted"))
-        self.x_axis = QComboBox()
-        self.x_axis.addItems(["Voltage", "Current", "Time", "Index"])
-        axis_layout.addWidget(self.x_axis)
-        self.x_unit = QComboBox()
-        axis_layout.addWidget(self.x_unit)
-        self.x_axis.currentTextChanged.connect(lambda _: self._on_axis_variable_changed("x"))
-        self.x_unit.currentTextChanged.connect(self._update_graph_axes)
-
-        axis_layout.addSpacing(8)
-        axis_layout.addWidget(theme.set_role(QLabel("Y1 (left)"), "muted"))
-        self.y1_axis = QComboBox()
-        self.y1_axis.addItems(["Current", "Voltage", "Resistance", "Power", "None"])
-        axis_layout.addWidget(self.y1_axis)
-        self.y1_unit = QComboBox()
-        axis_layout.addWidget(self.y1_unit)
-        self.y1_axis.currentTextChanged.connect(lambda _: self._on_axis_variable_changed("y1"))
-        self.y1_unit.currentTextChanged.connect(self._update_graph_axes)
-
-        axis_layout.addSpacing(8)
-        axis_layout.addWidget(theme.set_role(QLabel("Y2 (right)"), "muted"))
-        self.y2_axis = QComboBox()
-        self.y2_axis.addItems(["None", "Voltage", "Current", "Resistance", "Power"])
-        axis_layout.addWidget(self.y2_axis)
-        self.y2_unit = QComboBox()
-        axis_layout.addWidget(self.y2_unit)
-        self.y2_axis.currentTextChanged.connect(lambda _: self._on_axis_variable_changed("y2"))
-        self.y2_unit.currentTextChanged.connect(self._update_graph_axes)
-
-        # Populate unit combos for the initial variable selections
-        for which in ("x", "y1", "y2"):
-            self._on_axis_variable_changed(which)
-
-        # Presets in one menu: four buttons made the bar too wide for the
-        # smallest window once the text size went up.
-        axis_layout.addSpacing(8)
-        presets_btn = QToolButton()
-        presets_btn.setText("Presets \u25be")
-        presets_btn.setToolTip("Set X, Y1 and Y2 in one go")
-        presets_btn.setPopupMode(QToolButton.InstantPopup)
-        presets_menu = QMenu(presets_btn)
-        for preset, (x, y1, y2) in [("I against V", ("Voltage", "Current", "None")),
-                                     ("I against time", ("Time", "Current", "None")),
-                                     ("V and P against time", ("Time", "Voltage", "Power")),
-                                     ("I and R against time", ("Time", "Current", "Resistance"))]:
-            presets_menu.addAction(preset, lambda x=x, y1=y1, y2=y2: self._set_graph_preset(x, y1, y2))
-        presets_btn.setMenu(presets_menu)
-        axis_layout.addWidget(presets_btn)
-
-        axis_layout.addStretch()
-
-        self.live_update_cb = QCheckBox("Live update")
-        self.live_update_cb.setChecked(True)
-        axis_layout.addWidget(self.live_update_cb)
-
-        graph_tab_layout.addWidget(axis_bar)
-
-        # Graph + table share a vertical splitter so the user can decide the ratio
-        graph_table_splitter = QSplitter(Qt.Vertical)
-
-        self.graph = DualAxisGraph()
-        self.graph.setMinimumSize(0, 0)
-        graph_table_splitter.addWidget(self.graph)
-
-        self.table = DataTableWidget()
-        self.table.setMinimumSize(0, 0)
-        graph_table_splitter.addWidget(self.table)
-
-        graph_table_splitter.setSizes([500, 260])
-        graph_table_splitter.setChildrenCollapsible(False)
-        self.graph.setMinimumHeight(160)
-        self.table.setMinimumHeight(90)
-        graph_tab_layout.addWidget(graph_table_splitter)
-
-        iv_sub_tabs.addTab(graph_tab, "Graph")
-
         iv_outer_splitter.addWidget(iv_sub_tabs)
         iv_outer_splitter.setSizes([SIDEBAR_MIN_W + 20, 1000])
         iv_outer_splitter.setStretchFactor(0, 0)
@@ -3364,22 +3163,16 @@ class MainWindow(QMainWindow):
         self.realtime_tab = RealTimeTab(self)
         tabs.addTab(self.realtime_tab, "Real Time")
 
+        # The experiment's point-by-point table, under the Real Time plot
+        self.table = DataTableWidget()
+        self.realtime_tab.set_results_table(self.table)
+
         content_layout.addWidget(tabs)
         layout.addWidget(content, stretch=1)
 
         # Status bar
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-
-        # Real Time signal values on the LEFT side of the status bar.
-        # `insertPermanentWidget(0, …)` puts it at the leftmost position
-        # within the permanent-widget area, so it stays visible even when
-        # showMessage() fires and lines up to the left of the progress
-        # widgets that get added below.
-        if hasattr(self, "realtime_tab") and self.realtime_tab is not None:
-            self.status.insertPermanentWidget(
-                0, self.realtime_tab.create_status_values_widget()
-            )
 
         self.progress_label = QLabel("")
         theme.set_role(self.progress_label, "faint")
@@ -3397,6 +3190,8 @@ class MainWindow(QMainWindow):
 
     def _setup_signals(self):
         self.measurement_update.connect(self._on_measurement_update)
+        self.sweep_paused.connect(self._on_sweep_paused)
+        self.sweep_finished.connect(self._on_sweep_finished)
         self.sweep_list.list_changed.connect(self._on_sweep_list_changed)
         self._wire_dirty_tracking()
         # Initialize tab-specific visibility
@@ -3404,7 +3199,9 @@ class MainWindow(QMainWindow):
 
     def _on_main_tab_changed(self, index: int):
         # By widget, not by title: renaming the tab once broke a title check.
-        is_sweep_tab = self.main_tabs.widget(index) is self._experiments_tab
+        page = self.main_tabs.widget(index)
+        is_sweep_tab = page is not None and page in (self._experiments_tab,
+                                                     getattr(self, "realtime_tab", None))
         for w in self._sweep_only_widgets:
             w.setVisible(is_sweep_tab)
 
@@ -3626,42 +3423,6 @@ class MainWindow(QMainWindow):
         self._current_experiment_notes = text
         self._mark_dirty()
 
-    def _set_graph_preset(self, x, y1, y2):
-        self.x_axis.setCurrentText(x)
-        self.y1_axis.setCurrentText(y1)
-        self.y2_axis.setCurrentText(y2)
-
-    def _update_graph_axes(self):
-        # _on_axis_variable_changed runs during _setup_ui (to populate the
-        # initial unit combos), before self.graph has been created.
-        if not hasattr(self, "graph"):
-            return
-        self.graph.set_axes(
-            self.x_axis.currentText(),
-            self.y1_axis.currentText(),
-            self.y2_axis.currentText(),
-            x_unit=self.x_unit.currentText(),
-            y1_unit=self.y1_unit.currentText(),
-            y2_unit=self.y2_unit.currentText(),
-        )
-
-    def _on_axis_variable_changed(self, which: str):
-        """Repopulate the unit combo for the given axis whenever its
-        variable selection changes (e.g., picking 'Power' shows mW/W/µW)."""
-        var_combo, unit_combo = {
-            "x": (self.x_axis, self.x_unit),
-            "y1": (self.y1_axis, self.y1_unit),
-            "y2": (self.y2_axis, self.y2_unit),
-        }[which]
-        variable = var_combo.currentText()
-        options = GRAPH_AXIS_UNITS.get(variable, [("", 1.0)])
-        unit_combo.blockSignals(True)
-        unit_combo.clear()
-        unit_combo.addItems([u for u, _ in options])
-        unit_combo.setEnabled(len(options) > 1)
-        unit_combo.blockSignals(False)
-        self._update_graph_axes()
-
     def _show_connection_dialog(self):
         dialog = ConnectionDialog(self)
         dialog.exec()
@@ -3673,7 +3434,7 @@ class MainWindow(QMainWindow):
         """The status bar's values and the last sweep's progress belong to the
         instrument that produced them; drop them when it goes."""
         if getattr(self, "realtime_tab", None) is not None:
-            self.realtime_tab.clear_status_values(("v", "i", "r", "p"))
+            self.realtime_tab.clear_values(("v", "i", "r", "p"))
         if not self.running:
             self.progress.hide()
             self.progress_label.setText("")
@@ -4126,13 +3887,14 @@ class MainWindow(QMainWindow):
 
         # Clear previous data
         self.measurement_data.clear()
-        self.graph.clear_data()
         self.table.clear_data()
 
         self.running = True
         self.abort_flag = False
-        self.start_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
+        self._pause_requested.clear()
+        self._paused_seconds = 0.0
+        self._paused_since = None
+        self._show_experiment_running(True)
 
         total = len(sweep_values) * self.timing_settings.repeat.value()
         self.total_sweep_points = total
@@ -4204,6 +3966,47 @@ class MainWindow(QMainWindow):
         thread.daemon = True
         thread.start()
 
+    def _wait_unless_paused(self, seconds: float) -> bool:
+        """Sleep, waking early for Pause or Stop. True if woken by Pause."""
+        end = time.monotonic() + seconds
+        while not self.abort_flag and not self._pause_requested.is_set():
+            left = end - time.monotonic()
+            if left <= 0:
+                return False
+            time.sleep(min(left, 0.05))
+        return self._pause_requested.is_set() and not self.abort_flag
+
+    def _hold_paused(self, channel: str, cal_reader) -> float:
+        """Runs on the sweep thread while paused. Returns seconds spent paused.
+
+        The output goes off for the pause (the chosen behaviour: safest if
+        the bench is left) and back on at Resume; the next point then sets
+        the level. The calorimeter polls on its own meanwhile, so its trace
+        in Real Time keeps moving.
+        """
+        began = time.monotonic()
+        try:
+            self.smu.output_off(channel)
+        except Exception as e:
+            print(f"pause: output off failed: {e}")
+        self.sweep_paused.emit(True)
+        if cal_reader is not None:
+            try:
+                cal_reader.resume_polling()
+            except Exception as e:
+                print(f"pause: cal resume failed: {e}")
+        while self._pause_requested.is_set() and not self.abort_flag:
+            time.sleep(0.05)
+        if cal_reader is not None:
+            try:
+                cal_reader.pause_polling()
+            except Exception as e:
+                print(f"resume: cal pause failed: {e}")
+        if not self.abort_flag:
+            self.smu.output_on(channel)
+        self.sweep_paused.emit(False)
+        return time.monotonic() - began
+
     def _run_sweep(self, sweep_values: List[float], channel: str):
         # Take exclusive control of the calorimeter socket for the duration
         # of the sweep. During the sweep we drive cal reads synchronously
@@ -4211,6 +4014,7 @@ class MainWindow(QMainWindow):
         # Resume autonomous polling in the finally block.
         cal_reader = self.calorimeter_reader
         cal_active = cal_reader is not None
+        error = ""
         if cal_active:
             try:
                 cal_reader.pause_polling()
@@ -4265,6 +4069,10 @@ class MainWindow(QMainWindow):
 
             point_num = 0
             start_time = time.time()
+            # Time spent paused. Point timestamps stay wall-clock true (a pause
+            # shows as a gap in Elapsed), but the point schedule moves on by
+            # it, so Resume carries on rather than rushing to catch up.
+            paused_total = 0.0
 
             for rep in range(repeat):
                 if self.abort_flag:
@@ -4276,11 +4084,19 @@ class MainWindow(QMainWindow):
 
                     point_num += 1
 
-                    if auto_step:
-                        target_offset = (point_num - 1) * step_size
-                        wait = target_offset - (time.time() - start_time)
-                        if wait > 0:
-                            time.sleep(wait)
+                    while True:
+                        if self._pause_requested.is_set():
+                            paused_total += self._hold_paused(channel, cal_reader if cal_active else None)
+                        if self.abort_flag:
+                            break
+                        if auto_step:
+                            target_offset = (point_num - 1) * step_size + paused_total
+                            wait = target_offset - (time.time() - start_time)
+                            if wait > 0 and self._wait_unless_paused(wait):
+                                continue   # paused mid-wait: hold, then re-time this point
+                        break
+                    if self.abort_flag:
+                        break
 
                     # Set source
                     if function == "Voltage":
@@ -4371,6 +4187,7 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             print(f"Sweep error: {e}")
+            error = str(e)
 
         finally:
             self.running = False
@@ -4383,6 +4200,7 @@ class MainWindow(QMainWindow):
                     cal_reader.resume_polling()
                 except Exception as e:
                     print(f"cal resume failed: {e}")
+            self.sweep_finished.emit(error)
 
     def _on_measurement_update(self, point):
         if point is None:
@@ -4403,17 +4221,14 @@ class MainWindow(QMainWindow):
                 self.realtime_tab.push_calorimeter_sample(wall_ts, point.cal_readings)
 
         self.table.add_point(point)
-        self.graph.add_point(point)
-
-        if self.live_update_cb.isChecked():
-            self.graph.update_live()
 
         self.progress.setValue(point.index)
 
         elapsed = time.time() - self.sweep_start_time
         elapsed_str = self._fmt_duration(elapsed)
         if point.index > 0 and self.total_sweep_points > point.index:
-            time_per_point = elapsed / point.index
+            # Time spent paused says nothing about how long a point takes
+            time_per_point = max(0.0, elapsed - self._paused_seconds) / point.index
             remaining_points = self.total_sweep_points - point.index
             remaining_sec = remaining_points * time_per_point
             eta_str = self._fmt_duration(remaining_sec)
@@ -4442,34 +4257,89 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Live CSV write error: {e}")
 
-        if not self.running:
-            self.start_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
-            self.graph.update_live()
-            self._update_output_buttons()
-            total_time = time.time() - self.sweep_start_time
-            self.progress.hide()
+    def _on_sweep_finished(self, error: str):
+        """The sweep thread has ended — completed, stopped, or failed.
+
+        Signalled by the thread itself rather than inferred from the last point
+        arriving: a sweep stopped while paused, or one that fails before its
+        first point, sends no last point, and the window stayed "running".
+        """
+        self._show_experiment_running(False)
+        self._update_output_buttons()
+        total_time = time.time() - self.sweep_start_time
+        done = len(self.measurement_data)
+        self.progress.hide()
+        if error:
+            self.progress_label.setText(f"Stopped after {done} points")
+            outcome = f"Experiment stopped by an error: {error}"
+        elif self.abort_flag:
+            self.progress_label.setText(f"Stopped: {done} of {self.total_sweep_points} points "
+                                        f"in {self._fmt_duration(total_time)}")
+            outcome = "Experiment stopped"
+        else:
             self.progress_label.setText(
                 f"Done: {self.total_sweep_points} points in {self._fmt_duration(total_time)}"
             )
-            self.status.showMessage("Sweep completed")
+            outcome = "Experiment completed"
+        self.status.showMessage(outcome)
 
-            # Close live CSV file
-            if self._live_csv_file:
-                try:
-                    self._live_csv_file.close()
-                except Exception:
-                    pass
-                filename = os.path.basename(self._live_csv_path) if self._live_csv_path else "unknown"
-                self.status.showMessage(f"Saved: {filename} ({len(self.measurement_data)} points)")
-                self._live_csv_file = None
-                self._live_csv_writer = None
-                self._live_csv_path = None
-            elif self.auto_save_enabled and self.measurement_data:
-                self._auto_save_csv()
+        # Close the live CSV, or save one if none was streaming
+        if self._live_csv_file:
+            try:
+                self._live_csv_file.close()
+            except Exception:
+                pass
+            filename = os.path.basename(self._live_csv_path) if self._live_csv_path else "unknown"
+            self.status.showMessage(f"{outcome}. Saved {filename} ({done} points)")
+            self._live_csv_file = None
+            self._live_csv_writer = None
+            self._live_csv_path = None
+        elif self.auto_save_enabled and self.measurement_data:
+            self._auto_save_csv()
+
+    # ---- Start / Pause / Stop ------------------------------------------------
+
+    def _show_experiment_running(self, running: bool):
+        self.start_btn.setEnabled(not running)
+        self.stop_btn.setEnabled(running)
+        self.pause_btn.setEnabled(running)
+        self._show_pause_button(paused=False)
+
+    def _show_pause_button(self, paused: bool):
+        self.pause_btn.setText("Resume" if paused else "Pause")
+        self.pause_btn.setIcon(QIcon(theme.asset("icon-play.svg" if paused else "icon-pause.svg")))
+
+    def toggle_pause(self):
+        """Ask the running experiment to pause, or to resume.
+
+        The sweep thread acts on it within ~50 ms, even in the middle of a long
+        wait between points; it reports back through sweep_paused.
+        """
+        if not self.running:
+            return
+        if self._pause_requested.is_set():
+            self._pause_requested.clear()
+        else:
+            self._pause_requested.set()
+        self._show_pause_button(self._pause_requested.is_set())
+
+    def _on_sweep_paused(self, paused: bool):
+        """The sweep thread has actually paused (output off) or resumed."""
+        if paused:
+            self._paused_since = time.time()
+            self.realtime_tab.mark_gap(self._paused_since)
+            self.status.showMessage("Paused. Output off; the calorimeter keeps reading.")
+        else:
+            if self._paused_since is not None:
+                self._paused_seconds += time.time() - self._paused_since
+            self._paused_since = None
+            self.status.showMessage("Resumed")
+        self._show_pause_button(paused)
+        self._update_output_buttons()
 
     def stop_sweep(self):
         self.abort_flag = True
+        self._pause_requested.clear()   # a paused sweep must wake up to stop
         if self.smu:
             self.smu.output_off(self.current_channel)
         self._update_output_buttons()
