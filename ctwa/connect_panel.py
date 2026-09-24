@@ -17,6 +17,8 @@ from typing import Callable, List, Optional
 from PyQt5.QtCore import QObject, QSettings, QThread, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
+    QInputDialog,
+    QMessageBox,
     QComboBox,
     QDoubleSpinBox,
     QFrame,
@@ -403,9 +405,7 @@ class SMUConnectPanel(QWidget):
             ip = self.ip_entry.currentText().strip()
             if not ip:
                 return self.show_error("Enter the instrument's IP address.")
-            self._remember_ip(ip)
-            self.connect_requested.emit(self._model, discovery.visa_address_for_ip(ip),
-                                        False, None, None)
+            self._connect_lan(ip)
         elif self._transport == SERIAL:
             port = self._selected(self.serial_list)
             if not port:
@@ -417,6 +417,84 @@ class SMUConnectPanel(QWidget):
             if not address:
                 return self.show_error("Choose an instrument from the list.")
             self.connect_requested.emit(self._model, address, False, None, None)
+
+    # ----- LAN, with the 2611A window's unreachable-instrument fix -----------
+
+    def _connect_lan(self, ip: str):
+        """Check the address answers (in the background) before connecting."""
+        import network_setup
+
+        self.connect_btn.setEnabled(False)
+        self.connect_btn.setText("Checking…")
+
+        def reached(ok):
+            self.connect_btn.setEnabled(True)
+            self.connect_btn.setText("Connect")
+            if ok is True or self._offer_network_fix(ip):
+                self._remember_ip(ip)
+                self.connect_requested.emit(self._model, discovery.visa_address_for_ip(ip),
+                                            False, None, None)
+
+        self._threads.append(run_in_background(self, lambda: network_setup.is_reachable(ip), reached))
+
+    def _offer_network_fix(self, ip: str) -> bool:
+        """Carried over from the 2611A window. A direct cable to an instrument
+        with a static IP often fails because this PC's adapter sits on another
+        subnet (typically auto-assigned 169.254.x.x)."""
+        reply = QMessageBox.question(
+            self, "Instrument unreachable",
+            f"Can't reach {ip} on the network.\n\n"
+            "This usually happens when the instrument is on a dedicated LAN cable "
+            "with a static IP and your network adapter is on a different subnet "
+            "(auto-assigned 169.254.x.x).\n\n"
+            "Try to add an address on that subnet to one of your network adapters?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return False
+        return self._auto_configure_network(ip)
+
+    def _auto_configure_network(self, target_ip: str) -> bool:
+        """Add a secondary IP to an adapter so it can reach target_ip. Existing
+        addresses are left untouched. Windows only — elsewhere, instructions."""
+        import sys
+        import network_setup
+
+        if sys.platform != "win32":
+            QMessageBox.information(
+                self, "Manual setup required",
+                f"Automatic set-up is only available on Windows.\n\n"
+                f"Give your network adapter a static IP in the same /24 subnet as "
+                f"{target_ip} (the same first three numbers).")
+            return False
+        adapters = network_setup.list_windows_adapters()
+        if not adapters:
+            QMessageBox.warning(self, "No adapters found", "Could not list network adapters.")
+            return False
+        labels = [f"{a['Name']}  ({a.get('IPAddress') or 'no IP'})" for a in adapters]
+        choice, ok = QInputDialog.getItem(
+            self, "Select adapter", "Which network adapter is connected to the instrument?",
+            labels, 0, False)
+        if not ok:
+            return False
+        adapter = adapters[labels.index(choice)]
+        suggested = network_setup.suggest_secondary_ip(target_ip)
+        QMessageBox.information(
+            self, "Administrator approval needed",
+            f"Windows will now ask for administrator approval to add {suggested} "
+            f"to '{adapter['Name']}'. Click Yes on that prompt.")
+        success, msg = network_setup.add_secondary_ip_windows(adapter["Name"], suggested)
+        if not success:
+            QMessageBox.critical(self, "Set-up failed", msg)
+            return False
+        if network_setup.is_reachable(target_ip):
+            QMessageBox.information(self, "Network configured", f"{msg}\n\n{target_ip} is now reachable.")
+            return True
+        QMessageBox.warning(
+            self, "Still unreachable",
+            f"{msg}\n\nBut {target_ip} still isn't responding. Check the instrument's "
+            "LAN cable and the IP set on its front panel.")
+        return False
 
     def _simulate(self):
         self._clear_error()
