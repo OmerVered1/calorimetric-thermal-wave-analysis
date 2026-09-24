@@ -127,15 +127,16 @@ class CalorimeterSetupDialog(QDialog):
     def _build_where_group(self) -> QGroupBox:
         group = QGroupBox("1 · Where to look")
         form = QFormLayout(group)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         self.setup_name = QLineEdit()
         self.setup_name.setPlaceholderText("e.g. Drop @ bench, argon 800C")
-        form.addRow("Setup name:", self.setup_name)
+        form.addRow("Setup name", self.setup_name)
 
         self.cal_combo = QComboBox()
         for name in CALORIMETERS:
             self.cal_combo.addItem(name)
-        form.addRow("Calorimeter:", self.cal_combo)
+        form.addRow("Calorimeter", self.cal_combo)
 
         host_row = QHBoxLayout()
         self.host_edit = QLineEdit()
@@ -148,7 +149,7 @@ class CalorimeterSetupDialog(QDialog):
         )
         discover_btn.clicked.connect(self._on_discover)
         host_row.addWidget(discover_btn)
-        form.addRow("Host IP:", self._wrap(host_row))
+        form.addRow("Address", self._wrap(host_row))
 
         iface_row = QHBoxLayout()
         self.iface_combo = QComboBox()
@@ -161,7 +162,7 @@ class CalorimeterSetupDialog(QDialog):
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self._refresh_interfaces)
         iface_row.addWidget(refresh_btn)
-        form.addRow("Capture interface:", self._wrap(iface_row))
+        form.addRow("Capture on", self._wrap(iface_row))
         self._refresh_interfaces()
 
         return group
@@ -183,12 +184,13 @@ class CalorimeterSetupDialog(QDialog):
         row.addWidget(self.capture_btn)
 
         self.progress = QProgressBar()
+        self.progress.setProperty("role", "labelled")   # tall enough for its status text
         self.progress.setTextVisible(True)
         self.progress.setFormat("idle")
         row.addWidget(self.progress, stretch=1)
 
         note = QLabel("Calisto must be running and polling the instrument.")
-        note.setStyleSheet("color: #6b7280;")
+        note.setProperty("role", "faint")
         row.addWidget(note)
         return group
 
@@ -211,11 +213,11 @@ class CalorimeterSetupDialog(QDialog):
 
         self.warnings_label = QLabel()
         self.warnings_label.setWordWrap(True)
-        self.warnings_label.setStyleSheet("color: #b45309;")
+        self.warnings_label.setProperty("role", "warn")
         layout.addWidget(self.warnings_label)
 
         name_row = QHBoxLayout()
-        name_row.addWidget(QLabel("Save signals as profile:"))
+        name_row.addWidget(QLabel("Save signals as profile"))
         self.profile_name = QLineEdit()
         self.profile_name.setPlaceholderText("e.g. Alexsys Drop")
         self.profile_name.setToolTip(
@@ -229,6 +231,7 @@ class CalorimeterSetupDialog(QDialog):
     @staticmethod
     def _wrap(layout) -> QWidget:
         w = QWidget()
+        layout.setContentsMargins(0, 0, 0, 0)   # otherwise the row sits lower than its label
         w.setLayout(layout)
         return w
 

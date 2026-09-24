@@ -99,43 +99,59 @@ def wait_for_background(timeout_ms: int = 3000) -> None:
         thread.wait(timeout_ms)
 
 
-class ModelCard(QFrame):
-    """A selectable card: model name over its one-line summary.
+class ChoiceCard(QFrame):
+    """A selectable card: a name over its one-line summary.
 
     A frame rather than a push button: Qt sizes a QPushButton from its own
     text, so labels laid out inside one get clipped whatever height is asked
     for — the first version of this dialog showed four empty boxes.
+
+    Behaves like a button: pressed while the mouse is down, activates on
+    release over it, and takes focus from Tab (Space or Return picks it).
     """
 
     clicked = pyqtSignal()
 
-    def __init__(self, caps: Capabilities, parent=None):
+    def __init__(self, title: str, summary: str, parent=None):
         super().__init__(parent)
-        self.caps = caps
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFocusPolicy(Qt.StrongFocus)
-        theme.set_role(self, "model-card", selected="false")
+        self.setFocusPolicy(Qt.TabFocus)
+        theme.set_role(self, "model-card", selected="false", pressed="false")
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 11, 14, 11)
-        lay.setSpacing(3)
-        lay.addWidget(theme.set_role(QLabel(caps.display_name), "card-title"))
-        summary = theme.set_role(QLabel(caps.summary), "faint")
-        summary.setWordWrap(True)
-        lay.addWidget(summary)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(2)
+        lay.addWidget(theme.set_role(QLabel(title), "card-title"))
+        text = theme.set_role(QLabel(summary), "faint")
+        text.setWordWrap(True)
+        lay.addWidget(text)
 
     def set_selected(self, on: bool):
         theme.set_prop(self, selected="true" if on else "false")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit()
+            theme.set_prop(self, pressed="true")
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            theme.set_prop(self, pressed="false")
+            if self.rect().contains(event.pos()):
+                self.clicked.emit()
+        super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
             self.clicked.emit()
         else:
             super().keyPressEvent(event)
+
+
+class ModelCard(ChoiceCard):
+    """A source meter model and its one-line summary."""
+
+    def __init__(self, caps: Capabilities, parent=None):
+        super().__init__(caps.display_name, caps.summary, parent)
+        self.caps = caps
 
 
 class SMUConnectPanel(QWidget):
@@ -157,11 +173,11 @@ class SMUConnectPanel(QWidget):
     def _build(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 4, 0, 0)
-        outer.setSpacing(10)
+        outer.setSpacing(8)
 
         outer.addWidget(theme.set_role(QLabel("Instrument"), "section"))
         grid = QGridLayout()
-        grid.setSpacing(8)
+        grid.setSpacing(6)
         self._cards = {}
         for i, model in enumerate(registry.MODEL_ORDER):
             card = ModelCard(registry.get(model))
@@ -173,7 +189,7 @@ class SMUConnectPanel(QWidget):
         # transport selector — only shown when a model has more than one
         self._transport_row = QWidget()
         tr = QHBoxLayout(self._transport_row)
-        tr.setContentsMargins(0, 6, 0, 0)
+        tr.setContentsMargins(0, 4, 0, 0)
         tr.setSpacing(0)
         tr.addWidget(theme.set_role(QLabel("Connection"), "section"))
         tr.addStretch()
@@ -186,7 +202,7 @@ class SMUConnectPanel(QWidget):
             b.clicked.connect(lambda _c=False, k=key: self._show_transport(k))
             self._transport_group.addButton(b)
             self._transport_buttons[key] = b
-            tr.addWidget(b)
+        tr.addWidget(theme.segmented(*self._transport_buttons.values()))
         outer.addWidget(self._transport_row)
 
         self._stack = QStackedWidget()
@@ -203,17 +219,18 @@ class SMUConnectPanel(QWidget):
 
         # footer: simulate on the left, connect on the right
         foot = QHBoxLayout()
-        foot.setSpacing(8)
-        self.simulate_btn = theme.set_role(QPushButton("Simulate"), "quiet")
+        foot.setSpacing(6)
+        self.simulate_btn = QPushButton("Simulate")
         self.simulate_btn.setToolTip("Run without hardware, against a simulated resistor.")
         self.simulate_btn.clicked.connect(self._simulate)
         foot.addWidget(self.simulate_btn)
+        foot.addWidget(theme.set_role(QLabel("with a load of"), "muted"))
         self.sim_resistance = QDoubleSpinBox()
         self.sim_resistance.setRange(1, 1e12)
         self.sim_resistance.setDecimals(0)
         self.sim_resistance.setSuffix(" Ω")
         self.sim_resistance.setToolTip("Resistance the simulated instrument sees.")
-        self.sim_resistance.setMaximumWidth(150)
+        self.sim_resistance.setMinimumWidth(110)
         foot.addWidget(self.sim_resistance)
         foot.addStretch()
         self.connect_btn = theme.set_role(QPushButton("Connect"), "primary")
@@ -307,19 +324,10 @@ class SMUConnectPanel(QWidget):
         for key, button in self._transport_buttons.items():
             button.setVisible(key in caps.transports)
         self._transport_row.setVisible(True)
-        for i, key in enumerate(k for k in (VISA, LAN, SERIAL) if k in caps.transports):
-            theme.set_role(self._transport_buttons[key], "segment",
-                           edge=self._edge(i, len(caps.transports)))
         self.sim_resistance.setValue(caps.default_simulation_resistance)
         self._show_transport(caps.transports[0])
         self._clear_error()
         self.settings.setValue(_LAST_MODEL_KEY, model)
-
-    @staticmethod
-    def _edge(i, n):
-        if n == 1:
-            return "solo"
-        return "left" if i == 0 else ("right" if i == n - 1 else "mid")
 
     def _show_transport(self, key: str):
         self._transport = key
@@ -366,6 +374,11 @@ class SMUConnectPanel(QWidget):
                 status.setText(f"{len(result)} found")
             else:
                 status.setText("None found")
+                # Say so in the list itself, where the eye already is. The item
+                # carries no address, so it can never be connected to.
+                empty = QListWidgetItem("No instruments found. Check the cable, then Scan again.")
+                empty.setFlags(Qt.NoItemFlags)
+                lst.addItem(empty)
 
         self._threads.append(run_in_background(self, fn, done))
 

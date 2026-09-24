@@ -1,78 +1,111 @@
 """The look of the program, in one place.
 
-Before this file the four instrument windows carried 187 inline setStyleSheet
-calls between them, each hardcoding its own colours. Inline styles also beat a
-global stylesheet in Qt, so nothing could be restyled centrally. Now the palette
-lives here, one application stylesheet is built from it, and widgets say what
-they *are* — a primary button, a muted label, a card — through a dynamic
-``role`` property, never what colour they happen to be.
+Widgets say what they *are* (a primary button, a card, a status pill) through a
+dynamic ``role`` property; this module decides what that looks like. Nothing
+else in the program sets a colour.
 
-Design language: calm and warm, after the Claude desktop app. A warm off-white
-canvas instead of stark white, near-black warm text, hairline borders, generous
-spacing, rounded corners, a serif reserved for titles, and exactly one accent —
-clay — spent only on the thing you are most likely to press next. Status
-colours are desaturated so a green "connected" reads as information, not alarm.
+Design language: a dense desktop instrument panel.
+
+* Surfaces are layered by lightness, darkest furthest back: the window
+  background, then panels (toolbar, tab pages, sidebars), then cards, then
+  white for anything you type into or read data from (inputs, lists, tables,
+  plots, menus). Two neighbouring surfaces of the same colour always get a
+  1 px border between them.
+* One accent, heater amber, spent on the primary action. A deeper amber marks
+  keyboard focus and checked boxes, where the pale fill would be too faint to
+  see on a light grey.
+* IBM Plex Sans for the interface and Plex Mono for readouts, bundled so the
+  program looks the same on the lab PC and a laptop.
+* Every clickable control has hover, pressed, keyboard-focus and disabled
+  states, all instant: a stylesheet has no transitions.
 """
 
 from __future__ import annotations
 
-import re
 import sys
 from dataclasses import dataclass
 
-from PyQt5.QtGui import QColor, QFont, QFontDatabase, QPalette
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtCore import QEvent, QObject, Qt
+from PyQt5.QtGui import QColor, QCursor, QFont, QFontDatabase, QPalette
+from PyQt5.QtWidgets import (
+    QAbstractButton, QAbstractSpinBox, QApplication, QComboBox, QFrame,
+    QHBoxLayout, QLineEdit, QSizePolicy, QTabBar, QWidget,
+)
 
 
 @dataclass(frozen=True)
 class Palette:
     # Surfaces, back to front
-    canvas: str = "#F9F8F4"        # window background — warm, not white
-    sunken: str = "#F1EFE8"        # sidebars, headers, tab track
-    card: str = "#FFFFFF"          # raised content
+    canvas: str = "#DCDDDF"        # window background, the most recessed
+    panel: str = "#E9EAEC"         # toolbar, status bar, tab pages, dialogs
+    card: str = "#F6F6F7"          # cards inside a panel
+    raised: str = "#FFFFFF"        # inputs, lists, tables, plots, menus
     # Lines
-    hairline: str = "#E6E3DA"
-    border: str = "#D9D5C9"        # inputs at rest
+    hairline: str = "#D3D5D8"      # card edges
+    border: str = "#C3C6CA"        # controls and panels
+    border_strong: str = "#A9ADB3" # hover, and the lower edge that makes a button look raised
     # Text
-    text: str = "#1F1E1B"
-    text_muted: str = "#6F6D66"
-    text_faint: str = "#A09E96"
-    # The one accent
-    accent: str = "#C96442"
-    accent_hover: str = "#B5563A"
-    accent_pressed: str = "#9E4A31"
-    accent_soft: str = "#F6E6DE"   # focus rings, selected rows
-    # Status, desaturated
-    ok: str = "#3F7A4F"
-    ok_soft: str = "#E4EFE6"
-    warn: str = "#A8741A"
-    warn_soft: str = "#F7EDD8"
-    danger: str = "#B3412F"
-    danger_soft: str = "#F6E1DC"
-    # Plots: distinct, calm, readable on the canvas. Order is the series order.
+    text: str = "#1B1C1E"
+    text_muted: str = "#595C61"
+    text_faint: str = "#84878D"
+    # Neutral overlays: darken whatever surface they sit on, so one hover
+    # colour works on the canvas, a panel and a card alike.
+    hover: str = "rgba(27, 28, 30, 0.06)"
+    press: str = "rgba(27, 28, 30, 0.12)"
+    button_hover: str = "#F1F2F3"
+    button_press: str = "#E1E3E6"
+    # Heater amber
+    accent: str = "#E0A040"
+    accent_hover: str = "#D5932F"
+    accent_pressed: str = "#C2821F"
+    accent_edge: str = "#B07318"
+    accent_text: str = "#241A08"
+    accent_strong: str = "#9C6410"  # focus rings, checked boxes
+    accent_soft: str = "#F4E2BF"    # selection
+    accent_tint: str = "#FDF6E8"    # a selected card
+    # Status
+    ok: str = "#2E7543"
+    ok_hover: str = "#296A3C"
+    ok_soft: str = "#DCECDF"
+    warn: str = "#8F5E0E"
+    warn_soft: str = "#F4E5C6"
+    danger: str = "#AF3A2C"
+    danger_soft: str = "#F3DCD8"
+    danger_edge: str = "#DDB4AD"
+    # Plots: distinct and readable on white. Order is the series order.
     series: tuple = (
-        "#C96442",  # clay      — heat flow
+        "#C96442",  # clay       — heat flow
         "#3B6EA8",  # slate blue — sample T
-        "#B8862B",  # ochre     — external T
-        "#3F7A4F",  # moss      — voltage
-        "#8A5A9E",  # plum      — current
-        "#2F8C8C",  # teal      — resistance
-        "#6F6D66",  # graphite  — power
+        "#B8862B",  # ochre      — external T
+        "#3F7A4F",  # moss       — voltage
+        "#8A5A9E",  # plum       — current
+        "#2F8C8C",  # teal       — resistance
+        "#6F6D66",  # graphite   — power
         "#A64D79",  # berry
     )
 
 
 P = Palette()
 
-RADIUS = 8
-RADIUS_LG = 12
+RADIUS = 4        # controls
+RADIUS_CARD = 6   # cards and panels
+
+# Qt 5 divides a stylesheet font-weight by 8 to get its own 0-99 scale, so the
+# CSS numbers land one step heavy: 500 gives SemiBold and 600 gives Bold.
+# These are the values that select Plex's Medium (57) and SemiBold (63).
+W_MEDIUM = 456
+W_SEMIBOLD = 504
+
+UI_FAMILY = "IBM Plex Sans"
+MONO_FAMILY = "IBM Plex Mono"
 
 
 def asset(name: str) -> str:
-    """Path to a bundled icon, in the forward-slash form Qt stylesheets need.
+    """Absolute path to a bundled asset, in the forward-slash form Qt needs.
 
     Works from source and from a PyInstaller build, where data files live
-    under sys._MEIPASS rather than next to this module.
+    under sys._MEIPASS rather than next to this module. Qt refuses relative
+    paths for application fonts, so this is always absolute.
     """
     from pathlib import Path
 
@@ -81,286 +114,434 @@ def asset(name: str) -> str:
     return (root / name).as_posix()
 
 
-def _pick(candidates, fallback):
-    families = set(QFontDatabase().families())
-    for name in candidates:
-        if name in families:
-            return name
-    return fallback
+_fonts_loaded = None
+
+
+def _load_fonts() -> bool:
+    """Register the bundled Plex files once. False if any failed to load."""
+    global _fonts_loaded
+    if _fonts_loaded is None:
+        from pathlib import Path
+
+        files = sorted(Path(asset("fonts")).glob("*.ttf"))
+        ok = bool(files)
+        for f in files:
+            if QFontDatabase.addApplicationFont(f.as_posix()) < 0:
+                ok = False
+        _fonts_loaded = ok and UI_FAMILY in QFontDatabase().families()
+    return _fonts_loaded
 
 
 def fonts():
-    """Resolved font families for this machine: (ui, serif, mono)."""
+    """Font families in use: (ui, mono). The system's own only if Plex failed
+    to load, which would mean the assets folder is missing from a build."""
+    if _load_fonts():
+        return UI_FAMILY, MONO_FAMILY
     if sys.platform == "darwin":
-        ui = _pick([".AppleSystemUIFont", "SF Pro Text", "Helvetica Neue"], "Helvetica Neue")
-        mono = _pick(["SF Mono", "Menlo"], "Menlo")
-    elif sys.platform == "win32":
-        ui = _pick(["Segoe UI Variable Text", "Segoe UI"], "Segoe UI")
-        mono = _pick(["Cascadia Mono", "Consolas"], "Consolas")
-    else:
-        ui = _pick(["Inter", "Cantarell", "DejaVu Sans"], "Sans Serif")
-        mono = _pick(["JetBrains Mono", "DejaVu Sans Mono"], "Monospace")
-    serif = _pick(["Iowan Old Style", "Charter", "Georgia", "Cambria", "Times New Roman"], "Georgia")
-    return ui, serif, mono
+        return "Helvetica Neue", "Menlo"
+    if sys.platform == "win32":
+        return "Segoe UI", "Consolas"
+    return "Sans Serif", "Monospace"
 
 
-def stylesheet(scale: float = 1.0) -> str:
-    """The application stylesheet. ``scale`` shrinks every font size, for the
-    window's responsive mode on small screens; 1.0 is full size."""
-    return _scaled(_stylesheet(), scale)
-
-
-def _scaled(css: str, scale: float) -> str:
-    if abs(scale - 1.0) < 1e-3:
-        return css
-    return re.sub(r"font-size:\s*(\d+)px",
-                  lambda m: f"font-size: {max(9, round(int(m.group(1)) * scale))}px", css)
-
-
-def _stylesheet() -> str:
-    ui, serif, mono = fonts()
+def stylesheet() -> str:
+    ui, mono = fonts()
     p = P
     return f"""
 /* ---------- base ---------------------------------------------------- */
 QWidget {{
     font-family: "{ui}";
-    font-size: 13px;
+    font-size: 12px;
     color: {p.text};
 }}
-QMainWindow, QDialog {{ background: {p.canvas}; }}
+QMainWindow {{ background: {p.canvas}; }}
+QDialog {{ background: {p.panel}; }}
 QToolTip {{
-    background: {p.text}; color: {p.canvas}; border: none;
-    padding: 6px 8px; border-radius: 6px;
+    background: {p.text}; color: {p.raised}; border: none;
+    padding: 4px 6px; border-radius: 3px;
 }}
 
 /* ---------- text roles ---------------------------------------------- */
-QLabel[role="title"]    {{ font-family: "{serif}"; font-size: 22px; color: {p.text}; }}
-QLabel[role="heading"]  {{ font-family: "{serif}"; font-size: 17px; color: {p.text}; }}
-QLabel[role="section"]  {{ font-size: 12px; font-weight: 600; color: {p.text_muted}; }}
-QLabel[role="muted"]    {{ color: {p.text_muted}; }}
-QLabel[role="faint"]    {{ color: {p.text_faint}; font-size: 12px; }}
-QLabel[role="mono"]     {{ font-family: "{mono}"; }}
-QLabel[role="ok"]       {{ color: {p.ok}; }}
-QLabel[role="warn"]     {{ color: {p.warn}; }}
-QLabel[role="danger"]   {{ color: {p.danger}; }}
+QLabel[role="title"]      {{ font-size: 15px; font-weight: {W_SEMIBOLD}; }}
+QLabel[role="heading"]    {{ font-size: 13px; font-weight: {W_SEMIBOLD}; }}
+QLabel[role="card-title"] {{ font-size: 12px; font-weight: {W_SEMIBOLD}; background: transparent; }}
+QLabel[role="section"]    {{ font-size: 11px; font-weight: {W_SEMIBOLD}; color: {p.text_muted}; }}
+QLabel[role="muted"]      {{ color: {p.text_muted}; }}
+QLabel[role="faint"]      {{ color: {p.text_faint}; font-size: 11px; background: transparent; }}
+QLabel[role="mono"]       {{ font-family: "{mono}"; }}
+QLabel[role="ok"]         {{ color: {p.ok}; }}
+QLabel[role="warn"]       {{ color: {p.warn}; }}
+QLabel[role="danger"]     {{ color: {p.danger}; }}
 
-/* pill used for status: connected, simulated, disconnected */
+/* status chips: source meter, calorimeter, recording */
 QLabel[role="pill"] {{
-    padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 600;
-    background: {p.sunken}; color: {p.text_muted};
+    padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: {W_SEMIBOLD};
+    background: {p.hover}; color: {p.text_muted};
 }}
 QLabel[role="pill"][tone="ok"]     {{ background: {p.ok_soft};     color: {p.ok}; }}
 QLabel[role="pill"][tone="warn"]   {{ background: {p.warn_soft};   color: {p.warn}; }}
 QLabel[role="pill"][tone="danger"] {{ background: {p.danger_soft}; color: {p.danger}; }}
-QLabel[role="pill"][tone="accent"] {{ background: {p.accent_soft}; color: {p.accent}; }}
+QLabel[role="pill"][tone="accent"] {{ background: {p.accent_soft}; color: {p.accent_text}; }}
 
-/* big numeric readouts */
+/* big numeric readouts and small figures */
 QLabel[role="readout"] {{
-    font-family: "{mono}"; font-size: 30px; color: {p.text};
+    font-family: "{mono}"; font-size: 24px; color: {p.text}; background: transparent;
 }}
-QLabel[role="readout-unit"] {{ color: {p.text_muted}; font-size: 13px; }}
+QLabel[role="readout-label"] {{
+    font-size: 11px; font-weight: {W_SEMIBOLD}; color: {p.text_muted}; background: transparent;
+}}
+QLabel[role="stat-label"] {{ font-size: 11px; color: {p.text_muted}; background: transparent; }}
+QLabel[role="stat-value"] {{ font-family: "{mono}"; font-size: 12px; background: transparent; }}
+QLabel[role="stat-value"][tone="danger"] {{ color: {p.danger}; font-weight: {W_SEMIBOLD}; }}
 
 /* ---------- surfaces ------------------------------------------------ */
-QFrame[role="card"] {{
-    background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS_LG}px;
+QFrame[role="toolbar"] {{
+    background: {p.panel}; border: none; border-bottom: 1px solid {p.border};
 }}
-QFrame[role="header"] {{
-    background: {p.canvas}; border: none; border-bottom: 1px solid {p.hairline};
+QFrame[role="card"], QFrame[role="readout-card"] {{
+    background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS_CARD}px;
 }}
-QFrame[role="divider"] {{ background: {p.hairline}; max-height: 1px; min-height: 1px; border: none; }}
+QFrame[role="divider"] {{ background: {p.border}; max-width: 1px; min-width: 1px; border: none; }}
+QFrame[role="swatch"] {{ border: none; border-radius: 4px; }}
 
 QGroupBox {{
-    background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS_LG}px;
-    margin-top: 14px; padding: 14px 12px 10px 12px;
-    font-weight: 600; color: {p.text_muted};
+    background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS_CARD}px;
+    margin-top: 0px; padding: 26px 10px 8px 10px;
+    font-size: 11px; font-weight: {W_SEMIBOLD}; color: {p.text_muted};
 }}
 QGroupBox::title {{
-    subcontrol-origin: margin; subcontrol-position: top left;
-    left: 12px; padding: 0 4px; font-size: 12px; color: {p.text_muted};
+    subcontrol-origin: padding; subcontrol-position: top left;
+    left: 10px; top: 7px; padding: 0px;
 }}
+QGroupBox[role="plain"] {{ padding-top: 8px; }}
 
 /* ---------- buttons ------------------------------------------------- */
 QPushButton, QToolButton {{
-    background: {p.card}; color: {p.text};
-    border: 1px solid {p.border}; border-radius: {RADIUS}px;
-    padding: 6px 14px; min-height: 18px;
+    background: {p.raised}; color: {p.text};
+    border: 1px solid {p.border}; border-bottom-color: {p.border_strong};
+    border-radius: {RADIUS}px; padding: 3px 10px; min-height: 16px;
 }}
-QPushButton:hover, QToolButton:hover {{ background: {p.sunken}; }}
-QPushButton:pressed, QToolButton:pressed {{ background: {p.hairline}; }}
-QPushButton:disabled, QToolButton:disabled {{ color: {p.text_faint}; border-color: {p.hairline}; background: {p.canvas}; }}
-QPushButton:checked {{ background: {p.text}; color: {p.canvas}; border-color: {p.text}; }}
+QPushButton:hover, QToolButton:hover {{ background: {p.button_hover}; border-color: {p.border_strong}; }}
+QPushButton:pressed, QToolButton:pressed, QToolButton:open {{
+    background: {p.button_press};
+    border-color: {p.border_strong}; border-bottom-color: {p.border};
+    padding: 4px 10px 2px 10px;
+}}
+QPushButton:focus, QToolButton:focus {{ border: 2px solid {p.accent_strong}; padding: 2px 9px; }}
+QPushButton:focus:pressed, QToolButton:focus:pressed {{ padding: 3px 9px 1px 9px; }}
+QPushButton:disabled, QToolButton:disabled {{
+    color: {p.text_faint}; background: {p.card}; border-color: {p.hairline};
+}}
+QToolButton::menu-indicator {{ image: none; width: 0px; }}
 
 QPushButton[role="primary"] {{
-    background: {p.accent}; color: white; border: 1px solid {p.accent}; font-weight: 600;
+    background: {p.accent}; color: {p.accent_text}; font-weight: {W_SEMIBOLD};
+    border: 1px solid {p.accent_pressed}; border-bottom-color: {p.accent_edge};
 }}
-QPushButton[role="primary"]:hover   {{ background: {p.accent_hover}; border-color: {p.accent_hover}; }}
-QPushButton[role="primary"]:pressed {{ background: {p.accent_pressed}; }}
-QPushButton[role="primary"]:disabled {{ background: {p.accent_soft}; border-color: {p.accent_soft}; color: white; }}
+QPushButton[role="primary"]:hover   {{ background: {p.accent_hover}; }}
+QPushButton[role="primary"]:pressed {{
+    background: {p.accent_pressed}; border-color: {p.accent_edge}; border-bottom-color: {p.accent_pressed};
+}}
+QPushButton[role="primary"]:focus   {{ border: 2px solid {p.text}; }}
+QPushButton[role="primary"]:disabled {{
+    background: #EEDDBE; color: #9A8C74; border-color: #E4D2AF;
+}}
 
-QPushButton[role="quiet"] {{ background: transparent; border: 1px solid transparent; color: {p.text_muted}; }}
-QPushButton[role="quiet"]:hover {{ background: {p.sunken}; color: {p.text}; }}
+QPushButton[role="danger"] {{ color: {p.danger}; }}
+QPushButton[role="danger"]:hover {{ background: {p.danger_soft}; border-color: {p.danger_edge}; }}
+QPushButton[role="danger"]:pressed {{ background: #EBCBC5; }}
+QPushButton[role="danger"]:disabled {{ color: {p.text_faint}; background: {p.card}; border-color: {p.hairline}; }}
 
-QPushButton[role="danger"] {{ color: {p.danger}; border-color: {p.danger_soft}; }}
-QPushButton[role="danger"]:hover {{ background: {p.danger_soft}; }}
+QPushButton[role="quiet"], QToolButton[role="quiet"] {{
+    background: transparent; border: 1px solid transparent; color: {p.text_muted};
+}}
+QPushButton[role="quiet"]:hover, QToolButton[role="quiet"]:hover {{ background: {p.hover}; color: {p.text}; }}
+QPushButton[role="quiet"]:pressed, QToolButton[role="quiet"]:pressed,
+QToolButton[role="quiet"]:open {{ background: {p.press}; color: {p.text}; }}
+QPushButton[role="quiet"]:focus, QToolButton[role="quiet"]:focus {{ border: 2px solid {p.accent_strong}; }}
+QPushButton[role="quiet"]:disabled, QToolButton[role="quiet"]:disabled {{
+    color: {p.text_faint}; background: transparent; border-color: transparent;
+}}
 
 /* output switch: reads as a state, not an action */
-QPushButton[role="output"] {{ font-weight: 600; min-width: 92px; }}
+QPushButton[role="output"] {{ font-weight: {W_SEMIBOLD}; min-width: 84px; }}
 QPushButton[role="output"][live="true"] {{
-    background: {p.ok}; color: white; border-color: {p.ok};
+    background: {p.ok}; color: white; border-color: {p.ok_hover}; border-bottom-color: #1F4F2E;
 }}
+QPushButton[role="output"][live="true"]:hover   {{ background: {p.ok_hover}; }}
+QPushButton[role="output"][live="true"]:pressed {{ background: #245C35; }}
 
-/* segmented control (channel A/B, front/rear, 2/4-wire) */
-QPushButton[role="segment"] {{ border-radius: 0; padding: 5px 14px; }}
-QPushButton[role="segment"][edge="left"]  {{ border-top-left-radius: {RADIUS}px; border-bottom-left-radius: {RADIUS}px; }}
-QPushButton[role="segment"][edge="right"] {{ border-top-right-radius: {RADIUS}px; border-bottom-right-radius: {RADIUS}px; border-left: none; }}
-QPushButton[role="segment"][edge="mid"]   {{ border-left: none; }}
-QPushButton[role="segment"]:checked {{ background: {p.text}; color: {p.canvas}; border-color: {p.text}; }}
-
-QPushButton[role="segment"][edge="solo"] {{ border-radius: {RADIUS}px; }}
+/* segmented control: chips inside a recessed track */
+QFrame[role="segmented"] {{
+    background: {p.hover}; border: 1px solid {p.hairline}; border-radius: 5px;
+}}
+QPushButton[role="segment"] {{
+    background: transparent; color: {p.text_muted};
+    border: 1px solid transparent; border-radius: {RADIUS}px;
+    padding: 1px 10px; min-height: 16px;
+}}
+QPushButton[role="segment"]:hover   {{ background: {p.hover}; color: {p.text}; }}
+QPushButton[role="segment"]:pressed {{ background: {p.press}; padding: 2px 10px 0px 10px; }}
+QPushButton[role="segment"]:checked {{
+    background: {p.raised}; color: {p.text};
+    border: 1px solid {p.border}; border-bottom-color: {p.border_strong};
+}}
+QPushButton[role="segment"]:focus   {{ border: 2px solid {p.accent_strong}; padding: 0px 9px; }}
+QPushButton[role="segment"]:disabled {{ color: {p.text_faint}; background: transparent; border-color: transparent; }}
 
 /* instrument picker cards */
 QFrame[role="model-card"] {{
-    background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS_LG}px;
+    background: {p.raised}; border: 1px solid {p.border}; border-bottom-color: {p.border_strong};
+    border-radius: {RADIUS_CARD}px;
 }}
-QFrame[role="model-card"]:hover {{ border: 1px solid {p.border}; }}
-QFrame[role="model-card"][selected="true"] {{ border: 2px solid {p.accent}; background: {p.card}; }}
-QLabel[role="card-title"] {{ font-size: 14px; font-weight: 600; color: {p.text}; background: transparent; }}
-QLabel[role="faint"] {{ background: transparent; }}
+QFrame[role="model-card"]:hover {{ border-color: {p.border_strong}; background: #FBFBFB; }}
+QFrame[role="model-card"][pressed="true"] {{ background: {p.button_press}; }}
+QFrame[role="model-card"][selected="true"] {{ border: 2px solid {p.accent}; background: {p.accent_tint}; }}
+QFrame[role="model-card"]:focus {{ border: 2px solid {p.accent_strong}; }}
+QFrame[role="model-card"]:disabled {{ background: {p.card}; border-color: {p.hairline}; }}
 
 /* ---------- inputs -------------------------------------------------- */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateTimeEdit, QPlainTextEdit, QTextEdit {{
-    background: {p.card}; border: 1px solid {p.border}; border-radius: {RADIUS}px;
-    padding: 5px 8px; selection-background-color: {p.accent_soft}; selection-color: {p.text};
+    background: {p.raised}; border: 1px solid {p.border}; border-radius: {RADIUS}px;
+    padding: 2px 6px; min-height: 18px;
+    selection-background-color: {p.accent_soft}; selection-color: {p.text};
 }}
+QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover,
+QPlainTextEdit:hover, QTextEdit:hover {{ border-color: {p.border_strong}; }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus,
-QPlainTextEdit:focus, QTextEdit:focus {{ border: 1px solid {p.accent}; }}
-QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
-    background: {p.canvas}; color: {p.text_faint}; border-color: {p.hairline};
+QPlainTextEdit:focus, QTextEdit:focus {{ border: 2px solid {p.accent_strong}; padding: 1px 5px; }}
+QComboBox:on {{ background: {p.button_press}; }}
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled,
+QPlainTextEdit:disabled, QTextEdit:disabled {{
+    background: {p.card}; color: {p.text_faint}; border-color: {p.hairline};
 }}
-QComboBox::drop-down {{ border: none; width: 24px; }}
-QComboBox::down-arrow {{ image: url("{asset('chevron-down.svg')}"); width: 12px; height: 12px; }}
+QLineEdit[readOnly="true"], QSpinBox[readOnly="true"], QDoubleSpinBox[readOnly="true"] {{
+    background: {p.card}; color: {p.text_muted};
+}}
+QComboBox::drop-down {{ border: none; width: 18px; }}
+QComboBox::down-arrow {{ image: url("{asset('chevron-down.svg')}"); width: 10px; height: 10px; }}
 QComboBox::down-arrow:disabled {{ image: url("{asset('chevron-down-faint.svg')}"); }}
 QComboBox QAbstractItemView {{
-    background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS}px;
-    padding: 4px; outline: none; selection-background-color: {p.accent_soft}; selection-color: {p.text};
+    background: {p.raised}; border: 1px solid {p.border}; padding: 2px; outline: none;
+    selection-background-color: {p.accent_soft}; selection-color: {p.text};
 }}
-QSpinBox::up-button, QSpinBox::down-button,
-QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 16px; border: none; }}
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{ width: 0px; border: none; }}
 
-QCheckBox, QRadioButton {{ spacing: 8px; }}
+QCheckBox, QRadioButton {{ spacing: 6px; background: transparent; }}
+QCheckBox:disabled, QRadioButton:disabled {{ color: {p.text_faint}; }}
 QCheckBox::indicator, QRadioButton::indicator {{
-    width: 16px; height: 16px; border: 1px solid {p.border}; background: {p.card};
+    width: 14px; height: 14px; border: 1px solid {p.border_strong}; background: {p.raised};
 }}
-QCheckBox::indicator {{ border-radius: 4px; }}
+QCheckBox::indicator {{ border-radius: 3px; }}
 QRadioButton::indicator {{ border-radius: 8px; }}
-QCheckBox::indicator:checked {{
-    background: {p.accent}; border-color: {p.accent}; image: url("{asset('check.svg')}");
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {p.text_muted}; }}
+QCheckBox::indicator:pressed, QRadioButton::indicator:pressed {{ background: {p.button_press}; }}
+QCheckBox::indicator:focus, QRadioButton::indicator:focus {{
+    border: 2px solid {p.accent_strong}; width: 12px; height: 12px;
 }}
-QCheckBox::indicator:hover {{ border-color: {p.text_faint}; }}
-QCheckBox::indicator:disabled {{ background: {p.canvas}; border-color: {p.hairline}; }}
-QRadioButton::indicator:checked {{ background: {p.card}; border: 5px solid {p.accent}; }}
+QCheckBox::indicator:checked {{
+    background: {p.accent_strong}; border-color: {p.accent_strong}; image: url("{asset('check.svg')}");
+}}
+QCheckBox::indicator:checked:pressed {{ background: #86550C; }}
+QRadioButton::indicator:checked {{ background: {p.raised}; border: 5px solid {p.accent_strong}; width: 6px; height: 6px; }}
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
+    background: {p.card}; border-color: {p.hairline};
+}}
+QCheckBox::indicator:checked:disabled {{ background: {p.border}; border-color: {p.border}; }}
 
 /* ---------- lists & tables ----------------------------------------- */
 QListWidget, QTreeWidget, QTableWidget, QTableView {{
-    background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS_LG}px;
-    outline: none; gridline-color: {p.hairline};
-    alternate-background-color: {p.canvas};
+    background: {p.raised}; border: 1px solid {p.border}; border-radius: {RADIUS}px;
+    outline: none; gridline-color: {p.hairline}; alternate-background-color: #F8F8F9;
 }}
-QListWidget::item {{ padding: 8px 10px; border-radius: 6px; margin: 1px 4px; }}
-QListWidget::item:hover {{ background: {p.sunken}; }}
+QListWidget:focus, QTableWidget:focus, QTableView:focus, QTreeWidget:focus {{ border-color: {p.accent_strong}; }}
+QListWidget[role="flat"] {{ background: transparent; border: none; }}
+QListWidget::item {{ padding: 3px 6px; border-radius: 3px; margin: 0px 2px; color: {p.text}; }}
+QListWidget::item:hover {{ background: {p.hover}; }}
 QListWidget::item:selected {{ background: {p.accent_soft}; color: {p.text}; }}
+QListWidget::item:selected:!active {{ background: #EDE5D6; }}
+QListWidget::item:disabled {{ color: {p.text_faint}; background: transparent; }}
+QTableWidget::item, QTableView::item {{ padding: 0px 6px; }}
 QTableWidget::item:selected, QTableView::item:selected {{ background: {p.accent_soft}; color: {p.text}; }}
+QHeaderView {{ background: {p.card}; border: none; }}
 QHeaderView::section {{
-    background: {p.canvas}; color: {p.text_muted}; border: none;
-    border-bottom: 1px solid {p.hairline}; padding: 6px 8px; font-size: 12px; font-weight: 600;
+    background: {p.card}; color: {p.text_muted}; border: none;
+    border-bottom: 1px solid {p.border}; border-right: 1px solid {p.hairline};
+    padding: 3px 6px; font-size: 11px; font-weight: {W_SEMIBOLD};
 }}
-QTableCornerButton::section {{ background: {p.canvas}; border: none; }}
+QHeaderView::section:hover {{ background: {p.button_hover}; }}
+QTableCornerButton::section {{ background: {p.card}; border: none; }}
 
-/* ---------- tabs: a quiet segmented track ---------------------------- */
-QTabWidget::pane {{ border: none; top: -1px; }}
-QTabBar {{ qproperty-drawBase: 0; }}
+/* ---------- tabs ---------------------------------------------------- */
+QTabWidget::pane {{
+    background: {p.panel}; border: 1px solid {p.border}; border-radius: {RADIUS_CARD}px; top: -1px;
+}}
+QTabWidget QTabWidget::pane, QDialog QTabWidget::pane {{
+    background: transparent; border: none; border-top: 1px solid {p.border}; border-radius: 0px;
+}}
+QTabBar {{ qproperty-drawBase: 0; background: transparent; }}
 QTabBar::tab {{
     background: transparent; color: {p.text_muted};
-    padding: 7px 16px; margin: 4px 2px; border-radius: {RADIUS}px; border: none;
+    border: 1px solid transparent; border-radius: {RADIUS}px;
+    padding: 3px 12px; margin: 0px 2px 5px 0px; min-height: 16px;
 }}
-QTabBar::tab:hover {{ color: {p.text}; background: {p.sunken}; }}
-QTabBar::tab:selected {{ color: {p.text}; background: {p.card}; border: 1px solid {p.hairline}; }}
+QTabBar::tab:hover    {{ background: {p.hover}; color: {p.text}; }}
+QTabBar::tab:pressed  {{ background: {p.press}; padding: 4px 12px 2px 12px; }}
+QTabBar::tab:selected {{
+    background: {p.raised}; color: {p.text}; font-weight: {W_SEMIBOLD};
+    border: 1px solid {p.border}; border-bottom-color: {p.border_strong};
+}}
+QTabBar::tab:focus    {{ border: 2px solid {p.accent_strong}; padding: 2px 11px; }}
+QTabBar::tab:disabled {{ color: {p.text_faint}; background: transparent; }}
 
 /* ---------- chrome -------------------------------------------------- */
-QMenuBar {{ background: {p.canvas}; border-bottom: 1px solid {p.hairline}; }}
-QMenuBar::item {{ padding: 5px 10px; background: transparent; border-radius: 6px; }}
-QMenuBar::item:selected {{ background: {p.sunken}; }}
-QMenu {{ background: {p.card}; border: 1px solid {p.hairline}; border-radius: {RADIUS}px; padding: 4px; }}
-QMenu::item {{ padding: 6px 22px 6px 12px; border-radius: 6px; }}
+QMenuBar {{ background: {p.panel}; border-bottom: 1px solid {p.border}; }}
+QMenuBar::item {{ padding: 3px 8px; background: transparent; border-radius: 3px; }}
+QMenuBar::item:selected {{ background: {p.hover}; }}
+QMenuBar::item:pressed {{ background: {p.press}; }}
+QMenu {{ background: {p.raised}; border: 1px solid {p.border}; border-radius: 5px; padding: 3px; }}
+QMenu::item {{ padding: 4px 20px 4px 10px; border-radius: 3px; }}
 QMenu::item:selected {{ background: {p.accent_soft}; color: {p.text}; }}
-QMenu::separator {{ height: 1px; background: {p.hairline}; margin: 4px 8px; }}
+QMenu::item:disabled {{ color: {p.text_faint}; background: transparent; }}
+QMenu::separator {{ height: 1px; background: {p.hairline}; margin: 3px 6px; }}
 
-QStatusBar {{ background: {p.canvas}; border-top: 1px solid {p.hairline}; color: {p.text_muted}; }}
+QStatusBar {{
+    background: {p.panel}; border-top: 1px solid {p.border}; color: {p.text_muted};
+    min-height: 22px;
+}}
 QStatusBar::item {{ border: none; }}
+QStatusBar QLabel {{ color: {p.text_muted}; font-size: 11px; padding: 0px 4px; }}
 
-QSplitter::handle {{ background: {p.canvas}; }}
-QSplitter::handle:horizontal {{ width: 6px; }}
-QSplitter::handle:vertical {{ height: 6px; }}
+QSplitter::handle {{ background: transparent; }}
+QSplitter::handle:horizontal {{ width: 8px; }}
+QSplitter::handle:vertical {{ height: 8px; }}
+QSplitter::handle:hover {{ background: {p.hover}; }}
 
 QProgressBar {{
-    background: {p.sunken}; border: none; border-radius: 4px; height: 8px;
-    text-align: center; color: {p.text_muted}; font-size: 11px;
+    background: {p.hover}; border: none; border-radius: 3px;
+    max-height: 6px; min-height: 6px;
 }}
-QProgressBar::chunk {{ background: {p.accent}; border-radius: 4px; }}
+QProgressBar::chunk {{ background: {p.accent}; border-radius: 3px; }}
+QProgressBar[role="labelled"] {{
+    max-height: 20px; min-height: 20px; border: 1px solid {p.border}; background: {p.raised};
+    color: {p.text}; font-size: 11px; text-align: center;
+}}
+QProgressBar[role="labelled"]::chunk {{ background: {p.accent_soft}; }}
 
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
-QScrollBar::handle {{ background: {p.border}; border-radius: 4px; min-height: 28px; min-width: 28px; }}
-QScrollBar::handle:hover {{ background: {p.text_faint}; }}
-QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{
-    background: none; border: none; width: 0; height: 0;
-}}
 QScrollArea {{ border: none; background: transparent; }}
+QScrollArea > QWidget#qt_scrollarea_viewport {{ background: transparent; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0px; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 0px; }}
+QScrollBar::handle {{ background: rgba(27, 28, 30, 0.22); border-radius: 3px; margin: 2px; }}
+QScrollBar::handle:vertical {{ min-height: 24px; }}
+QScrollBar::handle:horizontal {{ min-width: 24px; }}
+QScrollBar::handle:hover {{ background: rgba(27, 28, 30, 0.38); }}
+QScrollBar::handle:pressed {{ background: rgba(27, 28, 30, 0.50); }}
+QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{
+    background: none; border: none; width: 0px; height: 0px;
+}}
+
+QGraphicsView {{ border: 1px solid {p.border}; background: {p.raised}; }}
 """
 
 
-_current_scale = None
+class _Interactions(QObject):
+    """Two desktop behaviours a stylesheet cannot express.
 
+    Focus rings only for the keyboard. Qt's :focus matches however focus
+    arrived, so a clicked button would keep a ring until something else took
+    focus. Clickable controls therefore take focus from Tab only; inputs you
+    type into still take it from a click, as they must.
 
-def apply(app: QApplication, scale: float = 1.0) -> None:
-    """Install the palette and stylesheet on the application.
-
-    Cheap to call repeatedly: re-styling the whole application is the expensive
-    part (Qt re-polishes every widget), so it only happens when ``scale``
-    actually changes.
+    A not-allowed cursor over disabled controls. Qt normally shows the nearest
+    *enabled* ancestor's cursor over a disabled widget, ignoring the widget's
+    own, so setting one on the widget has no effect. Disabled widgets still
+    receive Enter and Leave, which is enough to swap an override cursor in and
+    out while the mouse is over one.
     """
-    global _current_scale
-    if _current_scale is not None and abs(scale - _current_scale) < 1e-3:
+
+    _CLICKABLE = (QAbstractButton, QTabBar)
+    _INTERACTIVE = (QAbstractButton, QTabBar, QComboBox, QAbstractSpinBox, QLineEdit)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._forbidden_over = None
+
+    def eventFilter(self, obj, event):
+        et = event.type()
+        if et == QEvent.Polish and isinstance(obj, QWidget):
+            if isinstance(obj, self._CLICKABLE) or (
+                    isinstance(obj, QComboBox) and not obj.isEditable()):
+                obj.setFocusPolicy(Qt.TabFocus)
+        elif et == QEvent.Enter and isinstance(obj, QWidget):
+            if isinstance(obj, self._INTERACTIVE) and not obj.isEnabled():
+                self._set_forbidden(obj)
+            else:
+                self._clear_forbidden()
+        elif obj is self._forbidden_over and et in (QEvent.Leave, QEvent.Hide, QEvent.EnabledChange):
+            if et != QEvent.EnabledChange or obj.isEnabled():
+                self._clear_forbidden()
+        return False
+
+    def _set_forbidden(self, widget):
+        if self._forbidden_over is None:
+            QApplication.setOverrideCursor(QCursor(Qt.ForbiddenCursor))
+        self._forbidden_over = widget
+
+    def _clear_forbidden(self):
+        if self._forbidden_over is not None:
+            self._forbidden_over = None
+            QApplication.restoreOverrideCursor()
+
+
+_applied = False
+_interactions = None
+
+
+def apply(app: QApplication) -> None:
+    """Install fonts, palette, stylesheet and interaction behaviour. Once."""
+    global _applied, _interactions
+    if _applied:
         return
-    _current_scale = scale
-    app.setStyle("Fusion")  # consistent base on every OS; QSS paints over it
-    ui, _serif, _mono = fonts()
-    app.setFont(QFont(ui, max(8, round(10 * scale))))
+    _applied = True
+    app.setStyle("Fusion")  # the same base on every OS; the stylesheet paints over it
+    ui, _mono = fonts()
+    base = QFont(ui)
+    base.setPixelSize(12)
+    app.setFont(base)
     pal = QPalette()
-    pal.setColor(QPalette.Window, QColor(P.canvas))
-    pal.setColor(QPalette.Base, QColor(P.card))
-    pal.setColor(QPalette.AlternateBase, QColor(P.canvas))
+    pal.setColor(QPalette.Window, QColor(P.panel))
+    pal.setColor(QPalette.Base, QColor(P.raised))
+    pal.setColor(QPalette.AlternateBase, QColor("#F8F8F9"))
     pal.setColor(QPalette.Text, QColor(P.text))
     pal.setColor(QPalette.WindowText, QColor(P.text))
-    pal.setColor(QPalette.Button, QColor(P.card))
+    pal.setColor(QPalette.Button, QColor(P.raised))
     pal.setColor(QPalette.ButtonText, QColor(P.text))
     pal.setColor(QPalette.Highlight, QColor(P.accent_soft))
     pal.setColor(QPalette.HighlightedText, QColor(P.text))
     pal.setColor(QPalette.PlaceholderText, QColor(P.text_faint))
+    pal.setColor(QPalette.ToolTipBase, QColor(P.text))
+    pal.setColor(QPalette.ToolTipText, QColor(P.raised))
     app.setPalette(pal)
-    app.setStyleSheet(stylesheet(scale))
+    app.setStyleSheet(stylesheet())
+    _interactions = _Interactions(app)
+    app.installEventFilter(_interactions)
 
 
-def ui_font(size_pt: float = 10, bold: bool = False) -> QFont:
-    """The UI font at a given size — for the few places that set one directly."""
-    f = QFont(fonts()[0], round(size_pt))
-    f.setBold(bold)
+def ui_font(size_px: int = 12, bold: bool = False) -> QFont:
+    """The UI font at a pixel size — for the few places that set one directly."""
+    f = QFont(fonts()[0])
+    f.setPixelSize(size_px)
+    if bold:
+        f.setWeight(QFont.DemiBold)
     return f
 
 
-def mono_font(size_pt: float = 10, bold: bool = False) -> QFont:
-    f = QFont(fonts()[2], round(size_pt))
-    f.setBold(bold)
+def mono_font(size_px: int = 12, bold: bool = False) -> QFont:
+    f = QFont(fonts()[1])
+    f.setPixelSize(size_px)
+    if bold:
+        f.setWeight(QFont.DemiBold)
     return f
 
 
@@ -388,17 +569,42 @@ def repolish(widget: QWidget) -> None:
     widget.update()
 
 
+def segmented(*buttons) -> QFrame:
+    """Put checkable buttons side by side in one recessed track.
+
+    The buttons keep their own signals; this only groups them visually. The
+    checked one is drawn raised, like the selected tab.
+    """
+    track = set_role(QFrame(), "segmented")
+    lay = QHBoxLayout(track)
+    lay.setContentsMargins(1, 1, 1, 1)
+    lay.setSpacing(1)
+    for b in buttons:
+        set_role(b, "segment")
+        lay.addWidget(b)
+    track.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+    return track
+
+
+def swatch(color: str, size: int = 8) -> QFrame:
+    """A small colour dot tying a readout or a signal row to its trace."""
+    dot = set_role(QFrame(), "swatch")
+    dot.setFixedSize(size, size)
+    dot.setStyleSheet(f"background: {color}; border-radius: {size // 2}px;")
+    return dot
+
+
 def configure_pyqtgraph() -> None:
     """Plot defaults that match the window and stay fast on long runs.
 
-    Antialiasing was on globally before. It is kept — it is what makes thin
-    traces look clean — but paired with clip-to-view and peak downsampling on
-    every curve (see ``fast_curve``), which is where the real cost of an
-    hours-long recording goes.
+    Antialiasing stays on — it is what makes thin traces look clean — paired
+    with clip-to-view and peak downsampling on every curve (see
+    ``fast_curve``), which is where the real cost of an hours-long recording
+    goes.
     """
     import pyqtgraph as pg
 
-    pg.setConfigOptions(antialias=True, background=P.canvas, foreground=P.text_muted)
+    pg.setConfigOptions(antialias=True, background=P.raised, foreground=P.text_muted)
 
 
 def fast_curve(curve) -> None:
@@ -415,26 +621,31 @@ def fast_curve(curve) -> None:
 
 def pen(color: str, width: float = 1.6, dashed: bool = False):
     import pyqtgraph as pg
-    from PyQt5.QtCore import Qt
     p = pg.mkPen(color, width=width)
     if dashed:
         p.setStyle(Qt.DashLine)
     return p
 
 
-def style_plot(widget, title: str = None) -> None:
-    """Card-coloured plot area, quiet axes, muted labels — one look for every graph."""
+def style_axis(axis) -> None:
+    """Quiet axis line, muted Plex tick labels."""
     import pyqtgraph as pg
 
-    widget.setBackground(P.card)
+    axis.setPen(pg.mkPen(P.border))
+    axis.setTextPen(pg.mkPen(P.text_muted))
+    axis.setStyle(tickFont=ui_font(10), tickTextOffset=4)
+    axis.label.setFont(ui_font(11))
+
+
+def style_plot(widget, title: str = None) -> None:
+    """White plot area, quiet axes, muted labels — one look for every graph."""
+    widget.setBackground(P.raised)
     item = widget.getPlotItem() if hasattr(widget, "getPlotItem") else widget
     for name in ("left", "bottom", "right", "top"):
-        axis = item.getAxis(name)
-        axis.setPen(pg.mkPen(P.hairline))
-        axis.setTextPen(pg.mkPen(P.text_muted))
-    item.showGrid(x=True, y=True, alpha=0.18)
+        style_axis(item.getAxis(name))
+    item.showGrid(x=True, y=True, alpha=0.15)
     if title:
-        item.setTitle(title, color=P.text_muted, size="11pt")
+        item.setTitle(title, color=P.text_muted, size="9pt")
 
 
 def series_color(name: str) -> str:

@@ -33,15 +33,15 @@ from PyQt5.QtWidgets import (
     QFrame, QMessageBox, QFileDialog, QDialog, QListWidget,
     QProgressBar, QStatusBar, QTextEdit, QSizePolicy, QMenuBar,
     QMenu, QAction, QFormLayout, QScrollArea, QAbstractSpinBox,
-    QInputDialog
+    QInputDialog, QToolButton, QShortcut
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QSettings
-from PyQt5.QtGui import QFont, QColor, QPalette, QIcon
+from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QKeySequence
 
 import pyqtgraph as pg
 
 from ctwa import theme
-from ctwa.connect_panel import SMUConnectPanel
+from ctwa.connect_panel import ChoiceCard, SMUConnectPanel
 from ctwa.instruments import registry
 from ctwa.instruments.smu import SMU, NotSupported
 
@@ -229,8 +229,7 @@ class ToggleButton(QPushButton):
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
         self.setCheckable(True)
-        self.setCursor(Qt.PointingHandCursor)
-        theme.set_role(self, "segment", edge="solo")
+        theme.set_role(self, "segment")
         self._selected = False
         # Checked state follows set_selected, not the click itself; otherwise a
         # second click on the active choice would visibly deselect it.
@@ -247,18 +246,18 @@ class ToggleButton(QPushButton):
 class DigitalDisplay(QLabel):
     """Large digital display for multimeter readings"""
 
+    EMPTY = "\u2014"
+
     def __init__(self, unit: str = "", decimals: int = 6):
-        super().__init__("----")
+        super().__init__(self.EMPTY)
         self.unit = unit
         self.decimals = decimals
-        self.color = theme.P.text
         theme.set_role(self, "readout")
         self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.setMinimumHeight(50)
 
     def set_value(self, value: float):
         if value is None:
-            self.setText("----")
+            self.setText(self.EMPTY)
             return
 
         abs_val = abs(value)
@@ -284,10 +283,24 @@ class DigitalDisplay(QLabel):
             text = f"{value:.{self.decimals}e} {self.unit}"
         self.setText(text)
 
-    def set_color(self, color: str):
-        """Colour identifies the quantity, matching its trace on the graphs."""
-        self.color = color
-        self.setStyleSheet(f"color: {color};")
+
+class ReadoutCard(QFrame):
+    """One multimeter quantity: a coloured dot tying it to its trace, the name,
+    and the value. Digits stay near-black — coloured digits read less crisply."""
+
+    def __init__(self, title: str, color: str, display: DigitalDisplay, parent=None):
+        super().__init__(parent)
+        theme.set_role(self, "readout-card")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 7, 10, 6)
+        lay.setSpacing(0)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        head.addWidget(theme.swatch(color))
+        head.addWidget(theme.set_role(QLabel(title), "readout-label"))
+        head.addStretch()
+        lay.addLayout(head)
+        lay.addWidget(display)
 
 
 class LiveReader(QThread):
@@ -363,161 +376,125 @@ class MultimeterPanel(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(20)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
-        # Title
-        title = theme.set_role(QLabel("Live multimeter"), "heading")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        def field(row, label, widget, gap=True):
+            if gap and row.count():
+                row.addSpacing(10)
+            row.addWidget(theme.set_role(QLabel(label), "muted"))
+            row.addWidget(widget)
 
-        # Channel indicator
-        ch_layout = QHBoxLayout()
-        ch_layout.addStretch()
-        self.channel_indicator = QLabel("Channel A")
-        theme.set_role(self.channel_indicator, "muted")
-        ch_layout.addWidget(self.channel_indicator)
-        ch_layout.addStretch()
-        layout.addLayout(ch_layout)
-
-        # Settings row
+        # Source: what to measure, what to apply, and the ranges
         settings = QHBoxLayout()
+        settings.setSpacing(6)
 
-        settings.addWidget(QLabel("Measure:"))
         self.measure_type = QComboBox()
         self.measure_type.currentTextChanged.connect(
             lambda m: self._reader.set_measure(m) if self._reader else None)
         self.measure_type.addItems(["Voltage", "Current", "Resistance", "All"])
         self.measure_type.setCurrentText("All")
-        settings.addWidget(self.measure_type)
+        field(settings, "Measure", self.measure_type)
 
-        settings.addWidget(QLabel("Source:"))
         self.source_type = QComboBox()
         self.source_type.addItems(["Voltage", "Current"])
         self.source_type.currentTextChanged.connect(self._update_source_units)
-        settings.addWidget(self.source_type)
+        field(settings, "Source", self.source_type)
 
-        settings.addWidget(QLabel("Value:"))
         self.source_value = QDoubleSpinBox()
         self.source_value.setValue(0)
-        settings.addWidget(self.source_value)
+        self.source_value.setMinimumWidth(96)
+        field(settings, "Value", self.source_value)
 
-        settings.addWidget(QLabel("Limit:"))
         self.compliance = QDoubleSpinBox()
+        self.compliance.setMinimumWidth(96)
         apply_source_limits(self.source_value, self.compliance, "Voltage", reset_compliance=True)
-        settings.addWidget(self.compliance)
+        field(settings, "Limit", self.compliance)
 
-        settings.addWidget(QLabel("V Range:"))
         self.voltage_range = QComboBox()
-        settings.addWidget(self.voltage_range)
+        field(settings, "V range", self.voltage_range)
 
-        settings.addWidget(QLabel("I Range:"))
         self.current_range = QComboBox()
         # Filled from the connected model's capability table; see set_capabilities.
         self.set_capabilities(registry.get(registry.MODEL_ORDER[0]))
-        settings.addWidget(self.current_range)
+        field(settings, "I range", self.current_range)
 
         settings.addStretch()
         layout.addLayout(settings)
 
-        # Instrument settings row
+        # Wiring, then how fast, then run
         inst_row = QHBoxLayout()
+        inst_row.setSpacing(6)
 
         # Terminals (2450 only). The multimeter keeps its own choice, separate
         # from Instrument Settings, exactly as the 2450 window did.
         self.terminal_box = QWidget()
         term = QHBoxLayout(self.terminal_box)
-        term.setContentsMargins(0, 0, 0, 0)
-        term.addWidget(QLabel("Terminals:"))
+        term.setContentsMargins(0, 0, 10, 0)
+        term.setSpacing(6)
+        term.addWidget(theme.set_role(QLabel("Terminals"), "muted"))
         self.front_btn = ToggleButton("Front")
         self.front_btn.clicked.connect(lambda: self._set_terminal("Front"))
-        term.addWidget(self.front_btn)
         self.rear_btn = ToggleButton("Rear")
         self.rear_btn.clicked.connect(lambda: self._set_terminal("Rear"))
-        term.addWidget(self.rear_btn)
-        term.addSpacing(12)
+        term.addWidget(theme.segmented(self.front_btn, self.rear_btn))
         inst_row.addWidget(self.terminal_box)
         self._set_terminal("Rear")
         self.terminal_box.setVisible(registry.active().terminal_select)
 
-        inst_row.addWidget(QLabel("Sense:"))
-        self.sense_2w = ToggleButton("2-Wire")
+        inst_row.addWidget(theme.set_role(QLabel("Sense"), "muted"))
+        self.sense_2w = ToggleButton("2-wire")
         self.sense_2w.set_selected(True)
         self.sense_2w.clicked.connect(lambda: self._set_sense("2-Wire"))
-        inst_row.addWidget(self.sense_2w)
-
-        self.sense_4w = ToggleButton("4-Wire")
+        self.sense_4w = ToggleButton("4-wire")
         self.sense_4w.clicked.connect(lambda: self._set_sense("4-Wire"))
-        inst_row.addWidget(self.sense_4w)
+        inst_row.addWidget(theme.segmented(self.sense_2w, self.sense_4w))
         self.sense = "2-Wire"
 
         inst_row.addStretch()
-        layout.addLayout(inst_row)
 
-        # Digital displays
-        displays = QGridLayout()
-
-        v_group = QGroupBox("Voltage")
-        v_layout = QVBoxLayout(v_group)
-        self.voltage_display = DigitalDisplay("V", 6)
-        self.voltage_display.set_color(theme.P.series[3])
-        v_layout.addWidget(self.voltage_display)
-        displays.addWidget(v_group, 0, 0)
-
-        i_group = QGroupBox("Current")
-        i_layout = QVBoxLayout(i_group)
-        self.current_display = DigitalDisplay("A", 6)
-        self.current_display.set_color(theme.P.series[4])
-        i_layout.addWidget(self.current_display)
-        displays.addWidget(i_group, 0, 1)
-
-        r_group = QGroupBox("Resistance")
-        r_layout = QVBoxLayout(r_group)
-        self.resistance_display = DigitalDisplay("\u03a9", 4)
-        self.resistance_display.set_color(theme.P.series[5])
-        r_layout.addWidget(self.resistance_display)
-        displays.addWidget(r_group, 1, 0)
-
-        p_group = QGroupBox("Power")
-        p_layout = QVBoxLayout(p_group)
-        self.power_display = DigitalDisplay("W", 6)
-        self.power_display.set_color(theme.P.series[6])
-        p_layout.addWidget(self.power_display)
-        displays.addWidget(p_group, 1, 1)
-
-        layout.addLayout(displays)
-
-        # Rate and stats
-        rate_layout = QHBoxLayout()
-        rate_layout.addWidget(QLabel("Update Rate:"))
+        inst_row.addWidget(theme.set_role(QLabel("Rate"), "muted"))
         self.update_rate = QComboBox()
         self.update_rate.addItems(["Slow (1 Hz)", "Medium (5 Hz)", "Fast (10 Hz)", "Max (20 Hz)"])
         self.update_rate.setCurrentIndex(1)
         self.update_rate.currentIndexChanged.connect(self._update_rate_changed)
-        rate_layout.addWidget(self.update_rate)
+        inst_row.addWidget(self.update_rate)
 
-        self.readings_label = QLabel("Readings: 0")
-        rate_layout.addWidget(self.readings_label)
-        rate_layout.addStretch()
-        layout.addLayout(rate_layout)
+        self.readings_label = theme.set_role(QLabel("0 readings"), "muted")
+        self.readings_label.setMinimumWidth(84)
+        self.readings_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        inst_row.addWidget(self.readings_label)
+        inst_row.addSpacing(4)
 
-        # Buttons
-        btn_layout = QHBoxLayout()
+        # One button that is Start while idle and Stop while running: a pair
+        # always had one of them greyed out, which read as broken.
+        self.run_btn = QPushButton()
+        self.run_btn.setMinimumWidth(72)
+        self.run_btn.clicked.connect(lambda: self.stop_live() if self.running else self.start_live())
+        inst_row.addWidget(self.run_btn)
+        self._show_running(False)
 
-        self.start_btn = QPushButton("Start")
-        theme.set_role(self.start_btn, "primary")
-        self.start_btn.clicked.connect(self.start_live)
-        btn_layout.addWidget(self.start_btn)
+        layout.addLayout(inst_row)
 
-        self.stop_btn = QPushButton("Stop")
-        theme.set_role(self.stop_btn, "danger")
-        self.stop_btn.clicked.connect(self.stop_live)
-        self.stop_btn.setEnabled(False)
-        btn_layout.addWidget(self.stop_btn)
+        # Readouts, one row
+        displays = QHBoxLayout()
+        displays.setSpacing(8)
+        self.voltage_display = DigitalDisplay("V", 6)
+        self.current_display = DigitalDisplay("A", 6)
+        self.resistance_display = DigitalDisplay("\u03a9", 4)
+        self.power_display = DigitalDisplay("W", 6)
+        for title, name, display in (("Voltage", "Voltage", self.voltage_display),
+                                     ("Current", "Current", self.current_display),
+                                     ("Resistance", "Resistance", self.resistance_display),
+                                     ("Power", "Power", self.power_display)):
+            displays.addWidget(ReadoutCard(title, theme.series_color(name), display), stretch=1)
+        layout.addLayout(displays)
 
-        layout.addLayout(btn_layout)
-
-        # Recording buttons
+        # Recording
         record_layout = QHBoxLayout()
+        record_layout.setSpacing(6)
+        record_layout.addWidget(theme.set_role(QLabel("Recording"), "section"))
+        record_layout.addSpacing(4)
 
         self.record_btn = QPushButton("Record")
         self.record_btn.clicked.connect(self._start_recording)
@@ -529,26 +506,25 @@ class MultimeterPanel(QWidget):
         self.pause_record_btn.setEnabled(False)
         record_layout.addWidget(self.pause_record_btn)
 
-        self.save_record_btn = QPushButton("Save CSV")
+        self.save_record_btn = QPushButton("Save CSV\u2026")
         self.save_record_btn.clicked.connect(self._save_recording)
         self.save_record_btn.setEnabled(False)
         record_layout.addWidget(self.save_record_btn)
 
-        self.record_status = QLabel("Recording: Stopped | Points: 0")
+        record_layout.addSpacing(4)
+        self.record_status = QLabel("Not recording")
         theme.set_role(self.record_status, "faint")
         record_layout.addWidget(self.record_status)
         record_layout.addStretch()
 
         layout.addLayout(record_layout)
 
-        # Recording Graph
+        # Recording graph: takes whatever height is left
         self.record_graph = pg.PlotWidget()
-        theme.style_plot(self.record_graph, "Recording")
-        self.record_graph.setLabel('left', 'Value', color=theme.P.text_muted)
+        theme.style_plot(self.record_graph)
         self.record_graph.setLabel('bottom', 'Time (s)', color=theme.P.text_muted)
-        self.record_graph.addLegend()
-        self.record_graph.showGrid(x=True, y=True, alpha=0.2)
-        self.record_graph.setMinimumHeight(200)
+        self.record_graph.addLegend(offset=(8, 8))
+        self.record_graph.setMinimumHeight(160)
 
         self.voltage_plot = self.record_graph.plot([], [], pen=theme.pen(theme.series_color("Voltage")), name='Voltage (V)')
         self.current_plot = self.record_graph.plot([], [], pen=theme.pen(theme.series_color("Current")), name='Current (A)')
@@ -556,9 +532,11 @@ class MultimeterPanel(QWidget):
         for curve in (self.voltage_plot, self.current_plot, self.power_plot):
             theme.fast_curve(curve)
 
-        layout.addWidget(self.record_graph)
+        layout.addWidget(self.record_graph, stretch=1)
 
-        layout.addStretch()
+    def _show_running(self, running: bool):
+        self.run_btn.setText("Stop" if running else "Start")
+        theme.set_role(self.run_btn, "danger" if running else "primary")
 
     def set_capabilities(self, caps):
         """Offer exactly the ranges the connected model has. Item data is the
@@ -596,11 +574,6 @@ class MultimeterPanel(QWidget):
         self.sense_2w.set_selected(sense == "2-Wire")
         self.sense_4w.set_selected(sense == "4-Wire")
 
-    def update_channel_display(self):
-        """Update channel indicator based on app's current channel"""
-        ch = self.app.current_channel.upper()
-        self.channel_indicator.setText(f"Channel {ch}")
-
     def start_live(self):
         if not self.app.smu or not self.app.smu.connected:
             QMessageBox.warning(self, "Not Connected", "Please connect to instrument first")
@@ -635,11 +608,11 @@ class MultimeterPanel(QWidget):
             self.app.smu.configure_measure_range("i", self.current_range.currentData(), ch)
 
             self.app.smu.output_on(ch)
+            self.app._update_output_buttons()
 
             self.running = True
             self.reading_count = 0
-            self.start_btn.setEnabled(False)
-            self.stop_btn.setEnabled(True)
+            self._show_running(True)
             self.record_btn.setEnabled(True)
 
             rates = [1000, 200, 100, 50]
@@ -664,9 +637,9 @@ class MultimeterPanel(QWidget):
                 self.app.smu.output_off(self.app.current_channel)
             except:
                 pass
+            self.app._update_output_buttons()
 
-        self.start_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
+        self._show_running(False)
 
         if self.recording:
             self._pause_recording()
@@ -698,7 +671,7 @@ class MultimeterPanel(QWidget):
                 self.last_resistance = resistance
 
             self.reading_count += 1
-            self.readings_label.setText(f"Readings: {self.reading_count}")
+            self.readings_label.setText(f"{self.reading_count} readings")
 
             if self.recording and self.record_start_time is not None:
                 elapsed = time.time() - self.record_start_time
@@ -706,7 +679,7 @@ class MultimeterPanel(QWidget):
                 i = current if current is not None else 0
                 self.recorded_data.append((elapsed, v, i, resistance, power))
                 self._update_record_graph()
-                self.record_status.setText(f"Recording: Active | Points: {len(self.recorded_data)}")
+                self.record_status.setText(f"Recording, {len(self.recorded_data)} points")
 
         except Exception as e:
             print(f"Measurement error: {e}")
@@ -718,7 +691,7 @@ class MultimeterPanel(QWidget):
         self.record_btn.setEnabled(False)
         self.pause_record_btn.setEnabled(True)
         self.save_record_btn.setEnabled(False)
-        self.record_status.setText("Recording: Active | Points: 0")
+        self.record_status.setText("Recording, 0 points")
         theme.set_role(self.record_status, "pill", tone="accent")
         self.voltage_plot.setData([], [])
         self.current_plot.setData([], [])
@@ -729,7 +702,7 @@ class MultimeterPanel(QWidget):
         self.record_btn.setEnabled(True)
         self.pause_record_btn.setEnabled(False)
         self.save_record_btn.setEnabled(len(self.recorded_data) > 0)
-        self.record_status.setText(f"Recording: Paused | Points: {len(self.recorded_data)}")
+        self.record_status.setText(f"Paused, {len(self.recorded_data)} points")
         theme.set_role(self.record_status, "pill", tone="warn")
 
     def _save_recording(self):
@@ -766,58 +739,85 @@ class MultimeterPanel(QWidget):
         self.power_plot.setData(times, powers)
 
 
+def make_form() -> QFormLayout:
+    """A settings form: one label column, fields at their natural width."""
+    form = QFormLayout()
+    form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+    form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
+    form.setRowWrapPolicy(QFormLayout.DontWrapRows)
+    form.setHorizontalSpacing(12)
+    form.setVerticalSpacing(6)
+    return form
+
+
+class FormRow:
+    """A label and its field in a QFormLayout, shown or hidden together.
+
+    Qt 5's QFormLayout has no per-row visibility; hiding only the field left
+    its label behind, and wrapping rows in their own widgets knocked them out
+    of the form's label column (the 6430's Auto Zero sat indented).
+    """
+
+    def __init__(self, form: QFormLayout, label: str, field: QWidget):
+        self.label = theme.set_role(QLabel(label), "muted")
+        self.field = field
+        form.addRow(self.label, field)
+
+    def setVisible(self, visible: bool):
+        self.label.setVisible(visible)
+        self.field.setVisible(visible)
+
+    def isVisible(self) -> bool:
+        return not self.field.isHidden()
+
+
+def _hbox_widget(*widgets, spacing: int = 8) -> QWidget:
+    w = QWidget()
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(spacing)
+    for x in widgets:
+        lay.addWidget(x)
+    lay.addStretch()
+    return w
+
+
+FIELD_WIDTH = 130
+
+
 class SourceSettingsWidget(QGroupBox):
     """Source settings panel — no DC/Pulse for 2602B"""
 
     def __init__(self, parent=None):
-        super().__init__("Source Settings", parent)
+        super().__init__("Source", parent)
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-
-        # Function: Voltage / Current
-        func_layout = QHBoxLayout()
-        func_layout.addWidget(QLabel("Function:"))
+        form = make_form()
+        self.setLayout(form)
 
         self.volt_btn = ToggleButton("Voltage")
         self.volt_btn.set_selected(True)
         self.volt_btn.clicked.connect(lambda: self._set_function("Voltage"))
-        func_layout.addWidget(self.volt_btn)
-
         self.curr_btn = ToggleButton("Current")
         self.curr_btn.clicked.connect(lambda: self._set_function("Current"))
-        func_layout.addWidget(self.curr_btn)
+        FormRow(form, "Function", theme.segmented(self.volt_btn, self.curr_btn))
 
-        func_layout.addStretch()
-        layout.addLayout(func_layout)
-
-        # Mode
-        mode_layout = QHBoxLayout()
-        mode_layout.addWidget(QLabel("Mode:"))
         self.mode = QComboBox()
         self.mode.addItems(["Linear Sweep", "List Sweep", "Log Sweep"])
-        mode_layout.addWidget(self.mode)
-        mode_layout.addStretch()
-        layout.addLayout(mode_layout)
+        self.mode.setMinimumWidth(FIELD_WIDTH)
+        FormRow(form, "Mode", self.mode)
 
-        # Range
-        range_layout = QHBoxLayout()
-        range_layout.addWidget(QLabel("Range:"))
         self.range = QComboBox()
         self.range.addItems(["Auto", "100 mV", "1 V", "6 V", "40 V"])
-        range_layout.addWidget(self.range)
-        range_layout.addStretch()
-        layout.addLayout(range_layout)
+        self.range.setMinimumWidth(FIELD_WIDTH)
+        FormRow(form, "Range", self.range)
 
-        # Limit (Compliance)
-        limit_layout = QHBoxLayout()
-        limit_layout.addWidget(QLabel("Limit:"))
         self.compliance = QDoubleSpinBox()
+        self.compliance.setMinimumWidth(FIELD_WIDTH)
         apply_source_limits(None, self.compliance, "Voltage", reset_compliance=True)
-        limit_layout.addWidget(self.compliance)
-        limit_layout.addStretch()
-        layout.addLayout(limit_layout)
+        FormRow(form, "Limit", self.compliance)
 
         self.function = "Voltage"
 
@@ -845,53 +845,41 @@ class InstrumentSettingsWidget(QGroupBox):
     same panel serves every supported SMU."""
 
     def __init__(self, parent=None):
-        super().__init__("Instrument Settings", parent)
+        super().__init__("Instrument", parent)
         self._setup_ui()
 
-    def _pair_row(self, label, a_text, b_text, on_pick):
-        row = QWidget()
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(QLabel(label))
-        a, b = ToggleButton(a_text), ToggleButton(b_text)
+    def _pair_row(self, form, label, a_text, b_text, on_pick):
+        a, b = ToggleButton(a_text.lower() if "Wire" in a_text else a_text), \
+               ToggleButton(b_text.lower() if "Wire" in b_text else b_text)
         a.clicked.connect(lambda: on_pick(a_text))
         b.clicked.connect(lambda: on_pick(b_text))
-        lay.addWidget(a)
-        lay.addWidget(b)
-        lay.addStretch()
-        return row, a, b
+        return FormRow(form, label, theme.segmented(a, b)), a, b
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        form = make_form()
+        self.setLayout(form)
 
         # Terminals: Front / Rear (2450)
         self.terminal_row, self.front_btn, self.rear_btn = self._pair_row(
-            "Terminals:", "Front", "Rear", self._set_terminal)
-        layout.addWidget(self.terminal_row)
+            form, "Terminals", "Front", "Rear", self._set_terminal)
 
         # Sense: 2-Wire / 4-Wire
         self.sense_row, self.sense_2w, self.sense_4w = self._pair_row(
-            "Sense:", "2-Wire", "4-Wire", self._set_sense)
-        layout.addWidget(self.sense_row)
+            form, "Sense", "2-Wire", "4-Wire", self._set_sense)
 
         # High capacitance (2450)
-        self.high_cap = QCheckBox("High Capacitance Mode")
-        layout.addWidget(self.high_cap)
+        self.high_cap = QCheckBox("High-capacitance mode")
+        self._high_cap_row = FormRow(form, "", self.high_cap)
 
         # Guard (6430)
-        self.guard_mode = QCheckBox("Guard Mode (Triax)")
-        layout.addWidget(self.guard_mode)
+        self.guard_mode = QCheckBox("Guard mode (triax)")
+        self._guard_row = FormRow(form, "", self.guard_mode)
 
         # Output off state (6430)
-        self.off_row = QWidget()
-        off_layout = QHBoxLayout(self.off_row)
-        off_layout.setContentsMargins(0, 0, 0, 0)
-        off_layout.addWidget(QLabel("Output Off:"))
         self.output_off_mode = QComboBox()
         self.output_off_mode.addItems(["Normal", "Zero", "High-Z"])
-        off_layout.addWidget(self.output_off_mode)
-        off_layout.addStretch()
-        layout.addWidget(self.off_row)
+        self.output_off_mode.setMinimumWidth(FIELD_WIDTH)
+        self.off_row = FormRow(form, "Output off", self.output_off_mode)
 
         self._model = None
         self._set_terminal("Rear")
@@ -900,8 +888,8 @@ class InstrumentSettingsWidget(QGroupBox):
 
     def set_capabilities(self, caps):
         self.terminal_row.setVisible(caps.terminal_select)
-        self.high_cap.setVisible(caps.high_capacitance)
-        self.guard_mode.setVisible(caps.guard_mode)
+        self._high_cap_row.setVisible(caps.high_capacitance)
+        self._guard_row.setVisible(caps.guard_mode)
         self.off_row.setVisible(caps.output_off_mode)
         if caps.output_off_modes:
             current = self.output_off_mode.currentText()
@@ -930,55 +918,31 @@ class MeasureSettingsWidget(QGroupBox):
     """Measurement settings"""
 
     def __init__(self, parent=None):
-        super().__init__("Measure Settings", parent)
+        super().__init__("Measure", parent)
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        form = make_form()
+        self.setLayout(form)
 
-        # What to measure - row 1
-        meas_layout1 = QHBoxLayout()
         self.measure_v = QCheckBox("Voltage")
         self.measure_v.setChecked(True)
-        meas_layout1.addWidget(self.measure_v)
-
         self.measure_i = QCheckBox("Current")
         self.measure_i.setChecked(True)
-        meas_layout1.addWidget(self.measure_i)
-
         self.measure_r = QCheckBox("Resistance")
-        meas_layout1.addWidget(self.measure_r)
-
-        meas_layout1.addStretch()
-        layout.addLayout(meas_layout1)
-
-        # What to measure - row 2
-        meas_layout2 = QHBoxLayout()
         self.measure_p = QCheckBox("Power")
-        meas_layout2.addWidget(self.measure_p)
+        FormRow(form, "Quantities", _hbox_widget(self.measure_v, self.measure_i,
+                                             self.measure_r, self.measure_p, spacing=12))
 
-        meas_layout2.addStretch()
-        layout.addLayout(meas_layout2)
-
-        # Range
-        range_layout = QHBoxLayout()
-        range_layout.addWidget(QLabel("Range:"))
         self.measure_range = QComboBox()
         self.measure_range.addItems(["Auto", "100 nA", "1 \u00b5A", "10 \u00b5A", "100 \u00b5A", "1 mA", "10 mA", "100 mA", "1 A", "3 A"])
-        range_layout.addWidget(self.measure_range)
-        range_layout.addStretch()
-        layout.addLayout(range_layout)
+        self.measure_range.setMinimumWidth(FIELD_WIDTH)
+        FormRow(form, "Range", self.measure_range)
 
-        # Auto Zero
-        az_layout = QHBoxLayout()
-        az_layout.addWidget(QLabel("Auto Zero:"))
         self.auto_zero = QComboBox()
         self.auto_zero.addItems(["On", "Off", "Once"])
-        az_layout.addWidget(self.auto_zero)
-        az_layout.addStretch()
-        self.auto_zero_row = QWidget()
-        self.auto_zero_row.setLayout(az_layout)
-        layout.addWidget(self.auto_zero_row)
+        self.auto_zero.setMinimumWidth(FIELD_WIDTH)
+        self.auto_zero_row = FormRow(form, "Auto zero", self.auto_zero)
         self.auto_zero_row.setVisible(registry.active().auto_zero)
 
 
@@ -986,53 +950,56 @@ class TimingSettingsWidget(QGroupBox):
     """Timing settings: NPLC, delay, points, repeat"""
 
     def __init__(self, parent=None):
-        super().__init__("Timing Settings", parent)
+        super().__init__("Timing", parent)
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QFormLayout(self)
+        layout = make_form()
+        self.setLayout(layout)
 
         self.points = QSpinBox()
         self.points.setRange(1, 10000000)
         self.points.setValue(51)
-        layout.addRow("Points:", self.points)
+        self.points.setMinimumWidth(FIELD_WIDTH)
+        FormRow(layout, "Points", self.points)
 
         self.repeat = QSpinBox()
         self.repeat.setRange(1, 1000)
         self.repeat.setValue(1)
-        layout.addRow("Repeat:", self.repeat)
+        self.repeat.setMinimumWidth(FIELD_WIDTH)
+        FormRow(layout, "Repeat", self.repeat)
 
-        delay_row = QHBoxLayout()
         self.delay = QDoubleSpinBox()
         self.delay.setRange(0, 10)
         self.delay.setDecimals(4)
         self.delay.setValue(0.05)
         self.delay.setSuffix(" s")
-        delay_row.addWidget(self.delay)
-        self.auto_delay_check = QCheckBox("Auto-adjust to step size")
+        self.delay.setMinimumWidth(FIELD_WIDTH)
+        self.auto_delay_check = QCheckBox("Match step size")
         self.auto_delay_check.setToolTip("When ticked, delay is computed so each point takes Step Size seconds")
         self.auto_delay_check.toggled.connect(self._on_auto_delay_toggled)
-        delay_row.addWidget(self.auto_delay_check)
-        layout.addRow("Delay:", delay_row)
+        FormRow(layout, "Delay", _hbox_widget(self.delay, self.auto_delay_check, spacing=10))
 
         self.step_size = QDoubleSpinBox()
         self.step_size.setRange(0.001, 60)
         self.step_size.setDecimals(4)
         self.step_size.setValue(1.0)
         self.step_size.setSuffix(" s")
+        self.step_size.setMinimumWidth(FIELD_WIDTH)
         self.step_size.setToolTip("Desired time between consecutive sweep points (window + delay)")
         self.step_size.valueChanged.connect(self._recompute_auto_delay)
-        layout.addRow("Step Size (dt):", self.step_size)
+        FormRow(layout, "Step (dt)", self.step_size)
 
         self.nplc = QDoubleSpinBox()
         self.nplc.setRange(0.001, 25)
         self.nplc.setDecimals(3)
         self.nplc.setValue(1.0)
+        self.nplc.setMinimumWidth(FIELD_WIDTH)
         self.nplc.valueChanged.connect(self._update_window)
-        layout.addRow("NPLC:", self.nplc)
+        FormRow(layout, "NPLC", self.nplc)
 
-        self.window_label = QLabel("20 ms")
-        layout.addRow("Window:", self.window_label)
+        self.window_label = theme.set_role(QLabel("20 ms"), "mono")
+        FormRow(layout, "Window", self.window_label)
 
     def _update_window(self):
         nplc = self.nplc.value()
@@ -1067,6 +1034,9 @@ class TimingSettingsWidget(QGroupBox):
         self.delay.blockSignals(False)
 
 
+UNTITLED = "Untitled experiment"
+
+
 class ExperimentsSidebar(QGroupBox):
     """Sidebar listing saved experiments with action buttons + notes."""
 
@@ -1079,7 +1049,8 @@ class ExperimentsSidebar(QGroupBox):
     notes_changed = pyqtSignal(str)
 
     def __init__(self, store: ExperimentStore, parent=None):
-        super().__init__("Experiments", parent)
+        super().__init__(parent)
+        theme.set_role(self, "plain")
         self.store = store
         self._current_name: Optional[str] = None
         self._dirty = False
@@ -1089,63 +1060,77 @@ class ExperimentsSidebar(QGroupBox):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 0, 8, 8)
+        layout.setSpacing(6)
 
-        self.current_label = QLabel("(Untitled)")
-        theme.set_role(self.current_label, "card-title")
-        layout.addWidget(self.current_label)
-
-        self.list_widget = QListWidget()
-        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
-        layout.addWidget(self.list_widget, stretch=1)
-
-        # Action buttons
-        btn_grid = QGridLayout()
-        btn_grid.setSpacing(4)
-
-        load_btn = QPushButton("Load")
-        load_btn.setToolTip("Load the selected experiment (also: double-click an item in the list)")
-        load_btn.clicked.connect(self._on_load_clicked)
-        btn_grid.addWidget(load_btn, 0, 0)
+        # Title with the actions beside it, then what is loaded now
+        head = QHBoxLayout()
+        head.setSpacing(4)
+        head.addWidget(theme.set_role(QLabel("Experiments"), "section"))
+        head.addStretch()
 
         new_btn = QPushButton("New")
         new_btn.setToolTip("Create a new experiment in the list (prompts for a name)")
         new_btn.clicked.connect(self._on_new_clicked)
-        btn_grid.addWidget(new_btn, 0, 1)
+        head.addWidget(new_btn)
 
-        save_btn = QPushButton("Save")
-        save_btn.setToolTip("Save current state to the loaded experiment (or prompt for a name if none)")
-        save_btn.clicked.connect(self._on_save_clicked)
-        btn_grid.addWidget(save_btn, 1, 0)
+        self.more_btn = theme.set_role(QToolButton(), "quiet")
+        self.more_btn.setText("\u22ef")
+        self.more_btn.setToolTip("More actions")
+        self.more_btn.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self.more_btn)
+        self._act_load = menu.addAction("Load selected", self._on_load_clicked)
+        menu.addSeparator()
+        self._act_save = menu.addAction("Save", self._on_save_clicked)
+        self._act_save.setShortcut(QKeySequence.Save)
+        menu.addAction("Save as\u2026", self._on_save_as_clicked)
+        menu.addAction("Rename\u2026", self._on_rename_clicked)
+        menu.addAction("Clone\u2026", self._on_clone_clicked)
+        menu.addSeparator()
+        menu.addAction("Delete\u2026", self._on_delete_clicked)
+        self.more_btn.setMenu(menu)
+        head.addWidget(self.more_btn)
+        layout.addLayout(head)
 
-        save_as_btn = QPushButton("Save As…")
-        save_as_btn.setToolTip("Save current state as a new experiment")
-        save_as_btn.clicked.connect(self._on_save_as_clicked)
-        btn_grid.addWidget(save_as_btn, 1, 1)
+        self.current_label = QLabel(UNTITLED)
+        theme.set_role(self.current_label, "card-title")
+        self.current_label.setWordWrap(True)
+        layout.addWidget(self.current_label)
 
-        rename_btn = QPushButton("Rename")
-        rename_btn.setToolTip("Rename the loaded experiment (or name an untitled one)")
-        rename_btn.clicked.connect(self._on_rename_clicked)
-        btn_grid.addWidget(rename_btn, 2, 0)
+        # Save works from anywhere in the window, not only from the menu
+        save_shortcut = QShortcut(QKeySequence.Save, self)
+        save_shortcut.setContext(Qt.WindowShortcut)
+        save_shortcut.activated.connect(self._on_save_clicked)
 
-        clone_btn = QPushButton("Clone")
-        clone_btn.setToolTip("Duplicate the selected experiment under a new name")
-        clone_btn.clicked.connect(self._on_clone_clicked)
-        btn_grid.addWidget(clone_btn, 2, 1)
+        self.list_widget = QListWidget()
+        theme.set_role(self.list_widget, "flat")
+        self.list_widget.setFrameShape(QFrame.NoFrame)
+        self.list_widget.setToolTip("Double-click to load. Right-click for more.")
+        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self._on_list_menu)
+        layout.addWidget(self.list_widget, stretch=1)
 
-        delete_btn = QPushButton("Delete")
-        delete_btn.setToolTip("Delete the selected experiment (data CSVs are kept)")
-        delete_btn.clicked.connect(self._on_delete_clicked)
-        btn_grid.addWidget(delete_btn, 3, 0, 1, 2)
-
-        layout.addLayout(btn_grid)
-
-        layout.addWidget(QLabel("Notes:"))
+        layout.addWidget(theme.set_role(QLabel("Notes"), "section"))
         self.notes = QTextEdit()
-        self.notes.setMaximumHeight(120)
-        self.notes.setPlaceholderText("Free-text notes for this experiment…")
+        self.notes.setMaximumHeight(110)
+        self.notes.setPlaceholderText("Free-text notes for this experiment\u2026")
         self.notes.textChanged.connect(lambda: self.notes_changed.emit(self.notes.toPlainText()))
         layout.addWidget(self.notes)
+
+    def _on_list_menu(self, pos):
+        item = self.list_widget.itemAt(pos)
+        if item is None:
+            return
+        self.list_widget.setCurrentItem(item)
+        menu = QMenu(self)
+        menu.addAction("Load", self._on_load_clicked)
+        if item.text() == self._current_name:
+            menu.addAction("Rename\u2026", self._on_rename_clicked)
+        menu.addAction("Clone\u2026", self._on_clone_clicked)
+        menu.addSeparator()
+        menu.addAction("Delete\u2026", self._on_delete_clicked)
+        menu.exec_(self.list_widget.viewport().mapToGlobal(pos))
 
     # --- public API used by main window ---
 
@@ -1191,9 +1176,9 @@ class ExperimentsSidebar(QGroupBox):
     # --- internal handlers ---
 
     def _update_label(self):
-        name = self._current_name or "(Untitled)"
-        dot = "● " if self._dirty else ""
-        self.current_label.setText(f"{dot}{name}")
+        name = self._current_name or UNTITLED
+        self.current_label.setText(f"{name} \u2022" if self._dirty else name)
+        self.current_label.setToolTip("Unsaved changes" if self._dirty else "")
 
     def _selected_name(self) -> Optional[str]:
         items = self.list_widget.selectedItems()
@@ -1308,85 +1293,91 @@ class ExperimentsSidebar(QGroupBox):
             self.delete_requested.emit(name)
 
 
-class SweepListWidget(QGroupBox):
+class SweepListWidget(QWidget):
     """Sweep list management with table"""
 
     list_changed = pyqtSignal(int)
     wave_generator_requested = pyqtSignal()
 
     def __init__(self, parent=None):
-        super().__init__("Sweep Values", parent)
-        self._setup_ui()
+        super().__init__(parent)
         self.sweep_values = []
+        self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
-        self.table = QTableWidget()
-        self.table.setColumnCount(2)
-        self.table.setHorizontalHeaderLabels(["#", "Value"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setMaximumHeight(200)
-        layout.addWidget(self.table)
-
-        # Linear sweep settings (form layout so labels stack above values when narrow)
-        linear_form = QFormLayout()
-        linear_form.setLabelAlignment(Qt.AlignLeft)
-        linear_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        self.start_val = QDoubleSpinBox()
+        # Range to generate from
+        gen_row = QHBoxLayout()
+        gen_row.setSpacing(6)
         _v = registry.active().max_voltage
+        self.start_val = QDoubleSpinBox()
         self.start_val.setRange(-_v, _v)
         self.start_val.setDecimals(4)
         self.start_val.setValue(0)
-        linear_form.addRow("Start:", self.start_val)
-
         self.stop_val = QDoubleSpinBox()
         self.stop_val.setRange(-_v, _v)
         self.stop_val.setDecimals(4)
         self.stop_val.setValue(5)
-        linear_form.addRow("Stop:", self.stop_val)
-
         self.num_points = QSpinBox()
         self.num_points.setRange(2, 10000)
         self.num_points.setValue(51)
-        linear_form.addRow("Points:", self.num_points)
-
-        layout.addLayout(linear_form)
-
-        # Buttons - Row 1: Generate
-        btn_layout1 = QHBoxLayout()
-        gen_btn = QPushButton("Linear")
+        for label, box in (("Start", self.start_val), ("Stop", self.stop_val), ("Points", self.num_points)):
+            if gen_row.count():
+                gen_row.addSpacing(8)
+            gen_row.addWidget(theme.set_role(QLabel(label), "muted"))
+            box.setMinimumWidth(96)
+            gen_row.addWidget(box)
+        gen_row.addSpacing(8)
+        gen_btn = QPushButton("Fill linear")
+        gen_btn.setToolTip("Fill the list with evenly spaced values from Start to Stop")
         gen_btn.clicked.connect(self._generate_linear)
-        btn_layout1.addWidget(gen_btn)
-
-        log_btn = QPushButton("Log")
+        gen_row.addWidget(gen_btn)
+        log_btn = QPushButton("Fill log")
+        log_btn.setToolTip("Fill the list with log-spaced values (Start and Stop must be positive)")
         log_btn.clicked.connect(self._generate_log)
-        btn_layout1.addWidget(log_btn)
+        gen_row.addWidget(log_btn)
+        gen_row.addStretch()
+        layout.addLayout(gen_row)
 
-        layout.addLayout(btn_layout1)
+        # The list itself
+        self.table = QTableWidget()
+        self.table.setColumnCount(2)
+        self.table.setHorizontalHeaderLabels(["#", "Value"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(22)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setFont(theme.mono_font(12))
+        layout.addWidget(self.table, stretch=1)
 
-        # Buttons - Row 2: Import/Export/Clear
-        btn_layout2 = QHBoxLayout()
-        import_btn = QPushButton("Import")
+        self.empty_hint = theme.set_role(QLabel(
+            "Empty. Linear and log sweeps use Start, Stop and Points above; this list is "
+            "only used when Mode is List Sweep. Fill it, import a CSV, or design a waveform."), "faint")
+        self.empty_hint.setWordWrap(True)
+        layout.addWidget(self.empty_hint)
+
+        # List actions
+        act_row = QHBoxLayout()
+        act_row.setSpacing(6)
+        import_btn = QPushButton("Import\u2026")
         import_btn.clicked.connect(self._import_csv)
-        btn_layout2.addWidget(import_btn)
-
-        export_btn = QPushButton("Export")
+        act_row.addWidget(import_btn)
+        export_btn = QPushButton("Export\u2026")
         export_btn.clicked.connect(self._export_csv)
-        btn_layout2.addWidget(export_btn)
-
+        act_row.addWidget(export_btn)
         clear_btn = QPushButton("Clear")
         clear_btn.clicked.connect(self._clear)
-        btn_layout2.addWidget(clear_btn)
-
-        layout.addLayout(btn_layout2)
-
-        # Custom Signal Design button (fills the column so it never overflows)
-        wave_btn = QPushButton("Custom Signal Design")
-        wave_btn.setMinimumWidth(0)
-        wave_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        act_row.addWidget(clear_btn)
+        act_row.addStretch()
+        wave_btn = QPushButton("Design waveform\u2026")
+        wave_btn.setToolTip("Build a sine, square or custom multi-segment heater waveform")
         wave_btn.clicked.connect(self.wave_generator_requested.emit)
-        layout.addWidget(wave_btn)
+        act_row.addWidget(wave_btn)
+        layout.addLayout(act_row)
 
     def _generate_linear(self):
         start = self.start_val.value()
@@ -1438,9 +1429,15 @@ class SweepListWidget(QGroupBox):
 
     def _update_table(self):
         self.table.setRowCount(len(self.sweep_values))
+        right = Qt.AlignRight | Qt.AlignVCenter
         for i, val in enumerate(self.sweep_values):
-            self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
-            self.table.setItem(i, 1, QTableWidgetItem(f"{val:.6f}"))
+            idx = QTableWidgetItem(str(i + 1))
+            idx.setTextAlignment(right)
+            self.table.setItem(i, 0, idx)
+            cell = QTableWidgetItem(f"{val:.6f}")
+            cell.setTextAlignment(right)
+            self.table.setItem(i, 1, cell)
+        self.empty_hint.setVisible(not self.sweep_values)
         self.list_changed.emit(len(self.sweep_values))
 
     def get_values(self) -> List[float]:
@@ -1488,7 +1485,8 @@ class DualAxisGraph(pg.PlotWidget):
         self.plotItem.scene().addItem(self.view_box2)
         self.plotItem.getAxis('right').linkToView(self.view_box2)
         self.view_box2.setXLink(self.plotItem)
-        self.plotItem.showAxis('right')
+        self.plotItem.hideAxis('right')   # Y2 starts as "None"
+        theme.style_axis(self.plotItem.getAxis('right'))
 
         self.curve1 = self.plot([], [], pen=theme.pen(self.COLORS["Current"]), name='Y1')
         self.curve2 = pg.PlotDataItem([], [], pen=theme.pen(self.COLORS["Resistance"]), name='Y2')
@@ -1530,6 +1528,7 @@ class DualAxisGraph(pg.PlotWidget):
             self.plotItem.showAxis('right')
         else:
             self.plotItem.hideAxis('right')
+            self.curve2.setData([], [])
 
         self._update_plot()
 
@@ -1581,38 +1580,75 @@ class DualAxisGraph(pg.PlotWidget):
         self.view_box2.enableAutoRange()
 
 
+def si_format(value: Optional[float], unit: str, digits: int = 6) -> str:
+    """Engineering notation with an SI prefix: 0.0150064 A -> '15.0064 mA'."""
+    if value is None:
+        return ""
+    if value == 0:
+        return f"0 {unit}"
+    prefixes = ((1e9, "G"), (1e6, "M"), (1e3, "k"), (1, ""), (1e-3, "m"),
+                (1e-6, "\u00b5"), (1e-9, "n"), (1e-12, "p"), (1e-15, "f"))
+    mag = abs(value)
+    for scale, prefix in prefixes:
+        if mag >= scale:
+            break
+    scaled = value / scale
+    int_digits = len(str(int(abs(scaled))))
+    return f"{scaled:.{max(0, digits - int_digits)}f} {prefix}{unit}"
+
+
 class DataTableWidget(QTableWidget):
-    """Data table with Channel column and export capability"""
+    """Sweep results as they arrive. Display only — the CSV is written from the
+    measurement data at full precision, never from these cells."""
+
+    COLUMNS = ['#', 'Channel', 'Time', 'Elapsed (s)', 'Voltage', 'Current', 'Resistance', 'Power']
+    _R_COL, _P_COL = 6, 7
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setColumnCount(8)
-        self.setHorizontalHeaderLabels(['#', 'Channel', 'Computer Time', 'Elapsed (s)', 'Voltage (V)', 'Current (A)', 'Resistance (\u03a9)', 'Power (mW)'])
+        self.setColumnCount(len(self.COLUMNS))
+        self.setHorizontalHeaderLabels(self.COLUMNS)
+        self.verticalHeader().setVisible(False)
+        self.verticalHeader().setDefaultSectionSize(22)
+        self.setFont(theme.mono_font(12))
 
         header = self.horizontalHeader()
-        for i in range(8):
-            header.setSectionResizeMode(i, QHeaderView.Stretch)
+        for i in range(len(self.COLUMNS)):
+            header.setSectionResizeMode(
+                i, QHeaderView.ResizeToContents if i < 4 else QHeaderView.Stretch)
+        for i in (self._R_COL, self._P_COL):
+            self.setColumnHidden(i, True)   # shown once a value arrives
 
         self.setAlternatingRowColors(True)
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
 
     def add_point(self, point: MeasurementPoint):
         row = self.rowCount()
         self.insertRow(row)
 
-        self.setItem(row, 0, QTableWidgetItem(str(point.index)))
-        self.setItem(row, 1, QTableWidgetItem(point.channel.upper()))
-        self.setItem(row, 2, QTableWidgetItem(point.computer_time))
-        self.setItem(row, 3, QTableWidgetItem(f"{point.timestamp:.3f}"))
-        self.setItem(row, 4, QTableWidgetItem(f"{point.voltage:.9e}" if point.voltage else ""))
-        self.setItem(row, 5, QTableWidgetItem(f"{point.current:.9e}" if point.current else ""))
-        self.setItem(row, 6, QTableWidgetItem(f"{point.resistance:.4e}" if point.resistance and abs(point.resistance) < 1e12 else ""))
-        self.setItem(row, 7, QTableWidgetItem(f"{point.power*1000:.6e}" if point.power else ""))
+        r = point.resistance if point.resistance and abs(point.resistance) < 1e12 else None
+        clock = point.computer_time.split(" ")[-1] if point.computer_time else ""
+        cells = [str(point.index), point.channel.upper(), clock, f"{point.timestamp:.3f}",
+                 si_format(point.voltage or None, "V"), si_format(point.current or None, "A"),
+                 si_format(r, "\u03a9"), si_format(point.power or None, "W")]
+        right = Qt.AlignRight | Qt.AlignVCenter
+        for col, text in enumerate(cells):
+            item = QTableWidgetItem(text)
+            if col != 1:
+                item.setTextAlignment(right)
+            self.setItem(row, col, item)
+        if r is not None:
+            self.setColumnHidden(self._R_COL, False)
+        if point.power:
+            self.setColumnHidden(self._P_COL, False)
 
         self.scrollToBottom()
 
     def clear_data(self):
         self.setRowCount(0)
+        for i in (self._R_COL, self._P_COL):
+            self.setColumnHidden(i, True)
 
 
 class ConnectionDialog(QDialog):
@@ -1627,18 +1663,14 @@ class ConnectionDialog(QDialog):
         super().__init__(parent)
         self.app = parent
         self.setWindowTitle("Connect")
-        self.setMinimumSize(640, 600)
+        self.setMinimumSize(600, 560)
         self._setup_ui()
         self._refresh_calorimeter_status()
 
     def _setup_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(22, 20, 22, 18)
-        outer.setSpacing(4)
-        outer.addWidget(theme.set_role(QLabel("Connect"), "title"))
-        outer.addWidget(theme.set_role(QLabel(
-            "Choose your source meter and how it is attached. The calorimeter is optional."),
-            "muted"))
+        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setSpacing(6)
 
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs, stretch=1)
@@ -1646,7 +1678,7 @@ class ConnectionDialog(QDialog):
         # ---- Source meter tab ---------------------------------------------
         smu_page = QWidget()
         smu_layout = QVBoxLayout(smu_page)
-        smu_layout.setContentsMargins(2, 12, 2, 2)
+        smu_layout.setContentsMargins(0, 10, 0, 0)
         settings = getattr(self.app, "settings", None)
         self.smu_panel = SMUConnectPanel(settings=settings)
         self.smu_panel.connect_requested.connect(self._on_smu_connect)
@@ -1655,117 +1687,149 @@ class ConnectionDialog(QDialog):
 
         # ---- Calorimeter tab ----------------------------------------------
         cal_page = QWidget()
-        layout = QVBoxLayout(cal_page)   # the calorimeter code below adds to `layout`
-        layout.setContentsMargins(2, 12, 2, 2)
+        cal_layout = QVBoxLayout(cal_page)
+        cal_layout.setContentsMargins(0, 10, 0, 0)
+        cal_layout.setSpacing(8)
         self.tabs.addTab(cal_page, "Calorimeter")
 
-        cal_group = QGroupBox("Calorimeter (read-only monitor)")
-        cal_layout = QVBoxLayout(cal_group)
+        # Instrument: cards drive a hidden combo, which the handlers read
+        cal_layout.addWidget(theme.set_role(QLabel("Instrument"), "section"))
+        self.cal_combo = QComboBox()
+        self.cal_combo.hide()
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(6)
+        self._cal_cards = {}
+        signal_names = {"hf": "heat flow", "t": "sample T", "ext_t": "external T"}
+        for name, spec in CALORIMETERS.items():
+            self.cal_combo.addItem(name)
+            summary = ", ".join(signal_names.get(k, k) for k in spec["channels"])
+            summary = summary[:1].upper() + summary[1:]
+            card = ChoiceCard(name, summary)
+            card.clicked.connect(lambda n=name: self.cal_combo.setCurrentText(n))
+            self._cal_cards[name] = card
+            cards_row.addWidget(card)
+        self.cal_combo.currentTextChanged.connect(self._sync_cal_cards)
+        cal_layout.addLayout(cards_row)
+        self._sync_cal_cards(self.cal_combo.currentText())
 
-        cal_setup_row = QHBoxLayout()
-        cal_setup_row.addWidget(QLabel("Setup:"))
+        # How: connect directly, or watch Calisto's traffic
+        mode_row = QHBoxLayout()
+        mode_row.setContentsMargins(0, 4, 0, 0)
+        mode_row.addWidget(theme.set_role(QLabel("Mode"), "section"))
+        mode_row.addStretch()
+        self.cal_direct_btn = ToggleButton("Direct")
+        self.cal_direct_btn.setToolTip(
+            "Connects to the instrument itself. Exclusive: close Calisto first.")
+        self.cal_sniff_btn = ToggleButton("Sniff")
+        self.cal_sniff_btn.setToolTip(
+            "Never connects; watches the traffic Calisto's own polling generates, so\n"
+            "Calisto stays connected. Needs Npcap and this program run as Administrator.")
+        mode_row.addWidget(theme.segmented(self.cal_direct_btn, self.cal_sniff_btn))
+        cal_layout.addLayout(mode_row)
+        # The checkbox stays the source of truth the handlers read; the
+        # segmented switch is how it is shown and set.
+        self.cal_sniff_check = QCheckBox()
+        self.cal_sniff_check.hide()
+        self.cal_sniff_check.toggled.connect(self._on_cal_sniff_toggled)
+        self.cal_direct_btn.clicked.connect(lambda: self.cal_sniff_check.setChecked(False))
+        self.cal_sniff_btn.clicked.connect(lambda: self.cal_sniff_check.setChecked(True))
+
+        details = QGroupBox("Connection")
+        form = make_form()
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        details.setLayout(form)
+
         self.cal_setup_combo = QComboBox()
         self.cal_setup_combo.setToolTip(
             "A saved setup remembers this instrument's IP, the capture adapter,\n"
             "and the signal profile that says what its replies mean.\n"
-            "Build one with New… — it watches the traffic and shows you what it finds."
+            "Build one with New\u2026 \u2014 it watches the traffic and shows you what it finds."
         )
         self.cal_setup_combo.currentIndexChanged.connect(self._on_cal_setup_selected)
-        cal_setup_row.addWidget(self.cal_setup_combo, stretch=1)
-        self.cal_setup_new_btn = QPushButton("New…")
+        self.cal_setup_new_btn = QPushButton("New\u2026")
         self.cal_setup_new_btn.clicked.connect(lambda: self._on_cal_setup_edit(True))
-        cal_setup_row.addWidget(self.cal_setup_new_btn)
-        self.cal_setup_edit_btn = QPushButton("Edit…")
+        self.cal_setup_edit_btn = QPushButton("Edit\u2026")
         self.cal_setup_edit_btn.clicked.connect(lambda: self._on_cal_setup_edit(False))
-        cal_setup_row.addWidget(self.cal_setup_edit_btn)
         self.cal_setup_del_btn = QPushButton("Delete")
         self.cal_setup_del_btn.clicked.connect(self._on_cal_setup_delete)
-        cal_setup_row.addWidget(self.cal_setup_del_btn)
-        cal_layout.addLayout(cal_setup_row)
+        setup_field = QWidget()
+        sl = QHBoxLayout(setup_field)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(6)
+        sl.addWidget(self.cal_setup_combo, stretch=1)
+        for b in (self.cal_setup_new_btn, self.cal_setup_edit_btn, self.cal_setup_del_btn):
+            sl.addWidget(b)
+        FormRow(form, "Saved setup", setup_field)
 
-        cal_pick_row = QHBoxLayout()
-        cal_pick_row.addWidget(QLabel("Instrument:"))
-        self.cal_combo = QComboBox()
-        for name in CALORIMETERS.keys():
-            self.cal_combo.addItem(name)
-        cal_pick_row.addWidget(self.cal_combo, stretch=1)
-        cal_layout.addLayout(cal_pick_row)
-
-        cal_host_row = QHBoxLayout()
-        cal_host_row.addWidget(QLabel("Host:"))
         self.cal_host = QLineEdit()
-        self.cal_host.setPlaceholderText("169.254.x.x (click Discover)")
-        cal_host_row.addWidget(self.cal_host, stretch=1)
-        self.cal_discover_btn = QPushButton("Discover")
+        self.cal_host.setPlaceholderText("169.254.x.x \u2014 or use Find")
+        self.cal_discover_btn = QPushButton("Find")
         self.cal_discover_btn.setToolTip(
             "Look up the selected calorimeter's IP in the OS ARP cache using its\n"
             "fixed MAC. Requires that Calisto has recently talked to the instrument."
         )
         self.cal_discover_btn.clicked.connect(self._on_calorimeter_discover)
-        cal_host_row.addWidget(self.cal_discover_btn)
-        cal_layout.addLayout(cal_host_row)
+        host_field = QWidget()
+        hl = QHBoxLayout(host_field)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(6)
+        hl.addWidget(self.cal_host, stretch=1)
+        hl.addWidget(self.cal_discover_btn)
+        FormRow(form, "Address", host_field)
 
-        cal_mode_row = QHBoxLayout()
-        self.cal_sniff_check = QCheckBox("Sniff mode (watch traffic — Calisto stays connected)")
-        self.cal_sniff_check.setToolTip(
-            "Off: connects directly to the instrument (exclusive — Calisto must be closed).\n"
-            "On: never connects, just watches the traffic Calisto's own polling generates.\n"
-            "Needs Npcap installed and this app run as Administrator."
-        )
-        self.cal_sniff_check.toggled.connect(self._on_cal_sniff_toggled)
-        cal_mode_row.addWidget(self.cal_sniff_check)
-        cal_mode_row.addStretch()
-        cal_layout.addLayout(cal_mode_row)
-
-        cal_iface_row = QHBoxLayout()
-        cal_iface_row.addWidget(QLabel("Capture interface:"))
         self.cal_iface_combo = QComboBox()
         self.cal_iface_combo.addItem("Auto-detect (may guess wrong)", None)
         self.cal_iface_combo.setToolTip(
             "Which network adapter to capture on. Auto-detect matches by subnet and can\n"
-            "pick the wrong one (e.g. a Bluetooth adapter) — pick the real NIC by hand if so."
+            "pick the wrong one (e.g. a Bluetooth adapter) \u2014 pick the real NIC by hand if so."
         )
-        cal_iface_row.addWidget(self.cal_iface_combo, stretch=1)
         self.cal_iface_refresh_btn = QPushButton("Refresh")
         self.cal_iface_refresh_btn.clicked.connect(self._refresh_cal_interfaces)
-        cal_iface_row.addWidget(self.cal_iface_refresh_btn)
-        cal_layout.addLayout(cal_iface_row)
+        iface_field = QWidget()
+        il = QHBoxLayout(iface_field)
+        il.setContentsMargins(0, 0, 0, 0)
+        il.setSpacing(6)
+        il.addWidget(self.cal_iface_combo, stretch=1)
+        il.addWidget(self.cal_iface_refresh_btn)
+        self._cal_iface_row = FormRow(form, "Capture on", iface_field)
         self.cal_iface_combo.setEnabled(False)
         self.cal_iface_refresh_btn.setEnabled(False)
         self._refresh_cal_setups()
 
-        cal_ctrl_row = QHBoxLayout()
-        cal_ctrl_row.addWidget(QLabel("Poll (s):"))
         self.cal_interval = QDoubleSpinBox()
         self.cal_interval.setRange(0.5, 60.0)
         self.cal_interval.setValue(1.0)
         self.cal_interval.setSingleStep(0.5)
         self.cal_interval.setDecimals(1)
-        cal_ctrl_row.addWidget(self.cal_interval)
-        cal_ctrl_row.addSpacing(20)
-        self.cal_connect_btn = QPushButton("Connect Calorimeter")
-        self.cal_connect_btn.setToolTip(
-            "The C80/Drop accepts only one TCP client at a time — close Calisto\n"
-            "before connecting. Reopen it afterwards to save data via Calisto.\n"
-            "(Tick 'Sniff mode' above to record while Calisto stays connected instead.)"
-        )
-        self.cal_connect_btn.clicked.connect(self._on_calorimeter_connect_toggle)
-        cal_ctrl_row.addWidget(self.cal_connect_btn)
-        cal_ctrl_row.addStretch()
-        cal_layout.addLayout(cal_ctrl_row)
+        self.cal_interval.setSuffix(" s")
+        self.cal_interval.setMinimumWidth(FIELD_WIDTH)
+        self._cal_poll_row = FormRow(form, "Poll every", self.cal_interval)
+        cal_layout.addWidget(details)
 
+        cal_layout.addStretch()
+
+        # Footer: status on the left, the action on the right
+        foot = QHBoxLayout()
+        foot.setSpacing(8)
         self.cal_status_label = QLabel("Not connected")
         theme.set_role(self.cal_status_label, "muted")
-        cal_layout.addWidget(self.cal_status_label)
-
-        cal_note = QLabel(
-            "Read-only monitor. Configure and start experiments in Calisto first."
+        self.cal_status_label.setWordWrap(True)
+        foot.addWidget(self.cal_status_label, stretch=1)
+        self.cal_connect_btn = theme.set_role(QPushButton("Connect calorimeter"), "primary")
+        self.cal_connect_btn.setToolTip(
+            "The C80/Drop accepts only one TCP client at a time \u2014 close Calisto\n"
+            "before connecting. Reopen it afterwards to save data via Calisto.\n"
+            "(Choose Sniff above to record while Calisto stays connected instead.)"
         )
+        self.cal_connect_btn.clicked.connect(self._on_calorimeter_connect_toggle)
+        foot.addWidget(self.cal_connect_btn)
+        cal_layout.addLayout(foot)
+
+        cal_note = QLabel("Read-only monitor. Configure and start experiments in Calisto first.")
         theme.set_role(cal_note, "faint")
         cal_layout.addWidget(cal_note)
 
-        layout.addWidget(cal_group)
-        layout.addStretch()
+        self._on_cal_sniff_toggled(False)
 
         close_row = QHBoxLayout()
         close_row.addStretch()
@@ -1773,6 +1837,10 @@ class ConnectionDialog(QDialog):
         close_btn.clicked.connect(self.reject)
         close_row.addWidget(close_btn)
         outer.addLayout(close_row)
+
+    def _sync_cal_cards(self, name: str):
+        for key, card in self._cal_cards.items():
+            card.set_selected(key == name)
 
     # ---- Calorimeter handlers ----
 
@@ -1800,7 +1868,7 @@ class ConnectionDialog(QDialog):
         current = self.cal_setup_combo.currentData()
         self.cal_setup_combo.blockSignals(True)
         self.cal_setup_combo.clear()
-        self.cal_setup_combo.addItem("(none — configure by hand below)", None)
+        self.cal_setup_combo.addItem("None \u2014 fill in below", None)
         for name in self._setup_store().names():
             self.cal_setup_combo.addItem(name, name)
         if current:
@@ -1868,9 +1936,14 @@ class ConnectionDialog(QDialog):
             self._refresh_cal_setups()
 
     def _on_cal_sniff_toggled(self, checked: bool):
+        self.cal_direct_btn.set_selected(not checked)
+        self.cal_sniff_btn.set_selected(checked)
+        # Only the rows that apply to the chosen mode are shown.
+        self._cal_poll_row.setVisible(not checked)
+        self._cal_iface_row.setVisible(checked)
         self.cal_interval.setEnabled(not checked)
         self.cal_connect_btn.setText(
-            "Start Sniffing" if checked else "Connect Calorimeter"
+            "Start sniffing" if checked else "Connect calorimeter"
         )
         self.cal_iface_combo.setEnabled(checked)
         self.cal_iface_refresh_btn.setEnabled(checked)
@@ -1902,9 +1975,9 @@ class ConnectionDialog(QDialog):
         if sniff:
             setup_for_profile = self._selected_setup()
             if setup_for_profile is None and not sniff_available(name):
-                QMessageBox.warning(self, "No Sniff Profile",
+                QMessageBox.warning(self, "No sniff profile",
                     f"No traffic-decoding profile is bundled for {name}.\n\n"
-                    "Use New… beside Setup to build one by watching the traffic.")
+                    "Use New\u2026 beside Saved setup to build one by watching the traffic.")
                 return
             readiness = sniff_capture_readiness()
             if not readiness.ok:
@@ -1946,13 +2019,19 @@ class ConnectionDialog(QDialog):
             self.cal_status_label.setText(f"{mode.capitalize()}: {name} @ {host}")
             theme.set_role(self.cal_status_label, "ok")
             self.cal_connect_btn.setText(
-                "Stop Sniffing" if self.app.calorimeter_sniffing else "Disconnect Calorimeter"
+                "Stop sniffing" if self.app.calorimeter_sniffing else "Disconnect calorimeter"
             )
+            theme.set_role(self.cal_connect_btn, "danger")
             self.cal_sniff_check.setEnabled(False)
+            self.cal_direct_btn.setEnabled(False)
+            self.cal_sniff_btn.setEnabled(False)
             self.cal_iface_combo.setEnabled(False)
             self.cal_iface_refresh_btn.setEnabled(False)
         else:
             self.cal_sniff_check.setEnabled(True)
+            self.cal_direct_btn.setEnabled(True)
+            self.cal_sniff_btn.setEnabled(True)
+            theme.set_role(self.cal_connect_btn, "primary")
             self._on_cal_sniff_toggled(self.cal_sniff_check.isChecked())
             # leave the last status message visible
 
@@ -1976,21 +2055,22 @@ class SafetyDialog(QDialog):
         self.model = model
         self.caps = registry.get(model)
         self.limits = limits if limits is not None else SMU.default_limits(model)
-        self.setWindowTitle("Safety Settings")
-        self.setMinimumWidth(400)
+        self.setWindowTitle("Safety limits")
+        self.setMinimumWidth(380)
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
 
-        layout.addWidget(theme.set_role(QLabel("Safety limits"), "heading"))
         note = theme.set_role(QLabel(
             f"For the {self.caps.display_name}. Every source command is checked "
             f"against these before it reaches the instrument."), "muted")
         note.setWordWrap(True)
         layout.addWidget(note)
 
-        form = QFormLayout()
+        form = make_form()
 
         self.max_voltage = QDoubleSpinBox()
         v_max = self.caps.max_voltage
@@ -1999,44 +2079,50 @@ class SafetyDialog(QDialog):
         self.max_voltage.setRange(0.1, v_max)
         self.max_voltage.setValue(self.limits.max_voltage)
         self.max_voltage.setSuffix(" V")
-        form.addRow("Max Voltage:", self.max_voltage)
+        FormRow(form, "Max voltage", self.max_voltage)
 
         self.min_voltage = QDoubleSpinBox()
         self.min_voltage.setRange(-v_max, 0)
         self.min_voltage.setValue(self.limits.min_voltage)
         self.min_voltage.setSuffix(" V")
-        form.addRow("Min Voltage:", self.min_voltage)
+        FormRow(form, "Min voltage", self.min_voltage)
 
         self.max_current = QDoubleSpinBox()
         self.max_current.setRange(1e-6, i_max)
         self.max_current.setDecimals(6)
         self.max_current.setValue(self.limits.max_current)
         self.max_current.setSuffix(" A")
-        form.addRow("Max Current:", self.max_current)
+        FormRow(form, "Max current", self.max_current)
 
         self.min_current = QDoubleSpinBox()
         self.min_current.setRange(-i_max, 0)
         self.min_current.setDecimals(6)
         self.min_current.setValue(self.limits.min_current)
         self.min_current.setSuffix(" A")
-        form.addRow("Min Current:", self.min_current)
+        FormRow(form, "Min current", self.min_current)
 
         self.power_limit = QDoubleSpinBox()
         self.power_limit.setRange(0.01, p_max)
         self.power_limit.setValue(self.limits.power_limit)
         self.power_limit.setSuffix(" W")
-        form.addRow("Max Power:", self.power_limit)
+        FormRow(form, "Max power", self.power_limit)
 
+        for box in (self.max_voltage, self.min_voltage, self.max_current,
+                    self.min_current, self.power_limit):
+            box.setMinimumWidth(FIELD_WIDTH)
         layout.addLayout(form)
 
         btn_layout = QHBoxLayout()
-        ok_btn = theme.set_role(QPushButton("Apply"), "primary")
-        ok_btn.clicked.connect(self.accept)
-        btn_layout.addWidget(ok_btn)
-
+        btn_layout.setSpacing(6)
+        btn_layout.addStretch()
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
+
+        ok_btn = theme.set_role(QPushButton("Apply"), "primary")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(ok_btn)
 
         layout.addLayout(btn_layout)
 
@@ -2055,22 +2141,21 @@ class LicenseDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"{__app_name__} - License Agreement")
+        self.setWindowTitle(f"{__app_name__} \u2013 license agreement")
         self.setMinimumSize(600, 500)
         self.setModal(True)
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
 
-        title = QLabel(f"<h2>{__app_name__}</h2>")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
-
-        layout.addWidget(QLabel("Please read and accept the following license agreement:"))
+        layout.addWidget(theme.set_role(QLabel("Read and accept the license to continue."), "muted"))
 
         license_text = QTextEdit()
         license_text.setReadOnly(True)
+        license_text.setFont(theme.mono_font(11))
         license_text.setPlainText(self._get_license_text())
         layout.addWidget(license_text)
 
@@ -2078,14 +2163,16 @@ class LicenseDialog(QDialog):
         layout.addWidget(self.accept_check)
 
         btn_layout = QHBoxLayout()
-        self.accept_btn = QPushButton("Accept")
-        self.accept_btn.setEnabled(False)
-        self.accept_btn.clicked.connect(self.accept)
-        btn_layout.addWidget(self.accept_btn)
-
+        btn_layout.setSpacing(6)
+        btn_layout.addStretch()
         decline_btn = QPushButton("Decline")
         decline_btn.clicked.connect(self.reject)
         btn_layout.addWidget(decline_btn)
+
+        self.accept_btn = theme.set_role(QPushButton("Accept"), "primary")
+        self.accept_btn.setEnabled(False)
+        self.accept_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(self.accept_btn)
 
         layout.addLayout(btn_layout)
 
@@ -2151,9 +2238,9 @@ class WaveToolDialog(QDialog):
 
     def __init__(self, parent=None, get_resistance_fn=None):
         super().__init__(parent)
-        self.setWindowTitle("Custom Signal Design")
-        self.setMinimumSize(520, 600)
-        self.resize(1050, 800)
+        self.setWindowTitle("Design waveform")
+        self.setMinimumSize(900, 640)
+        self.resize(1080, 800)
         self.waveform_values = []
         self.time_values = []
         self.segments = []
@@ -2162,6 +2249,12 @@ class WaveToolDialog(QDialog):
         self._live_r_timer = QTimer(self)
         self._live_r_timer.setInterval(500)
         self._live_r_timer.timeout.connect(self._pull_live_resistance)
+        # The preview follows every edit, after a short pause so typing a
+        # number does not recompute on each keystroke.
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(150)
+        self._preview_timer.timeout.connect(lambda: self._preview(quiet=True))
         self._setup_ui()
 
     def _default_segment(self):
@@ -2173,170 +2266,180 @@ class WaveToolDialog(QDialog):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
 
-        title = QLabel("<h2>Custom Signal Design</h2>")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        # --- Heater and output ---
+        global_group = QGroupBox("Heater and output")
+        global_form = make_form()
+        global_group.setLayout(global_form)
 
-        # --- Global Settings ---
-        global_group = QGroupBox("Global Settings")
-        global_form = QFormLayout()
-
-        res_layout = QHBoxLayout()
         self.resistance = QDoubleSpinBox()
         self.resistance.setRange(0.1, 1e9)
         self.resistance.setValue(10)
         self.resistance.setDecimals(2)
-        res_layout.addWidget(self.resistance)
+        self.resistance.setMinimumWidth(FIELD_WIDTH)
         self.res_unit = QComboBox()
         self.res_unit.addItems(["\u03a9", "k\u03a9"])
-        res_layout.addWidget(self.res_unit)
         self.measure_r_btn = QPushButton("Measure R")
         self.measure_r_btn.setToolTip("Read current R from the multimeter and fill the field")
         self.measure_r_btn.clicked.connect(self._measure_resistance_once)
-        res_layout.addWidget(self.measure_r_btn)
         self.live_r_check = QCheckBox("Live R")
         self.live_r_check.setToolTip("Continuously update R from the multimeter (must be running)")
         self.live_r_check.toggled.connect(self._toggle_live_resistance)
-        res_layout.addWidget(self.live_r_check)
-        global_form.addRow("Resistance (R):", res_layout)
+        FormRow(global_form, "Heater R", _hbox_widget(
+            self.resistance, self.res_unit, self.measure_r_btn, self.live_r_check, spacing=6))
 
         self.design_mode = QComboBox()
         self.design_mode.addItems(["Power (W)", "Voltage (V)", "Current (A)"])
-        global_form.addRow("Design By:", self.design_mode)
+        self.design_mode.setMinimumWidth(FIELD_WIDTH)
+        FormRow(global_form, "Design by", self.design_mode)
 
         self.export_mode = QComboBox()
         self.export_mode.addItems(["Voltage (V)", "Current (A)"])
-        global_form.addRow("Export As:", self.export_mode)
+        self.export_mode.setMinimumWidth(FIELD_WIDTH)
+        FormRow(global_form, "Output as", self.export_mode)
 
-        global_group.setLayout(global_form)
-        layout.addWidget(global_group)
-
-        # --- Segments Section (splitter so user can resize; reorients on narrow widths) ---
+        # --- Segments: list on the left at a fixed width, editor on the right ---
         self._segments_splitter = QSplitter(Qt.Horizontal)
+        self._segments_splitter.setChildrenCollapsible(False)
 
-        seg_list_panel = QWidget()
+        seg_list_panel = QGroupBox("Segments")
+        seg_list_panel.setMaximumWidth(340)
         seg_list_layout = QVBoxLayout(seg_list_panel)
-        seg_list_layout.setContentsMargins(0, 0, 0, 0)
-        seg_list_label = QLabel("<b>Segments</b>")
-        seg_list_layout.addWidget(seg_list_label)
+        seg_list_layout.setSpacing(6)
         self.segment_list = QListWidget()
         self.segment_list.currentRowChanged.connect(self._on_segment_selected)
         seg_list_layout.addWidget(self.segment_list)
 
-        seg_btn_layout = QVBoxLayout()
+        seg_btn_layout = QHBoxLayout()
         seg_btn_layout.setSpacing(4)
         for text, tooltip, handler in [
-            ("Add segment", "Append a new segment after the current one", self._add_segment),
-            ("Duplicate segment", "Copy the current segment and insert it after", self._duplicate_segment),
-            ("Remove segment", "Delete the current segment", self._remove_segment),
-            ("Move up", "Swap the current segment with the one above", self._move_segment_up),
-            ("Move down", "Swap the current segment with the one below", self._move_segment_down),
+            ("Add", "Append a new segment after the current one", self._add_segment),
+            ("Copy", "Copy the current segment and insert it after", self._duplicate_segment),
+            ("Remove", "Delete the current segment", self._remove_segment),
+            ("\u2191", "Move the current segment up", self._move_segment_up),
+            ("\u2193", "Move the current segment down", self._move_segment_down),
         ]:
             btn = QPushButton(text)
             btn.setToolTip(tooltip)
             btn.clicked.connect(handler)
+            if len(text) == 1:
+                btn.setFixedWidth(30)
             seg_btn_layout.addWidget(btn)
+        seg_btn_layout.addStretch()
         seg_list_layout.addLayout(seg_btn_layout)
         self._segments_splitter.addWidget(seg_list_panel)
 
         self.seg_editor_group = QGroupBox("Segment 1")
-        seg_form = QFormLayout()
+        seg_form = make_form()
 
         self.wave_type = QComboBox()
         self.wave_type.addItems(["Sine", "Square", "Triangle", "Sawtooth", "Square-Sine", "Sine-Square"])
+        self.wave_type.setMinimumWidth(FIELD_WIDTH)
         self.wave_type.currentTextChanged.connect(self._update_current_segment_label)
-        seg_form.addRow("Wave Type:", self.wave_type)
+        FormRow(seg_form, "Shape", self.wave_type)
 
-        avg_layout = QHBoxLayout()
-        self.avg_value = QDoubleSpinBox()
-        self.avg_value.setRange(-1000, 1000)
-        self.avg_value.setValue(20)
-        self.avg_value.setDecimals(4)
-        avg_layout.addWidget(self.avg_value)
-        self.avg_unit = QComboBox()
-        self.avg_unit.addItems(["W", "mW", "V", "mV", "A", "mA"])
-        avg_layout.addWidget(self.avg_unit)
-        seg_form.addRow("Average Value:", avg_layout)
+        def value_with_unit(box, unit_combo, lo, hi, value, decimals, units):
+            box.setRange(lo, hi)
+            box.setValue(value)
+            box.setDecimals(decimals)
+            box.setMinimumWidth(FIELD_WIDTH)
+            unit_combo.addItems(units)
+            return _hbox_widget(box, unit_combo, spacing=6)
 
-        max_layout = QHBoxLayout()
-        self.max_value = QDoubleSpinBox()
-        self.max_value.setRange(-1000, 1000)
-        self.max_value.setValue(30)
-        self.max_value.setDecimals(4)
-        max_layout.addWidget(self.max_value)
-        self.max_unit = QComboBox()
-        self.max_unit.addItems(["W", "mW", "V", "mV", "A", "mA"])
-        max_layout.addWidget(self.max_unit)
-        seg_form.addRow("Max Value:", max_layout)
+        self.avg_value, self.avg_unit = QDoubleSpinBox(), QComboBox()
+        FormRow(seg_form, "Average", value_with_unit(
+            self.avg_value, self.avg_unit, -1000, 1000, 20, 4, ["W", "mW", "V", "mV", "A", "mA"]))
 
-        period_layout = QHBoxLayout()
-        self.period = QDoubleSpinBox()
-        self.period.setRange(0.001, 100000)
-        self.period.setValue(240)
-        self.period.setDecimals(3)
-        period_layout.addWidget(self.period)
-        self.period_unit = QComboBox()
-        self.period_unit.addItems(["sec", "min", "hour", "ms"])
-        period_layout.addWidget(self.period_unit)
-        seg_form.addRow("Period:", period_layout)
+        self.max_value, self.max_unit = QDoubleSpinBox(), QComboBox()
+        FormRow(seg_form, "Maximum", value_with_unit(
+            self.max_value, self.max_unit, -1000, 1000, 30, 4, ["W", "mW", "V", "mV", "A", "mA"]))
+
+        self.period, self.period_unit = QDoubleSpinBox(), QComboBox()
+        FormRow(seg_form, "Period", value_with_unit(
+            self.period, self.period_unit, 0.001, 100000, 240, 3, ["sec", "min", "hour", "ms"]))
 
         self.cycles = QSpinBox()
         self.cycles.setRange(1, 1000)
         self.cycles.setValue(5)
-        seg_form.addRow("Total Cycles:", self.cycles)
+        self.cycles.setMinimumWidth(FIELD_WIDTH)
+        FormRow(seg_form, "Cycles", self.cycles)
 
-        step_layout = QHBoxLayout()
-        self.step_size = QDoubleSpinBox()
-        self.step_size.setRange(0.0001, 1000)
-        self.step_size.setValue(1)
-        self.step_size.setDecimals(4)
-        step_layout.addWidget(self.step_size)
-        self.step_unit = QComboBox()
-        self.step_unit.addItems(["sec", "ms", "\u03bcs"])
-        step_layout.addWidget(self.step_unit)
-        seg_form.addRow("Step Size (dt):", step_layout)
+        self.step_size, self.step_unit = QDoubleSpinBox(), QComboBox()
+        FormRow(seg_form, "Step (dt)", value_with_unit(
+            self.step_size, self.step_unit, 0.0001, 1000, 1, 4, ["sec", "ms", "\u03bcs"]))
 
         self.seg_editor_group.setLayout(seg_form)
         self._segments_splitter.addWidget(self.seg_editor_group)
-        self._segments_splitter.setSizes([220, 600])
+        self._segments_splitter.setSizes([260, 700])
         self._segments_splitter.setStretchFactor(0, 0)
         self._segments_splitter.setStretchFactor(1, 1)
-        layout.addWidget(self._segments_splitter)
 
-        preview_btn = QPushButton("Preview Waveform")
-        preview_btn.clicked.connect(self._preview)
-        layout.addWidget(preview_btn)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        top.addWidget(global_group, stretch=0)
+        top.addWidget(self._segments_splitter, stretch=1)
+        layout.addLayout(top)
 
-        self.info_label = QLabel("Configure parameters and click Preview")
-        theme.set_role(self.info_label, "muted")
+        # --- Live preview and what it adds up to ---
+        self.preview_graph = pg.PlotWidget()
+        theme.style_plot(self.preview_graph)
+        self.preview_graph.setLabel('left', 'Output', color=theme.P.text_muted)
+        self.preview_graph.setLabel('bottom', 'Time (s)', color=theme.P.text_muted)
+        self.preview_graph.setMinimumHeight(200)
+        layout.addWidget(self.preview_graph, stretch=1)
+
+        stats = QGridLayout()
+        stats.setHorizontalSpacing(22)
+        stats.setVerticalSpacing(1)
+        self._stat_values = {}
+        for col, (key, label) in enumerate([
+                ("amplitude", "Amplitude"), ("frequency", "Frequency"), ("duration", "Duration"),
+                ("points", "Points"), ("v_peak", "Peak voltage"), ("i_peak", "Peak current"),
+                ("p_peak", "Peak power")]):
+            stats.addWidget(theme.set_role(QLabel(label), "stat-label"), 0, col)
+            value = theme.set_role(QLabel("\u2014"), "stat-value", tone="")
+            stats.addWidget(value, 1, col)
+            self._stat_values[key] = value
+        stats.setColumnStretch(7, 1)
+        layout.addLayout(stats)
+
+        self.info_label = theme.set_role(QLabel(""), "danger")
+        self.info_label.setWordWrap(True)
+        self.info_label.hide()
         layout.addWidget(self.info_label)
 
-        self.preview_graph = pg.PlotWidget()
-        theme.style_plot(self.preview_graph, "Waveform preview")
-        self.preview_graph.setLabel('left', 'Output Value', color=theme.P.text_muted)
-        self.preview_graph.setLabel('bottom', 'Time (s)', color=theme.P.text_muted)
-        self.preview_graph.showGrid(x=True, y=True, alpha=0.3)
-        self.preview_graph.setMinimumHeight(200)
-        layout.addWidget(self.preview_graph)
-
         btn_layout = QHBoxLayout()
-        generate_btn = QPushButton("Generate && Import to Sweep List")
-        theme.set_role(generate_btn, "primary")
-        generate_btn.clicked.connect(self._generate_and_accept)
-        btn_layout.addWidget(generate_btn)
-
-        export_btn = QPushButton("Export CSV")
+        btn_layout.setSpacing(6)
+        export_btn = QPushButton("Export CSV\u2026")
         export_btn.clicked.connect(self._export_csv)
         btn_layout.addWidget(export_btn)
+        btn_layout.addStretch()
 
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
 
+        generate_btn = QPushButton("Add to sweep list")
+        theme.set_role(generate_btn, "primary")
+        generate_btn.setDefault(True)
+        generate_btn.clicked.connect(self._generate_and_accept)
+        btn_layout.addWidget(generate_btn)
+
         layout.addLayout(btn_layout)
 
         self._add_segment()
+
+        for signal in (self.resistance.valueChanged, self.res_unit.currentIndexChanged,
+                       self.design_mode.currentIndexChanged, self.export_mode.currentIndexChanged,
+                       self.wave_type.currentIndexChanged, self.avg_value.valueChanged,
+                       self.avg_unit.currentIndexChanged, self.max_value.valueChanged,
+                       self.max_unit.currentIndexChanged, self.period.valueChanged,
+                       self.period_unit.currentIndexChanged, self.cycles.valueChanged,
+                       self.step_size.valueChanged, self.step_unit.currentIndexChanged):
+            signal.connect(lambda *_: self._preview_timer.start())
+        self._preview(quiet=True)
 
     # --- Segment management ---
 
@@ -2381,14 +2484,16 @@ class WaveToolDialog(QDialog):
         self.segment_list.blockSignals(True)
         self.segment_list.clear()
         for i, seg in enumerate(self.segments):
-            self.segment_list.addItem(f"Seg {i+1}: {seg['wave_type']}")
+            self.segment_list.addItem(f"{i+1}. {seg['wave_type']}")
         self.segment_list.blockSignals(False)
+        if hasattr(self, "_preview_timer"):
+            self._preview_timer.start()
 
     def _update_current_segment_label(self, text):
         if self._current_segment_index >= 0:
             item = self.segment_list.item(self._current_segment_index)
             if item:
-                item.setText(f"Seg {self._current_segment_index + 1}: {text}")
+                item.setText(f"{self._current_segment_index + 1}. {text}")
 
     def _add_segment(self):
         if self._current_segment_index >= 0:
@@ -2529,7 +2634,7 @@ class WaveToolDialog(QDialog):
 
         return t, final_values
 
-    def _calculate_all_segments(self):
+    def _calculate_all_segments(self, quiet: bool = False):
         try:
             self._save_current_segment()
 
@@ -2554,39 +2659,94 @@ class WaveToolDialog(QDialog):
 
             return combined_t, combined_values
         except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
+            if quiet:
+                self.info_label.setText(f"Can't compute this waveform: {e}")
+                self.info_label.show()
+            else:
+                QMessageBox.warning(self, "Error", str(e))
             return None
 
-    def _preview(self):
-        result = self._calculate_all_segments()
-        if result:
-            combined_t, combined_values = result
-            self.waveform_values = list(combined_values)
-            self.time_values = list(combined_t)
-            export_unit = "V" if "Voltage" in self.export_mode.currentText() else "A"
+    def _preview(self, quiet: bool = False):
+        result = self._calculate_all_segments(quiet=quiet)
+        if not result:
+            return
+        combined_t, combined_values = result
+        self.info_label.hide()
+        self.waveform_values = list(combined_values)
+        self.time_values = list(combined_t)
+        export_unit = "V" if "Voltage" in self.export_mode.currentText() else "A"
 
-            n_segs = len(self.segments)
-            self.info_label.setText(
-                f"{n_segs} segment{'s' if n_segs > 1 else ''} | "
-                f"{len(combined_values)} points | "
-                f"Duration: {combined_t[-1]:.2f}s | "
-                f"Output: {min(combined_values):.4f} to {max(combined_values):.4f} {export_unit}"
-            )
-            theme.set_role(self.info_label, "card-title")
+        self.preview_graph.clear()
+        self.preview_graph.plot(self.time_values, self.waveform_values, pen=theme.pen(theme.P.accent_strong, 1.8))
+        self.preview_graph.setLabel('left', f'Output ({export_unit})')
 
-            self.preview_graph.clear()
-            self.preview_graph.plot(self.time_values, self.waveform_values, pen=theme.pen(theme.P.accent, 2))
-            self.preview_graph.setLabel('left', f'Output ({export_unit})')
+        n_segs = len(self.segments)
+        if n_segs > 1:
+            time_offset = 0.0
+            for i, seg in enumerate(self.segments[:-1]):
+                period_sec = seg["period"] * self._get_unit_multiplier(seg["period_unit"])
+                seg_duration = seg["cycles"] * period_sec
+                time_offset += seg_duration
+                boundary_line = pg.InfiniteLine(pos=time_offset, angle=90,
+                    pen=theme.pen(theme.P.text_faint, 1, dashed=True))
+                self.preview_graph.addItem(boundary_line)
 
-            if n_segs > 1:
-                time_offset = 0.0
-                for i, seg in enumerate(self.segments[:-1]):
-                    period_sec = seg["period"] * self._get_unit_multiplier(seg["period_unit"])
-                    seg_duration = seg["cycles"] * period_sec
-                    time_offset += seg_duration
-                    boundary_line = pg.InfiniteLine(pos=time_offset, angle=90,
-                        pen=theme.pen(theme.P.text_faint, 1, dashed=True))
-                    self.preview_graph.addItem(boundary_line)
+        self._update_stats(np.asarray(combined_t), np.asarray(combined_values), export_unit)
+
+    def _update_stats(self, t, values, export_unit):
+        """The figures you check before running: the selected segment's
+        amplitude and frequency, the whole waveform's length, and the peak
+        voltage, current and power it asks of the heater at this R."""
+        idx = max(self._current_segment_index, 0)
+        seg = self.segments[idx] if self.segments else self._default_segment()
+        m = self._get_unit_multiplier
+        design_unit = self.design_mode.currentText().split("(")[-1].rstrip(")")
+        amplitude = seg["max_value"] * m(seg["max_unit"]) - seg["avg_value"] * m(seg["avg_unit"])
+        period_s = seg["period"] * m(seg["period_unit"])
+        R = self.resistance.value() * m(self.res_unit.currentText())
+
+        if len(values):
+            if export_unit == "V":
+                v, i = values, values / R
+            else:
+                v, i = values * R, values
+            p = np.abs(v * i)
+            v_pk, i_pk, p_pk = float(np.max(np.abs(v))), float(np.max(np.abs(i))), float(np.max(p))
+            v_max, v_min, i_max, i_min = float(np.max(v)), float(np.min(v)), float(np.max(i)), float(np.min(i))
+        else:
+            v_pk = i_pk = p_pk = v_max = v_min = i_max = i_min = 0.0
+        duration = sum(s["cycles"] * s["period"] * m(s["period_unit"]) for s in self.segments)
+
+        out = self._stat_values
+        out["amplitude"].setText(si_format(amplitude, design_unit, 4))
+        out["frequency"].setText(si_format(1.0 / period_s, "Hz", 4) if period_s > 0 else "\u2014")
+        out["duration"].setText(MainWindow._fmt_duration(duration) if duration >= 1 else f"{duration:.3f} s")
+        out["points"].setText(f"{len(values):,}")
+        out["v_peak"].setText(si_format(v_pk, "V", 4))
+        out["i_peak"].setText(si_format(i_pk, "A", 4))
+        out["p_peak"].setText(si_format(p_pk, "W", 4))
+
+        # Against the safety limits the sweep will be checked with anyway —
+        # better to see it here than as a refusal at run time.
+        limits = getattr(self.parent(), "safety_limits", None)
+        problems = {}
+        if limits is not None and len(values):
+            if v_max > limits.max_voltage or v_min < limits.min_voltage:
+                bad = v_max if v_max > limits.max_voltage else v_min
+                lim = limits.max_voltage if v_max > limits.max_voltage else limits.min_voltage
+                problems["v_peak"] = f"voltage reaches {si_format(bad, 'V', 4)} (limit {si_format(lim, 'V', 4)})"
+            if i_max > limits.max_current or i_min < limits.min_current:
+                bad = i_max if i_max > limits.max_current else i_min
+                lim = limits.max_current if i_max > limits.max_current else limits.min_current
+                problems["i_peak"] = f"current reaches {si_format(bad, 'A', 4)} (limit {si_format(lim, 'A', 4)})"
+            if p_pk > limits.power_limit:
+                problems["p_peak"] = f"power reaches {si_format(p_pk, 'W', 4)} (limit {si_format(limits.power_limit, 'W', 4)})"
+        for key in ("v_peak", "i_peak", "p_peak"):
+            theme.set_prop(out[key], tone="danger" if key in problems else "")
+        if problems:
+            self.info_label.setText("Over the safety limits: " + "; ".join(problems.values())
+                                    + ". The sweep would stop at the first such point.")
+            self.info_label.show()
 
     def _generate_and_accept(self):
         self._preview()
@@ -2725,22 +2885,16 @@ class WaveToolDialog(QDialog):
             out.extend(final.tolist())
         return out
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        splitter = getattr(self, "_segments_splitter", None)
-        if splitter is None:
-            return
-        target = Qt.Vertical if self.width() < 750 else Qt.Horizontal
-        if splitter.orientation() != target:
-            splitter.setOrientation(target)
-            if target == Qt.Vertical:
-                splitter.setSizes([220, 400])
-            else:
-                splitter.setSizes([220, max(400, self.width() - 280)])
-
     def closeEvent(self, event):
         self._live_r_timer.stop()
+        self._preview_timer.stop()
         super().closeEvent(event)
+
+
+MIN_WINDOW_W, MIN_WINDOW_H = 1100, 680
+
+# Side panels keep their width as the window grows; the workspace takes the rest.
+SIDEBAR_MIN_W, SIDEBAR_MAX_W = 210, 280
 
 
 class MainWindow(QMainWindow):
@@ -2796,9 +2950,11 @@ class MainWindow(QMainWindow):
 
         self.settings = QSettings(__organization__, __app_name__)
 
-        self.setWindowTitle(f"{__app_name__} - Dual-Channel I-V Characterizer")
-        self.setMinimumSize(560, 480)
-        self.resize(1200, 800)
+        self.setWindowTitle(__app_name__)
+        # A desktop layout: fixed-width side panels, the workspace takes the
+        # rest. Below this size things would have to wrap, so they can't get there.
+        self.setMinimumSize(MIN_WINDOW_W, MIN_WINDOW_H)
+        self.resize(1360, 860)
 
         if not self._check_license_agreement():
             sys.exit(0)
@@ -2818,7 +2974,6 @@ class MainWindow(QMainWindow):
             reader.set_channel(channel)
         self.channel_a_btn.set_selected(channel == "a")
         self.channel_b_btn.set_selected(channel == "b")
-        self.multimeter_panel.update_channel_display()
         self.status.showMessage(f"Active channel: {channel.upper()}")
 
     def _toggle_output(self, channel: str):
@@ -2852,7 +3007,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     live = False
             label = f"Output {ch.upper()}" if len(channels) > 1 else "Output"
-            btn.setText(f"{label} · {'On' if live else 'Off'}")
+            btn.setText(f"{label} {'on' if live else 'off'}")
             btn.setEnabled(self.smu is not None)
             theme.set_prop(btn, live="true" if live else "false")
 
@@ -2861,37 +3016,37 @@ class MainWindow(QMainWindow):
 
         file_menu = menubar.addMenu("File")
 
-        export_action = QAction("Export Data...", self)
+        export_action = QAction("Export data\u2026", self)
         export_action.triggered.connect(self.export_csv)
         file_menu.addAction(export_action)
 
-        import_action = QAction("Import Sweep List...", self)
+        import_action = QAction("Import sweep list\u2026", self)
         import_action.triggered.connect(self._import_sweep_list)
         file_menu.addAction(import_action)
 
         file_menu.addSeparator()
 
-        save_config = QAction("Save Configuration...", self)
+        save_config = QAction("Save configuration\u2026", self)
         save_config.triggered.connect(self._save_config)
         file_menu.addAction(save_config)
 
-        load_config = QAction("Load Configuration...", self)
+        load_config = QAction("Load configuration\u2026", self)
         load_config.triggered.connect(self._load_config)
         file_menu.addAction(load_config)
 
         file_menu.addSeparator()
 
-        self.auto_save_action = QAction("Auto-Save Enabled", self)
+        self.auto_save_action = QAction("Auto-save", self)
         self.auto_save_action.setCheckable(True)
         self.auto_save_action.setChecked(self.auto_save_enabled)
         self.auto_save_action.toggled.connect(self._toggle_auto_save)
         file_menu.addAction(self.auto_save_action)
 
-        auto_save_path_action = QAction("Set Auto-Save Folder...", self)
+        auto_save_path_action = QAction("Set auto-save folder\u2026", self)
         auto_save_path_action.triggered.connect(self._set_auto_save_path)
         file_menu.addAction(auto_save_path_action)
 
-        open_save_folder = QAction("Open Auto-Save Folder", self)
+        open_save_folder = QAction("Open auto-save folder", self)
         open_save_folder.triggered.connect(self._open_auto_save_folder)
         file_menu.addAction(open_save_folder)
 
@@ -2902,12 +3057,12 @@ class MainWindow(QMainWindow):
         file_menu.addAction(exit_action)
 
         tools_menu = menubar.addMenu("Tools")
-        wave_tool_action = QAction("Custom Signal Design...", self)
+        wave_tool_action = QAction("Design waveform\u2026", self)
         wave_tool_action.triggered.connect(self._show_wave_tool)
         tools_menu.addAction(wave_tool_action)
 
         inst_menu = menubar.addMenu("Instrument")
-        connect_action = QAction("Connect...", self)
+        connect_action = QAction("Connect\u2026", self)
         connect_action.triggered.connect(self._show_connection_dialog)
         inst_menu.addAction(connect_action)
 
@@ -2921,12 +3076,12 @@ class MainWindow(QMainWindow):
         reset_action.triggered.connect(self._reset_instrument)
         inst_menu.addAction(reset_action)
 
-        safety_action = QAction("Safety Settings...", self)
+        safety_action = QAction("Safety limits\u2026", self)
         safety_action.triggered.connect(self._show_safety_dialog)
         inst_menu.addAction(safety_action)
 
         help_menu = menubar.addMenu("Help")
-        update_action = QAction("Check for Updates…", self)
+        update_action = QAction("Check for updates\u2026", self)
         update_action.triggered.connect(self._check_for_updates)
         help_menu.addAction(update_action)
         help_menu.addSeparator()
@@ -2938,41 +3093,25 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Header bar
-        header = theme.set_role(QFrame(), "header")
-        header.setFixedHeight(56)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(24, 8, 24, 8)
-        header_layout.setSpacing(12)
+        # Toolbar: what is connected on the left, the outputs on the right.
+        # The window's own title bar already names the program.
+        toolbar_frame = theme.set_role(QFrame(), "toolbar")
+        toolbar = QHBoxLayout(toolbar_frame)
+        toolbar.setContentsMargins(10, 6, 10, 6)
+        toolbar.setSpacing(6)
 
-        header_title = theme.set_role(QLabel(__app_name__), "title")
-        header_layout.addWidget(header_title)
-        header_layout.addStretch()
-
-        version_label = theme.set_role(QLabel(f"v{__version__} · {__author__}"), "faint")
-        header_layout.addWidget(version_label)
-
-        layout.addWidget(header)
-
-        # Content area
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(20, 15, 20, 10)
-
-        # Top toolbar
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
-
-        connect_btn = QPushButton("Connect…")
+        connect_btn = QPushButton("Connect\u2026")
+        connect_btn.setToolTip("Choose and connect the source meter, and optionally the calorimeter")
         connect_btn.clicked.connect(self._show_connection_dialog)
         toolbar.addWidget(connect_btn)
 
-        # Status as two quiet pills: source meter, calorimeter.
+        # Status as two chips: source meter, calorimeter.
         self.model_label = theme.set_role(QLabel(""), "muted")
-        self.smu_pill = theme.set_role(QLabel("Source meter · not connected"), "pill")
-        self.cal_pill = theme.set_role(QLabel("Calorimeter · —"), "pill")
+        self.smu_pill = theme.set_role(QLabel("No source meter"), "pill")
+        self.cal_pill = theme.set_role(QLabel("No calorimeter"), "pill")
         toolbar.addWidget(self.smu_pill)
         toolbar.addWidget(self.cal_pill)
         # Older code paths still set this label; the pills are what is shown.
@@ -2984,50 +3123,60 @@ class MainWindow(QMainWindow):
         # Channel selector — only shown on a dual-channel instrument.
         self.channel_selector = QWidget()
         ch_row = QHBoxLayout(self.channel_selector)
-        ch_row.setContentsMargins(0, 0, 0, 0)
-        ch_row.setSpacing(4)
+        ch_row.setContentsMargins(0, 0, 6, 0)
+        ch_row.setSpacing(6)
         ch_row.addWidget(theme.set_role(QLabel("Channel"), "muted"))
         self.channel_a_btn = ToggleButton("A")
         self.channel_a_btn.set_selected(True)
         self.channel_a_btn.clicked.connect(lambda: self._set_channel("a"))
-        ch_row.addWidget(self.channel_a_btn)
         self.channel_b_btn = ToggleButton("B")
         self.channel_b_btn.clicked.connect(lambda: self._set_channel("b"))
-        ch_row.addWidget(self.channel_b_btn)
+        ch_row.addWidget(theme.segmented(self.channel_a_btn, self.channel_b_btn))
         toolbar.addWidget(self.channel_selector)
 
         # Per-channel output switches (channel B hidden on single-channel models)
-        self.output_a_btn = theme.set_role(QPushButton("Output · Off"), "output", live="false")
+        self.output_a_btn = theme.set_role(QPushButton("Output off"), "output", live="false")
         self.output_a_btn.clicked.connect(lambda: self._toggle_output("a"))
         toolbar.addWidget(self.output_a_btn)
 
-        self.output_b_btn = theme.set_role(QPushButton("Output B · Off"), "output", live="false")
+        self.output_b_btn = theme.set_role(QPushButton("Output B off"), "output", live="false")
         self.output_b_btn.clicked.connect(lambda: self._toggle_output("b"))
         toolbar.addWidget(self.output_b_btn)
 
-        toolbar.addStretch()
+        layout.addWidget(toolbar_frame)
+
+        # Sweep actions sit beside the tabs, since they belong to the I-V
+        # Sweep tab and are hidden on the others.
+        sweep_actions = QWidget()
+        sa = QHBoxLayout(sweep_actions)
+        sa.setContentsMargins(0, 0, 0, 5)
+        sa.setSpacing(6)
 
         self.start_btn = theme.set_role(QPushButton("Start sweep"), "primary")
         self.start_btn.clicked.connect(self.start_sweep)
-        toolbar.addWidget(self.start_btn)
+        sa.addWidget(self.start_btn)
 
         self.stop_btn = theme.set_role(QPushButton("Stop"), "danger")
         self.stop_btn.clicked.connect(self.stop_sweep)
         self.stop_btn.setEnabled(False)
-        toolbar.addWidget(self.stop_btn)
+        sa.addWidget(self.stop_btn)
 
-        self.export_btn = QPushButton("Export CSV")
+        self.export_btn = QPushButton("Export CSV\u2026")
         self.export_btn.clicked.connect(self.export_csv)
-        toolbar.addWidget(self.export_btn)
+        sa.addWidget(self.export_btn)
 
         # Buttons that only make sense on the I-V Sweep tab
         self._sweep_only_widgets = [self.start_btn, self.stop_btn, self.export_btn]
 
-        content_layout.addLayout(toolbar)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(8, 8, 8, 8)
+        content_layout.setSpacing(0)
 
         # Main tabs
         tabs = QTabWidget()
         self.main_tabs = tabs
+        tabs.setCornerWidget(sweep_actions, Qt.TopRightCorner)
         tabs.currentChanged.connect(self._on_main_tab_changed)
 
         # Tab 1: Multimeter (wrapped in a scroll area so it never clips)
@@ -3041,12 +3190,14 @@ class MainWindow(QMainWindow):
         # Tab 2: I-V Sweep
         sweep_tab = QWidget()
         sweep_outer = QVBoxLayout(sweep_tab)
-        sweep_outer.setContentsMargins(0, 0, 0, 0)
+        sweep_outer.setContentsMargins(8, 8, 8, 8)
 
         # Horizontal splitter: experiments sidebar (left) | three sub-tabs (right)
         iv_outer_splitter = QSplitter(Qt.Horizontal)
 
         self.experiments_sidebar = ExperimentsSidebar(self.experiment_store)
+        self.experiments_sidebar.setMinimumWidth(SIDEBAR_MIN_W)
+        self.experiments_sidebar.setMaximumWidth(SIDEBAR_MAX_W)
         self.experiments_sidebar.experiment_selected.connect(self._load_experiment)
         self.experiments_sidebar.save_requested.connect(self._save_experiment)
         self.experiments_sidebar.rename_requested.connect(self._rename_experiment)
@@ -3059,24 +3210,27 @@ class MainWindow(QMainWindow):
         # Three sub-tabs inside I-V Sweep: Settings / Sweep Values / Graph
         iv_sub_tabs = QTabWidget()
 
-        # --- Sub-tab 1: Settings ---
+        # --- Sub-tab 1: Settings — two columns, so it fits without scrolling
         settings_panel = QWidget()
-        settings_layout = QVBoxLayout(settings_panel)
-        settings_layout.setSpacing(10)
+        settings_layout = QGridLayout(settings_panel)
+        settings_layout.setContentsMargins(0, 8, 0, 0)
+        settings_layout.setSpacing(8)
 
         self.source_settings = SourceSettingsWidget()
-        settings_layout.addWidget(self.source_settings)
+        settings_layout.addWidget(self.source_settings, 0, 0)
 
         self.inst_settings = InstrumentSettingsWidget()
-        settings_layout.addWidget(self.inst_settings)
+        settings_layout.addWidget(self.inst_settings, 0, 1)
 
         self.measure_settings = MeasureSettingsWidget()
-        settings_layout.addWidget(self.measure_settings)
+        settings_layout.addWidget(self.measure_settings, 1, 0)
 
         self.timing_settings = TimingSettingsWidget()
-        settings_layout.addWidget(self.timing_settings)
+        settings_layout.addWidget(self.timing_settings, 1, 1)
 
-        settings_layout.addStretch()
+        settings_layout.setColumnStretch(0, 1)
+        settings_layout.setColumnStretch(1, 1)
+        settings_layout.setRowStretch(2, 1)
 
         settings_scroll = QScrollArea()
         settings_scroll.setWidgetResizable(True)
@@ -3096,7 +3250,7 @@ class MainWindow(QMainWindow):
         sweep_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         sweep_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         sweep_scroll.setWidget(self.sweep_list)
-        iv_sub_tabs.addTab(sweep_scroll, "Sweep Values")
+        iv_sub_tabs.addTab(sweep_scroll, "Sweep values")
 
         # --- Sub-tab 3: Graph ---
         graph_tab = QWidget()
@@ -3105,9 +3259,10 @@ class MainWindow(QMainWindow):
 
         axis_bar = QWidget()
         axis_layout = QHBoxLayout(axis_bar)
-        axis_layout.setContentsMargins(0, 0, 0, 0)
+        axis_layout.setContentsMargins(0, 8, 0, 6)
+        axis_layout.setSpacing(6)
 
-        axis_layout.addWidget(QLabel("X:"))
+        axis_layout.addWidget(theme.set_role(QLabel("X"), "muted"))
         self.x_axis = QComboBox()
         self.x_axis.addItems(["Voltage", "Current", "Time", "Index"])
         axis_layout.addWidget(self.x_axis)
@@ -3116,7 +3271,8 @@ class MainWindow(QMainWindow):
         self.x_axis.currentTextChanged.connect(lambda _: self._on_axis_variable_changed("x"))
         self.x_unit.currentTextChanged.connect(self._update_graph_axes)
 
-        axis_layout.addWidget(QLabel("Y1 (Left):"))
+        axis_layout.addSpacing(8)
+        axis_layout.addWidget(theme.set_role(QLabel("Y1 (left)"), "muted"))
         self.y1_axis = QComboBox()
         self.y1_axis.addItems(["Current", "Voltage", "Resistance", "Power", "None"])
         axis_layout.addWidget(self.y1_axis)
@@ -3125,7 +3281,8 @@ class MainWindow(QMainWindow):
         self.y1_axis.currentTextChanged.connect(lambda _: self._on_axis_variable_changed("y1"))
         self.y1_unit.currentTextChanged.connect(self._update_graph_axes)
 
-        axis_layout.addWidget(QLabel("Y2 (Right):"))
+        axis_layout.addSpacing(8)
+        axis_layout.addWidget(theme.set_role(QLabel("Y2 (right)"), "muted"))
         self.y2_axis = QComboBox()
         self.y2_axis.addItems(["None", "Voltage", "Current", "Resistance", "Power"])
         axis_layout.addWidget(self.y2_axis)
@@ -3138,19 +3295,19 @@ class MainWindow(QMainWindow):
         for which in ("x", "y1", "y2"):
             self._on_axis_variable_changed(which)
 
-        axis_layout.addWidget(QLabel("Presets:"))
+        axis_layout.addSpacing(8)
+        axis_layout.addWidget(theme.set_role(QLabel("Presets"), "muted"))
         for preset, (x, y1, y2) in [("I-V", ("Voltage", "Current", "None")),
                                      ("I-t", ("Time", "Current", "None")),
                                      ("V,P-t", ("Time", "Voltage", "Power")),
                                      ("I,R-t", ("Time", "Current", "Resistance"))]:
-            btn = QPushButton(preset)
-            btn.setMaximumWidth(80)
+            btn = theme.set_role(QPushButton(preset), "quiet")
             btn.clicked.connect(lambda checked, x=x, y1=y1, y2=y2: self._set_graph_preset(x, y1, y2))
             axis_layout.addWidget(btn)
 
         axis_layout.addStretch()
 
-        self.live_update_cb = QCheckBox("Live Update")
+        self.live_update_cb = QCheckBox("Live update")
         self.live_update_cb.setChecked(True)
         axis_layout.addWidget(self.live_update_cb)
 
@@ -3167,19 +3324,19 @@ class MainWindow(QMainWindow):
         self.table.setMinimumSize(0, 0)
         graph_table_splitter.addWidget(self.table)
 
-        graph_table_splitter.setSizes([500, 300])
-        graph_table_splitter.setCollapsible(0, True)
-        graph_table_splitter.setCollapsible(1, True)
+        graph_table_splitter.setSizes([500, 260])
+        graph_table_splitter.setChildrenCollapsible(False)
+        self.graph.setMinimumHeight(160)
+        self.table.setMinimumHeight(90)
         graph_tab_layout.addWidget(graph_table_splitter)
 
         iv_sub_tabs.addTab(graph_tab, "Graph")
 
         iv_outer_splitter.addWidget(iv_sub_tabs)
-        iv_outer_splitter.setSizes([240, 1000])
+        iv_outer_splitter.setSizes([SIDEBAR_MIN_W + 20, 1000])
         iv_outer_splitter.setStretchFactor(0, 0)
         iv_outer_splitter.setStretchFactor(1, 1)
-        iv_outer_splitter.setCollapsible(0, True)
-        iv_outer_splitter.setCollapsible(1, False)
+        iv_outer_splitter.setChildrenCollapsible(False)
         sweep_outer.addWidget(iv_outer_splitter)
 
         tabs.addTab(sweep_tab, "I-V Sweep")
@@ -3192,7 +3349,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.realtime_tab, "Real Time")
 
         content_layout.addWidget(tabs)
-        layout.addWidget(content)
+        layout.addWidget(content, stretch=1)
 
         # Status bar
         self.status = QStatusBar()
@@ -3213,8 +3370,9 @@ class MainWindow(QMainWindow):
         self.status.addPermanentWidget(self.progress_label)
 
         self.progress = QProgressBar()
-        self.progress.setMaximumWidth(200)
-        self.progress.setFormat("%v / %m")
+        self.progress.setFixedWidth(160)
+        self.progress.setTextVisible(False)
+        self.progress.hide()
         self.status.addPermanentWidget(self.progress)
         self.status.showMessage("Ready")
 
@@ -3494,6 +3652,15 @@ class MainWindow(QMainWindow):
     def _disconnect(self):
         self.disconnect_instrument()
 
+    def _forget_instrument_readings(self):
+        """The status bar's values and the last sweep's progress belong to the
+        instrument that produced them; drop them when it goes."""
+        if getattr(self, "realtime_tab", None) is not None:
+            self.realtime_tab.clear_status_values(("v", "i", "r", "p"))
+        if not self.running:
+            self.progress.hide()
+            self.progress_label.setText("")
+
     def disconnect_instrument(self, quiet: bool = False):
         if self.smu:
             try:
@@ -3501,6 +3668,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self.smu = None
+        self._forget_instrument_readings()
         self._update_connection_label()
         self._update_output_buttons()
         if not quiet:
@@ -3542,7 +3710,7 @@ class MainWindow(QMainWindow):
         if dialog.exec_() == QDialog.Accepted:
             self.safety_limits = dialog.get_limits()
             self._limits_by_model[self.model] = self.safety_limits
-            self.status.showMessage(f"Safety limits updated: \u00b1{self.safety_limits.max_voltage}V, \u00b1{self.safety_limits.max_current}A")
+            self.status.showMessage(f"Safety limits updated: \u00b1{self.safety_limits.max_voltage} V, \u00b1{self.safety_limits.max_current} A")
 
     def _check_license_agreement(self) -> bool:
         license_accepted = self.settings.value("license_accepted", False, type=bool)
@@ -3732,6 +3900,7 @@ class MainWindow(QMainWindow):
 
         self.smu = smu
         self.model = model
+        self._forget_instrument_readings()
         self.safety_limits = limits
         self._limits_by_model[model] = limits
         self._smu_sim_resistance = (
@@ -3844,22 +4013,22 @@ class MainWindow(QMainWindow):
     def _update_connection_label(self):
         """Toolbar pills: what source meter is attached, and the calorimeter."""
         if self.smu is None:
-            text, tone = "Source meter · not connected", ""
+            text, tone = "No source meter", ""
         elif self.smu.simulate:
             r = getattr(self, "_smu_sim_resistance", None) or 0
             res = (f"{r:.0f} Ω" if r < 1e3 else f"{r/1e3:.0f} kΩ" if r < 1e6
                    else f"{r/1e6:.0f} MΩ" if r < 1e9 else f"{r/1e9:.0f} GΩ")
-            text, tone = f"{self.smu.caps.display_name} · simulated, {res}", "warn"
+            text, tone = f"{self.smu.caps.display_name} (simulated, {res})", "warn"
         else:
-            text, tone = f"{self.smu.caps.display_name} · connected", "ok"
+            text, tone = f"{self.smu.caps.display_name} connected", "ok"
         self.smu_pill.setText(text)
         theme.set_prop(self.smu_pill, tone=tone)
 
         if self.calorimeter_reader is None:
-            ctext, ctone = "Calorimeter · —", ""
+            ctext, ctone = "No calorimeter", ""
         else:
             how = "watching" if getattr(self, "calorimeter_sniffing", False) else "connected"
-            ctext, ctone = f"{self.calorimeter_name or 'Calorimeter'} · {how}", "ok"
+            ctext, ctone = f"{self.calorimeter_name or 'Calorimeter'} {how}", "ok"
         self.cal_pill.setText(ctext)
         theme.set_prop(self.cal_pill, tone=ctone)
 
@@ -3969,7 +4138,8 @@ class MainWindow(QMainWindow):
         self.run_start_datetime = datetime.now()
         self.progress.setMaximum(total)
         self.progress.setValue(0)
-        self.progress_label.setText(f"0 / {total} | Est: --:--")
+        self.progress.show()
+        self.progress_label.setText(f"0 / {total}")
 
         # Open live CSV file for streaming. Split into three stages so a
         # failure in metadata-row generation doesn't take out the header
@@ -4261,8 +4431,9 @@ class MainWindow(QMainWindow):
             self.graph.update_live()
             self._update_output_buttons()
             total_time = time.time() - self.sweep_start_time
+            self.progress.hide()
             self.progress_label.setText(
-                f"Done: {self.total_sweep_points} pts in {self._fmt_duration(total_time)}"
+                f"Done: {self.total_sweep_points} points in {self._fmt_duration(total_time)}"
             )
             self.status.showMessage("Sweep completed")
 
@@ -4419,26 +4590,6 @@ class MainWindow(QMainWindow):
                 self.status.showMessage(f"Exported to {file}")
             except Exception as e:
                 QMessageBox.critical(self, "Export Error", str(e))
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._apply_responsive_layout()
-
-    def _apply_responsive_layout(self):
-        w = self.width()
-        h = self.height()
-
-        # Font scaling: shrinks when window is small, never grows above original sizes.
-        # 1.00 at >= 1300x900, down to 0.65 at very small windows.
-        ratio = min(w / 1300.0, h / 900.0)
-        scale = max(0.65, min(1.00, ratio))
-        # Round to nearest 0.05 to avoid thrashing the stylesheet on tiny moves
-        scale = round(scale * 20) / 20
-        if abs(scale - getattr(self, "_current_ui_scale", -1)) >= 0.025:
-            self._current_ui_scale = scale
-            app = QApplication.instance()
-            if app is not None:
-                theme.apply(app, scale)
 
     def closeEvent(self, event):
         self.multimeter_panel.stop_live()

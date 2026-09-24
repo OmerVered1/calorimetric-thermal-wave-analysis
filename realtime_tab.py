@@ -124,7 +124,17 @@ DEFAULT_CAL_SPECS: list[SignalSpec] = specs_from_signals([
     CalorimeterSignal("ext_t", "External Temperature", "°C"),
 ])
 
-MUTED = "#6b7280"
+def _theme():
+    from ctwa import theme
+    return theme
+
+
+# Side panel width: fixed range, the plot takes the rest.
+CONTROLS_MIN_W, CONTROLS_MAX_W = 320, 380
+
+EMPTY_NOTHING = ("Nothing to plot yet.\n"
+                 "Connect a calorimeter or start a sweep, and signals appear here as they arrive.")
+EMPTY_HIDDEN = "Every signal with data is hidden. Tick one on the left to plot it."
 
 
 @dataclass
@@ -162,6 +172,13 @@ class RealTimeTab(QWidget):
         self._series: dict[str, Series] = {
             spec.key: Series(spec=spec) for spec in self._specs
         }
+        # Start with only calorimeter defaults visible (V/I/R/P off) — Keithley
+        # signals only make sense during a sweep. Set before the controls are
+        # built, so their tick boxes say the same thing; set after, as it
+        # was, the boxes showed ticked while those four were never plotted.
+        # The app calls set_calorimeter_signals() when a calorimeter connects.
+        for key in KEITHLEY_KEYS:
+            self._series[key].visible = False
 
         # Row-widgets we need to refer to later, keyed by signal key
         self._control_rows: dict[str, dict] = {}
@@ -170,11 +187,6 @@ class RealTimeTab(QWidget):
         self._status_widget: QWidget | None = None
 
         self._setup_ui()
-        # Start with only calorimeter defaults visible (V/I/R/P off) — Keithley
-        # signals only make sense during a sweep. The app calls
-        # set_calorimeter_signals() when a calorimeter connects.
-        for key in KEITHLEY_KEYS:
-            self._series[key].visible = False
 
     # ---- Signal set --------------------------------------------------------
 
@@ -236,31 +248,30 @@ class RealTimeTab(QWidget):
 
     def _setup_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 12, 12, 12)
-        outer.setSpacing(10)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(8)
 
-        # Splitter so the user can drag-to-shrink the controls panel.
-        # Controls on the LEFT, plot on the RIGHT.
+        # Controls on the left at a fixed width range, plot on the right
+        # taking the rest. Neither collapses: a desktop layout, not a page.
         splitter = QSplitter(Qt.Horizontal)
         controls = self._build_controls_panel()
-        controls.setMinimumWidth(80)   # can shrink but not fully collapse by mistake
+        controls.setMinimumWidth(CONTROLS_MIN_W)
+        controls.setMaximumWidth(CONTROLS_MAX_W)
         splitter.addWidget(controls)
-        splitter.addWidget(self._build_plot())
+        splitter.addWidget(self._build_plot_area())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setCollapsible(0, True)   # drag all the way to hide
-        splitter.setCollapsible(1, False)
-        splitter.setSizes([340, 900])
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([CONTROLS_MIN_W + 20, 900])
         outer.addWidget(splitter, stretch=1)
 
         outer.addLayout(self._build_action_row())
 
     def _build_controls_panel(self) -> QGroupBox:
         group = QGroupBox("Signals")
-        group.setMinimumWidth(80)
         grid = QGridLayout(group)
         grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
+        grid.setVerticalSpacing(5)
         self._controls_grid = grid
         self._populate_controls()
         return group
@@ -276,12 +287,11 @@ class RealTimeTab(QWidget):
                 w.deleteLater()
         self._control_rows = {}
 
-        # Header row (all black; only tick numbers/units on the plot get color)
-        headers = ["", "Signal", "Unit", "Auto"]
+        theme = _theme()
+        # Header row
+        headers = ["", "", "Signal", "Unit", "Auto-scale"]
         for col, text in enumerate(headers):
-            lbl = QLabel(text)
-            lbl.setStyleSheet(f"color: {MUTED}; font-size: 11px;")
-            grid.addWidget(lbl, 0, col)
+            grid.addWidget(theme.set_role(QLabel(text), "faint"), 0, col)
 
         row = 1
         for spec in self._specs:
@@ -292,11 +302,14 @@ class RealTimeTab(QWidget):
             show_cb.toggled.connect(
                 lambda checked, k=spec.key: self._on_show_toggled(k, checked)
             )
+            show_cb.setToolTip(f"Plot {spec.name}")
             grid.addWidget(show_cb, row, 0)
 
+            dot = theme.swatch(spec.color)
+            grid.addWidget(dot, row, 1)
+
             name_lbl = QLabel(spec.name)
-            name_lbl.setStyleSheet("color: #000000; font-weight: bold; font-size: 13px;")
-            grid.addWidget(name_lbl, row, 1)
+            grid.addWidget(name_lbl, row, 2)
 
             unit_combo = QComboBox()
             for unit_label, _ in spec.units:
@@ -305,23 +318,26 @@ class RealTimeTab(QWidget):
             unit_combo.currentIndexChanged.connect(
                 lambda idx, k=spec.key: self._on_unit_changed(k, idx)
             )
-            grid.addWidget(unit_combo, row, 2)
+            grid.addWidget(unit_combo, row, 3)
 
             auto_cb = QCheckBox()
+            auto_cb.setToolTip(f"Rescale the {spec.name} axis to fit its data")
             auto_cb.setChecked(True)
             auto_cb.toggled.connect(
                 lambda checked, k=spec.key: self._on_auto_range_toggled(k, checked)
             )
-            grid.addWidget(auto_cb, row, 3)
+            grid.addWidget(auto_cb, row, 4, alignment=Qt.AlignHCenter)
 
             self._control_rows[spec.key] = {
                 "show": show_cb,
+                "dot": dot,
                 "name": name_lbl,
                 "unit": unit_combo,
                 "auto": auto_cb,
             }
             row += 1
 
+        grid.setColumnStretch(2, 1)
         grid.setRowStretch(row, 1)
 
     def create_status_values_widget(self) -> QWidget:
@@ -365,16 +381,28 @@ class RealTimeTab(QWidget):
         for spec in self._specs:
             lbl = QLabel()
             lbl.setTextFormat(Qt.RichText)
-            lbl.setStyleSheet("font-size: 12px;")
             layout.addWidget(lbl)
             self._status_labels[spec.key] = lbl
             lbl.setVisible(self._series[spec.key].available)
+
+    def _build_plot_area(self) -> QWidget:
+        """The plot, with a message laid over it while there is nothing to show."""
+        area = QWidget()
+        grid = QGridLayout(area)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.addWidget(self._build_plot(), 0, 0)
+        self._empty_label = _theme().set_role(QLabel(EMPTY_NOTHING), "muted")
+        self._empty_label.setAlignment(Qt.AlignCenter)
+        self._empty_label.setWordWrap(True)
+        self._empty_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        grid.addWidget(self._empty_label, 0, 0, alignment=Qt.AlignCenter)
+        self._update_empty_state()
+        return area
 
     def _build_plot(self) -> pg.PlotWidget:
         self._plot = pg.PlotWidget()
         from ctwa import theme
         theme.style_plot(self._plot)
-        self._plot.showGrid(x=True, y=True, alpha=0.3)
         plot_item = self._plot.plotItem
         plot_item.setLabel("bottom", "Time since connect (s)")
 
@@ -422,8 +450,8 @@ class RealTimeTab(QWidget):
             # Axis line = black, tick numbers = colored, label = mixed
             # (name black + unit colored) via HTML in setLabel.
             s.axis = pg.AxisItem("right")
+            theme.style_axis(s.axis)
             s.axis.setLabel(_axis_label_html(spec.name, s.current_unit_label(), spec.color))
-            s.axis.setPen("#000000")
             s.axis.setTextPen(spec.color)
             s.axis.linkToView(s.view_box)
 
@@ -442,7 +470,7 @@ class RealTimeTab(QWidget):
         )
         row.addWidget(self.follow_cb)
 
-        self.reset_btn = QPushButton("Reset View")
+        self.reset_btn = QPushButton("Reset view")
         self.reset_btn.setToolTip(
             "Re-enable auto-range on X and every visible signal's Y axis.\n"
             "Use when scrolling or zooming has left the plot in a weird state."
@@ -496,9 +524,13 @@ class RealTimeTab(QWidget):
                 pass
             s.axis.hide()
 
+        # An axis only for a signal that is shown *and* has data: empty axes
+        # for signals that have not reported yet cost a fifth of the plot width.
         visible = [self._series[spec.key] for spec in self._specs
-                   if self._series[spec.key].available and self._series[spec.key].visible]
+                   if self._series[spec.key].available and self._series[spec.key].visible
+                   and self._series[spec.key].xs]
 
+        self._update_empty_state()
         left_axis = plot_item.getAxis("left")
         if not visible:
             plot_item.hideAxis("left")
@@ -512,7 +544,7 @@ class RealTimeTab(QWidget):
         first = visible[0]
         left_axis.linkToView(first.view_box)
         left_axis.setLabel(_axis_label_html(first.spec.name, first.current_unit_label(), first.spec.color))
-        left_axis.setPen("#000000")
+        _theme().style_axis(left_axis)
         left_axis.setTextPen(first.spec.color)
         plot_item.showAxis("left")
 
@@ -524,6 +556,18 @@ class RealTimeTab(QWidget):
 
         layout.invalidate()
         self._sync_viewboxes()
+
+    def _update_empty_state(self) -> None:
+        label = getattr(self, "_empty_label", None)
+        if label is None:
+            return
+        has_data = [s for s in self._series.values() if s.available and s.xs]
+        shown = [s for s in has_data if s.visible]
+        if shown:
+            label.hide()
+        else:
+            label.setText(EMPTY_HIDDEN if has_data else EMPTY_NOTHING)
+            label.show()
 
     def _sync_viewboxes(self) -> None:
         primary = self._plot.plotItem.vb
@@ -555,7 +599,8 @@ class RealTimeTab(QWidget):
             s.axis.setLabel(new_label)
         left_axis = self._plot.plotItem.getAxis("left")
         visible = [self._series[spec.key] for spec in self._specs
-                   if self._series[spec.key].available and self._series[spec.key].visible]
+                   if self._series[spec.key].available and self._series[spec.key].visible
+                   and self._series[spec.key].xs]
         if visible and visible[0] is s:
             left_axis.setLabel(new_label)
         if s.curve is not None and s.visible:
@@ -584,7 +629,7 @@ class RealTimeTab(QWidget):
             s.available = avail
             row = self._control_rows.get(spec.key)
             if row is not None:
-                for w in (row["show"], row["name"], row["unit"], row["auto"]):
+                for w in (row["show"], row["dot"], row["name"], row["unit"], row["auto"]):
                     w.setVisible(avail)
             labels = getattr(self, "_status_labels", None)
             if labels is not None and spec.key in labels:
@@ -609,6 +654,18 @@ class RealTimeTab(QWidget):
             # while the plot is empty — which is exactly how a silently-failing
             # sniff session managed to look like a working one.
             lbl = self._status_labels.get(s.spec.key)
+            if lbl is not None:
+                lbl.setText("")
+        self._rebuild_axes()
+
+    def clear_status_values(self, keys) -> None:
+        """Blank the status-bar values for these signals, leaving the plot.
+
+        Used when the source meter changes: its last sweep stays on the plot,
+        but a value in the status bar reads as current, and it no longer is.
+        """
+        for key in keys:
+            lbl = self._status_labels.get(key)
             if lbl is not None:
                 lbl.setText("")
 
@@ -638,6 +695,8 @@ class RealTimeTab(QWidget):
         rel_t = wall_ts - self._t_ref
         s.xs.append(rel_t)
         s.ys_base.append(value_base)
+        if len(s.xs) == 1:
+            self._rebuild_axes()   # its first sample: it gets an axis now
         if s.visible and s.curve is not None:
             s.curve.setData(s.xs, s.display_ys())
         self._update_value_label(s)
@@ -667,9 +726,11 @@ class RealTimeTab(QWidget):
         # without cluttering the display with FP-noise trailing digits.
         val_str = f"{display_val:.9g}"
         unit = s.current_unit_label()
+        theme = _theme()
         lbl.setText(
-            f"<span style='color:#000000;'>{s.spec.name}:</span> "
-            f"<span style='color:{s.spec.color};font-weight:bold;'>{val_str} {unit}</span>"
+            f"<span style='color:{s.spec.color};'>\u25cf</span> "
+            f"<span style='color:{theme.P.text_muted};'>{s.spec.name}</span> "
+            f"<span style='color:{theme.P.text};font-family:\"{theme.fonts()[1]}\";'>{val_str} {unit}</span>"
         )
 
     # ---- Actions -----------------------------------------------------------
@@ -683,6 +744,7 @@ class RealTimeTab(QWidget):
             labels = getattr(self, "_status_labels", None)
             if labels is not None and s.spec.key in labels:
                 labels[s.spec.key].setText("")
+        self._rebuild_axes()
 
     def _on_save_csv(self) -> None:
         n = sum(len(s.xs) for s in self._series.values() if s.available)
@@ -726,10 +788,10 @@ class RealTimeTab(QWidget):
 
 
 def _axis_label_html(name: str, unit: str, color: str) -> str:
-    """Axis label with the signal name in black and the unit in the signal's
+    """Axis label with the signal name muted and the unit in the signal's
     color. pyqtgraph AxisItem.setLabel accepts HTML."""
     return (
-        f"<span style='color:#000000;'>{name} </span>"
+        f"<span style='color:{_theme().P.text_muted};'>{name} </span>"
         f"<span style='color:{color};'>({unit})</span>"
     )
 
