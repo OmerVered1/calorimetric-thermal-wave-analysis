@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional
 
-from PyQt5.QtCore import QObject, QSettings, QThread, Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal
+from PySide6.QtWidgets import (
     QButtonGroup,
     QInputDialog,
     QMessageBox,
@@ -44,7 +44,7 @@ _BAUD_RATES = ("9600", "19200", "38400", "57600", "115200")
 
 
 class _Job(QObject):
-    done = pyqtSignal(object)
+    done = Signal(object)
 
     def __init__(self, fn: Callable):
         super().__init__()
@@ -70,8 +70,8 @@ def run_in_background(owner: QObject, fn: Callable, on_done: Callable) -> QThrea
     running — which makes Qt abort the whole program. Here the thread outlives
     the dialog, and its result is simply dropped if ``owner`` is gone.
     """
-    from PyQt5.QtCore import QCoreApplication
-    import sip
+    from PySide6.QtCore import QCoreApplication
+    import shiboken6
 
     thread = QThread(QCoreApplication.instance())
     job = _Job(fn)
@@ -79,7 +79,7 @@ def run_in_background(owner: QObject, fn: Callable, on_done: Callable) -> QThrea
     thread.started.connect(job.run)
 
     def deliver(result):
-        if not sip.isdeleted(owner):
+        if shiboken6.isValid(owner):
             on_done(result)
 
     job.done.connect(deliver)
@@ -110,7 +110,7 @@ class ChoiceCard(QFrame):
     release over it, and takes focus from Tab (Space or Return picks it).
     """
 
-    clicked = pyqtSignal()
+    clicked = Signal()
 
     def __init__(self, title: str, summary: str, parent=None):
         super().__init__(parent)
@@ -135,7 +135,7 @@ class ChoiceCard(QFrame):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             theme.set_prop(self, pressed="false")
-            if self.rect().contains(event.pos()):
+            if self.rect().contains(event.position().toPoint()):
                 self.clicked.emit()
         super().mouseReleaseEvent(event)
 
@@ -157,7 +157,7 @@ class ModelCard(ChoiceCard):
 class SMUConnectPanel(QWidget):
     """Emits ``connect_requested(model, address, simulate, resistance, baud)``."""
 
-    connect_requested = pyqtSignal(str, object, bool, object, object)
+    connect_requested = Signal(str, object, bool, object, object)
 
     def __init__(self, settings: Optional[QSettings] = None, parent=None):
         super().__init__(parent)

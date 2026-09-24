@@ -19,7 +19,7 @@ import urllib.request
 import webbrowser
 from typing import Optional
 
-from PyQt5.QtWidgets import QMessageBox, QApplication
+from PySide6.QtWidgets import QMessageBox, QApplication
 
 
 _GITHUB_LATEST_API = (
@@ -62,8 +62,8 @@ def _platform_asset_name() -> Optional[str]:
 
 def _download_with_progress(url: str, dest_path: str, parent_widget=None) -> bool:
     """Download a URL to dest_path, showing a modal progress dialog."""
-    from PyQt5.QtWidgets import QProgressDialog
-    from PyQt5.QtCore import Qt
+    from PySide6.QtWidgets import QProgressDialog
+    from PySide6.QtCore import Qt
 
     progress = QProgressDialog("Downloading update…", "Cancel", 0, 100, parent_widget)
     progress.setWindowTitle("Updating")
@@ -156,7 +156,7 @@ def check_for_updates(current_version: str,
             f"No automatic installer for this platform. Open the release page in your browser?"
         )
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-    reply = box.exec_()
+    reply = box.exec()
     if reply != QMessageBox.Yes:
         return
 

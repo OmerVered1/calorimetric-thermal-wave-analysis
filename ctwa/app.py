@@ -25,18 +25,18 @@ from typing import Optional, List, Dict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from PyQt5.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QTabWidget, QGroupBox, QLabel, QPushButton,
     QComboBox, QLineEdit, QCheckBox, QSpinBox, QDoubleSpinBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
     QFrame, QMessageBox, QFileDialog, QDialog, QListWidget,
     QProgressBar, QStatusBar, QTextEdit, QSizePolicy, QMenuBar,
-    QMenu, QAction, QFormLayout, QScrollArea, QAbstractSpinBox,
-    QInputDialog, QToolButton, QShortcut
+    QMenu, QFormLayout, QScrollArea, QAbstractSpinBox,
+    QInputDialog, QToolButton
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QSettings
-from PyQt5.QtGui import QFont, QColor, QPalette, QIcon, QKeySequence
+from PySide6.QtCore import Qt, QTimer, Signal, QThread, QSettings
+from PySide6.QtGui import QFont, QColor, QPalette, QIcon, QKeySequence, QAction, QShortcut
 
 import pyqtgraph as pg
 
@@ -312,8 +312,8 @@ class LiveReader(QThread):
     readings, their order and their rate are unchanged — only where they wait.
     """
 
-    reading = pyqtSignal(object, object)   # voltage, current (either may be None)
-    failed = pyqtSignal(str)
+    reading = Signal(object, object)   # voltage, current (either may be None)
+    failed = Signal(str)
 
     def __init__(self, smu, channel: str, measure: str, period_ms: int):
         super().__init__()
@@ -1040,13 +1040,13 @@ UNTITLED = "Untitled experiment"
 class ExperimentsSidebar(QGroupBox):
     """Sidebar listing saved experiments with action buttons + notes."""
 
-    experiment_selected = pyqtSignal(str)   # emitted when user picks one from the list
-    save_requested = pyqtSignal(str)        # emitted when user wants to save current state under a name
-    rename_requested = pyqtSignal(str, str) # (old_name, new_name)
-    delete_requested = pyqtSignal(str)
-    new_requested = pyqtSignal(str)         # new experiment with this name (saved immediately)
-    clone_requested = pyqtSignal(str, str)  # (source_name, new_name)
-    notes_changed = pyqtSignal(str)
+    experiment_selected = Signal(str)   # emitted when user picks one from the list
+    save_requested = Signal(str)        # emitted when user wants to save current state under a name
+    rename_requested = Signal(str, str) # (old_name, new_name)
+    delete_requested = Signal(str)
+    new_requested = Signal(str)         # new experiment with this name (saved immediately)
+    clone_requested = Signal(str, str)  # (source_name, new_name)
+    notes_changed = Signal(str)
 
     def __init__(self, store: ExperimentStore, parent=None):
         super().__init__(parent)
@@ -1130,7 +1130,7 @@ class ExperimentsSidebar(QGroupBox):
         menu.addAction("Clone\u2026", self._on_clone_clicked)
         menu.addSeparator()
         menu.addAction("Delete\u2026", self._on_delete_clicked)
-        menu.exec_(self.list_widget.viewport().mapToGlobal(pos))
+        menu.exec(self.list_widget.viewport().mapToGlobal(pos))
 
     # --- public API used by main window ---
 
@@ -1296,8 +1296,8 @@ class ExperimentsSidebar(QGroupBox):
 class SweepListWidget(QWidget):
     """Sweep list management with table"""
 
-    list_changed = pyqtSignal(int)
-    wave_generator_requested = pyqtSignal()
+    list_changed = Signal(int)
+    wave_generator_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1914,7 +1914,7 @@ class ConnectionDialog(QDialog):
     def _on_cal_setup_edit(self, new: bool):
         setup = None if new else self._selected_setup()
         dlg = CalorimeterSetupDialog(self, store=self._setup_store(), setup=setup)
-        if dlg.exec_() and dlg.saved_setup is not None:
+        if dlg.exec() and dlg.saved_setup is not None:
             self._refresh_cal_setups()
             found = self.cal_setup_combo.findData(dlg.saved_setup.name)
             if found >= 0:
@@ -2176,9 +2176,7 @@ class LicenseDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
-        self.accept_check.stateChanged.connect(
-            lambda state: self.accept_btn.setEnabled(state == Qt.Checked)
-        )
+        self.accept_check.toggled.connect(self.accept_btn.setEnabled)
 
     def _get_license_text(self):
         return f"""{__app_name__}
@@ -2900,7 +2898,7 @@ SIDEBAR_MIN_W, SIDEBAR_MAX_W = 210, 280
 class MainWindow(QMainWindow):
     """Main application window — Dual-channel 2602B control"""
 
-    measurement_update = pyqtSignal(object)
+    measurement_update = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -3650,7 +3648,7 @@ class MainWindow(QMainWindow):
 
     def _show_connection_dialog(self):
         dialog = ConnectionDialog(self)
-        dialog.exec_()
+        dialog.exec()
 
     def _disconnect(self):
         self.disconnect_instrument()
@@ -3710,7 +3708,7 @@ class MainWindow(QMainWindow):
 
     def _show_safety_dialog(self):
         dialog = SafetyDialog(self, self.safety_limits, model=self.model)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.Accepted:
             self.safety_limits = dialog.get_limits()
             self._limits_by_model[self.model] = self.safety_limits
             self.status.showMessage(f"Safety limits updated: \u00b1{self.safety_limits.max_voltage} V, \u00b1{self.safety_limits.max_current} A")
@@ -3721,7 +3719,7 @@ class MainWindow(QMainWindow):
         if license_accepted and license_version == __version__:
             return True
         dialog = LicenseDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.Accepted:
             self.settings.setValue("license_accepted", True)
             self.settings.setValue("license_version", __version__)
             return True
@@ -3751,7 +3749,7 @@ class MainWindow(QMainWindow):
         <li>Configuration save/load</li>
         </ul>
         <hr>
-        <p><small>Built with PyQt5 + pyqtgraph | TSP command interface</small></p>
+        <p><small>Built with PySide6 + pyqtgraph | TSP command interface</small></p>
         """
         QMessageBox.about(self, f"About {__app_name__}", about_text)
 
@@ -3806,7 +3804,7 @@ class MainWindow(QMainWindow):
             if self._current_wave_config:
                 self._wave_dialog.load_state(self._current_wave_config)
         dialog = self._wave_dialog
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.Accepted:
             wave_values = dialog.get_waveform_values()
             if wave_values:
                 self.sweep_list.sweep_values = wave_values
@@ -4620,7 +4618,7 @@ def main():
     window = MainWindow()
     window.show()
 
-    code = app.exec_()
+    code = app.exec()
     from ctwa.connect_panel import wait_for_background
     wait_for_background()
     sys.exit(code)

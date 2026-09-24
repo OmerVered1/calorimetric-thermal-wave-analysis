@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 
 C80_PORT = 1210
@@ -233,8 +233,8 @@ class CalorimeterReader(QThread):
     redundant polls.
     """
 
-    sample = pyqtSignal(float, dict)
-    error = pyqtSignal(str)
+    sample = Signal(float, dict)
+    error = Signal(str)
 
     def __init__(
         self,
@@ -403,15 +403,15 @@ class SniffingCalorimeterReader(QThread):
     sniff_capture_readiness() first and surface its remedy if not ok.
     """
 
-    sample = pyqtSignal(float, dict)
-    error = pyqtSignal(str)
+    sample = Signal(float, dict)
+    error = Signal(str)
     # Non-fatal progress/diagnostic text (which interface got picked, whether
     # any packets have arrived yet) — unlike `error`, receiving this does not
     # tear down the connection. Sniff mode fails silent-and-empty far more
     # often than it raises (wrong interface, nothing polling yet, a firewall
     # dropping capture), so this is what lets a user tell "quiet because nothing
     # has happened yet" apart from "quiet because it's capturing the wrong wire".
-    status = pyqtSignal(str)
+    status = Signal(str)
 
     # How long to wait with zero captured packets before flagging it — long
     # enough that a normal ~1 Hz poll loop has had several chances to appear.

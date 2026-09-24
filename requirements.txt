@@ -1,5 +1,5 @@
 # Calorimetric Thermal Wave Analysis Program
-PyQt5>=5.15.0
+PySide6>=6.8          # Qt 6; needs Windows 10 1809+ or 11, macOS 12+
 pyqtgraph>=0.13.0
 numpy>=1.24.0
 

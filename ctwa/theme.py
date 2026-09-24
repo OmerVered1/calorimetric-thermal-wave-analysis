@@ -25,9 +25,9 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 
-from PyQt5.QtCore import QEvent, QObject, Qt
-from PyQt5.QtGui import QColor, QCursor, QFont, QFontDatabase, QPalette
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtGui import QColor, QCursor, QFont, QFontDatabase, QPalette
+from PySide6.QtWidgets import (
     QAbstractButton, QAbstractSpinBox, QApplication, QComboBox, QFrame,
     QHBoxLayout, QLineEdit, QSizePolicy, QTabBar, QWidget,
 )
@@ -90,11 +90,9 @@ P = Palette()
 RADIUS = 4        # controls
 RADIUS_CARD = 6   # cards and panels
 
-# Qt 5 divides a stylesheet font-weight by 8 to get its own 0-99 scale, so the
-# CSS numbers land one step heavy: 500 gives SemiBold and 600 gives Bold.
-# These are the values that select Plex's Medium (57) and SemiBold (63).
-W_MEDIUM = 456
-W_SEMIBOLD = 504
+# Stylesheet font weights, on the CSS scale Qt 6 uses directly.
+W_MEDIUM = 500
+W_SEMIBOLD = 600
 
 UI_FAMILY = "IBM Plex Sans"
 MONO_FAMILY = "IBM Plex Mono"
@@ -128,7 +126,7 @@ def _load_fonts() -> bool:
         for f in files:
             if QFontDatabase.addApplicationFont(f.as_posix()) < 0:
                 ok = False
-        _fonts_loaded = ok and UI_FAMILY in QFontDatabase().families()
+        _fonts_loaded = ok and UI_FAMILY in QFontDatabase.families()
     return _fonts_loaded
 
 

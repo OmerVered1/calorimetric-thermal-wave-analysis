@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
@@ -62,8 +62,8 @@ COL_USE, COL_REQUEST, COL_FIELD, COL_NAME, COL_UNIT, COL_PREVIEW = range(6)
 class _CaptureWorker(QThread):
     """Runs one capture off the GUI thread."""
 
-    progress = pyqtSignal(float, int)
-    done = pyqtSignal(object)
+    progress = Signal(float, int)
+    done = Signal(object)
 
     def __init__(self, host, port, interface, seconds, parent=None):
         super().__init__(parent)

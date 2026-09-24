@@ -5,7 +5,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from calorimeter_discovery import analyse_chunks  # noqa: E402
 from calorimeter_setups import SetupStore  # noqa: E402
@@ -60,7 +60,7 @@ def test_capture_result_fills_one_row_per_channel(dialog):
 
 def test_save_is_enabled_only_after_a_successful_capture(app, tmp_path):
     d = CalorimeterSetupDialog(store=SetupStore(tmp_path / "s.json"))
-    from PyQt5.QtWidgets import QDialogButtonBox
+    from PySide6.QtWidgets import QDialogButtonBox
     assert not d._buttons.button(QDialogButtonBox.Save).isEnabled()
     d._on_capture_done(analyse_chunks(_traffic()))
     assert d._buttons.button(QDialogButtonBox.Save).isEnabled()
@@ -68,7 +68,7 @@ def test_save_is_enabled_only_after_a_successful_capture(app, tmp_path):
 
 def test_capture_error_is_surfaced_and_blocks_saving(app, tmp_path):
     from calorimeter_discovery import Discovery
-    from PyQt5.QtWidgets import QDialogButtonBox
+    from PySide6.QtWidgets import QDialogButtonBox
     d = CalorimeterSetupDialog(store=SetupStore(tmp_path / "s.json"))
     d._on_capture_done(Discovery(analysis=None, error="no packets captured"))
     assert "no packets" in d.warnings_label.text()
