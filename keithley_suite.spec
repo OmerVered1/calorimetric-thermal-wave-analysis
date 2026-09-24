@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for Calorimetric Thermal Wave Analysis Program.
+PyInstaller spec for the Calorimetric Thermal Wave Analysis Program.
 
 Cross-platform: produces a .app bundle on macOS and a folder-based EXE
 distribution on Windows / Linux. The BUNDLE step is skipped on non-darwin
@@ -22,19 +22,26 @@ else:
     icon_path = None
 
 a = Analysis(
-    ['launcher.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[('assets', 'assets'), ('calorimeter_profiles', 'calorimeter_profiles'),
            ('ctwa/assets', 'ctwa/assets')],
     hiddenimports=[
-        'keithley2450_pyqt',
+        'ctwa',
+        'ctwa.app',
+        'ctwa.theme',
+        'ctwa.connect_panel',
+        'ctwa.instruments',
+        'ctwa.instruments.capabilities',
+        'ctwa.instruments.registry',
+        'ctwa.instruments.smu',
+        'ctwa.instruments.discovery',
+        # Drivers are imported by name at connect time (smu._DRIVERS), which
+        # PyInstaller's static analysis cannot see — so they are listed here.
         'keithley2450_driver',
-        'keithley6430_pyqt',
         'keithley6430_driver',
-        'keithley2602b_pyqt',
         'keithley2602b_driver',
-        'keithley2611a_pyqt',
         'keithley2611a_driver',
         'network_setup',
         '_version',
@@ -61,6 +68,7 @@ a = Analysis(
         'PyQt5.QtWidgets',
         'PyQt5.QtCore',
         'PyQt5.QtGui',
+        'PyQt5.QtSvg',
         'pyqtgraph',
         'numpy',
         'serial',

@@ -1,0 +1,22 @@
+# Calorimetric Thermal Wave Analysis Program
+PyQt5>=5.15.0
+pyqtgraph>=0.13.0
+numpy>=1.24.0
+
+# Instruments
+pyvisa>=1.13.0        # 2450, 2602B, 2611A over USB / GPIB / LAN
+pyvisa-py>=0.7.0      # pure-Python VISA backend, for USB without NI-VISA
+pyusb>=1.2.0          # USB support for pyvisa-py
+pyserial>=3.5         # 6430 over RS-232
+
+# Calorimeter "sniff mode" (passive packet capture instead of connecting).
+# The Python side; the capture driver underneath is a separate install:
+#   Windows  Npcap from https://npcap.com, "WinPcap API-compatible mode" ticked.
+#            Run the program as Administrator.
+#   macOS    built in; run with sudo.
+#   Linux    built in; run with sudo, or grant CAP_NET_RAW.
+scapy>=2.5.0
+
+# Building installers
+pyinstaller>=6.0.0
+Pillow>=10.0.0

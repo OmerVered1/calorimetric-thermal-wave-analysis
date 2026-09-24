@@ -19,7 +19,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install PyQt5 pyqtgraph numpy pyvisa pyvisa-py pyserial pyinstaller scapy
+          pip install -r requirements.txt
 
       - name: Build macOS app from spec
         run: |
@@ -48,7 +48,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install PyQt5 pyqtgraph numpy pyvisa pyvisa-py pyserial pyinstaller pillow scapy
+          pip install -r requirements.txt
 
       - name: Build Windows exe from spec
         run: |
@@ -124,7 +124,7 @@ jobs:
           body: |
             ## Calorimetric Thermal Wave Analysis Program ${{ github.ref_name }}
 
-            Unified launcher for Keithley 2450, 6430, 2602B, and 2611A SourceMeter instruments.
+            One program for the Keithley 2450, 6430, 2602B and 2611A — choose the model when you connect.
 
             ### Downloads
             - **macOS**: `CTWA-macOS.zip` — extract and run the `.app`.

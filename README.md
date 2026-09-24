@@ -12,26 +12,24 @@ measurements in a Calvet calorimeter, and records the calorimeter alongside it.
 
 ---
 
-*The notes below describe the inherited v3.6.0 structure and are being
-rewritten as the four instrument apps merge into one.*
-
-
-Professional control and I-V characterization software for Keithley Source Measure Units (SMUs).
+One program for the Keithley 2450, 6430, 2602B and 2611A. There is no
+launcher: the window opens, and you choose the source meter model when you
+connect. Controls that only some models have (the 2450's front/rear terminals,
+the 6430's guard and high-capacitance modes, the 2602B's second channel) appear
+only when that model is connected.
 
 ## Supported Instruments
 
 ### Keithley 2450 SourceMeter
 - USB VISA communication (pyvisa)
 - Source voltage/current: +/-200V, +/-1A
-- Multiple GUI versions (PyQt5, tkinter)
-- See [README_keithley.md](README_keithley.md) for details
+- Front/rear terminal selection
 
 ### Keithley 6430 Sub-Femtoamp Remote SourceMeter
 - RS-232 serial communication (pyserial) via USB-to-serial converter
 - Source voltage/current: +/-105V, +/-105mA
 - Sub-femtoamp current measurement (down to 0.4 fA)
 - Guard mode for ultra-low current
-- See [README_k6430.md](README_k6430.md) for details
 
 ### Keithley 2602B Dual-Channel SourceMeter
 - VISA communication (USB, GPIB, Ethernet, RS-232 via pyvisa)
@@ -52,77 +50,86 @@ Professional control and I-V characterization software for Keithley Source Measu
 - I-V sweep characterization (Linear, List, Log)
 - Dual Y-axis graphing with presets
 - Wave generator tool for custom waveforms
+- Real Time tab: SMU and calorimeter signals on one time axis
+- Calorimeter panel (Setaram C80 / Drop): direct connect, or sniff mode
+  alongside Calisto — see [Calorimeter setups](#calorimeter-setups)
 - CSV export with auto-save
 - Configuration save/load (JSON)
-- Safety limits enforcement
+- Safety limits enforcement, with each model's own hardware maxima
 - Simulation mode for testing without hardware
+
+The Real Time tab and the calorimeter panel were 2602B/2611A-only in
+keithley-smu-control; the 2450 and 6430 have them here for the first time.
 
 ## Quick Start
 
-### Unified Launcher (recommended)
 ```bash
-pip install -r requirements_k2602b.txt
-python launcher.py
+pip install -r requirements.txt
+python main.py
 ```
 
-### Individual Instruments
+Choose **Simulate** in the connect dialog to try any model without
+hardware.
+
+### Tests
+
 ```bash
-# Keithley 2450
-pip install -r requirements_k2450.txt
-python keithley2450_pyqt.py
-
-# Keithley 6430
-pip install -r requirements_k6430.txt
-python keithley6430_pyqt.py
-
-# Keithley 2602B
-pip install -r requirements_k2602b.txt
-python keithley2602b_pyqt.py
-
-# Keithley 2611A
-pip install -r requirements_k2611a.txt
-python keithley2611a_pyqt.py
+QT_QPA_PLATFORM=offscreen pytest tests/
 ```
+
+`tests/golden/` holds the exact instrument command sequences the four original
+per-model programs sent for a set of scenarios; the merged window is tested
+against them, so a change that alters what reaches an instrument fails here.
+
+### Building
+
+```bash
+pyinstaller keithley_suite.spec --noconfirm
+```
+
+Pushing a `v*` tag builds the Windows installer and macOS app on GitHub Actions
+and attaches them to a release, which the in-app updater picks up.
 
 ## File Structure
 
 ```
-keithley2450_driver.py      # K2450 VISA driver
-keithley2450_pyqt.py        # K2450 PyQt5 GUI (recommended)
-keithley2450_gui.py         # K2450 tkinter GUI (legacy)
-keithley2450_app.py         # K2450 tkinter GUI (extended)
-requirements_k2450.txt      # K2450 dependencies
-requirements_keithley.txt   # K2450 dependencies (alternate)
-README_keithley.md          # K2450 documentation
+main.py                      # Start here
 
-keithley6430_driver.py      # K6430 RS-232 serial driver
-keithley6430_pyqt.py        # K6430 PyQt5 GUI
-requirements_k6430.txt      # K6430 dependencies
-README_k6430.md             # K6430 documentation
+ctwa/
+  app.py                     # The main window (was four per-model programs)
+  connect_panel.py           # Connect dialog: model, transport, address
+  theme.py                   # Palette, stylesheet and plot styling in one place
+  assets/                    # Stylesheet icons (check mark, chevrons)
+  instruments/
+    capabilities.py          # What each model has: channels, ranges, limits, extras
+    registry.py              # Model list and how each one connects
+    smu.py                   # One interface over the four drivers
+    discovery.py             # VISA / serial scans, run off the UI thread
 
-keithley2602b_driver.py     # K2602B TSP driver (dual-channel)
-keithley2602b_pyqt.py       # K2602B PyQt5 GUI
-requirements_k2602b.txt     # K2602B dependencies
+keithley2450_driver.py       # K2450 VISA driver
+keithley6430_driver.py       # K6430 RS-232 serial driver
+keithley2602b_driver.py      # K2602B TSP driver (dual-channel)
+keithley2611a_driver.py      # K2611A TSP driver (single-channel, LAN/GPIB/USB/RS-232)
+network_setup.py             # Reaching a LAN instrument on another subnet (Windows)
 
-keithley2611a_driver.py     # K2611A TSP driver (single-channel, LAN/GPIB/USB/RS-232)
-keithley2611a_pyqt.py       # K2611A PyQt5 GUI
-requirements_k2611a.txt     # K2611A dependencies
-
-launcher.py                 # Unified instrument launcher
-K2450Suite/                 # K2450 packaging resources
-
-calorimeter_reader.py        # Setaram calorimeter LAN reader (2602B/2611A "Calorimeter" panel)
+realtime_tab.py              # Real Time tab
+calorimeter_reader.py        # Setaram calorimeter LAN reader (the "Calorimeter" panel)
 sniffer/                     # Passive packet capture/decode, vendored from lan-signal-sniffer —
-                              # backs the calorimeter panel's "Sniff mode" (watch Calisto's own
-                              # traffic instead of connecting, so both can run at once)
+                             # backs the calorimeter panel's "Sniff mode" (watch Calisto's own
+                             # traffic instead of connecting, so both can run at once)
 calorimeter_profiles/        # Traffic-decoding profiles for the C80 / Drop (bundled defaults;
-                              # a user-saved profile of the same name replaces one)
+                             # a user-saved profile of the same name replaces one)
 calorimeter_setups.py        # Named setups: instrument + IP + capture adapter + which profile
 calorimeter_discovery.py     # Derives signals from a live capture (no Qt — testable headless)
 calorimeter_wizard.py        # "New setup…" dialog: capture, pick fields, name them, save
 signal_units.py              # Unit menus and plot colors for run-time-defined signals
 sniff_diagnose.py            # Standalone per-layer capture diagnostic (run as admin)
-tests/                       # pytest suite — run: QT_QPA_PLATFORM=offscreen pytest tests/
+
+updater.py, _version.py      # In-app updates from this repo's GitHub releases
+keithley_suite.spec          # PyInstaller build
+windows_installer.iss        # Inno Setup installer
+requirements.txt             # All dependencies
+tests/                       # pytest suite
 ```
 
 ## Calorimeter setups

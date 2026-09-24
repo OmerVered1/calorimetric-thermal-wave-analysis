@@ -1,9 +1,8 @@
-"""Wiring checks for both SMU GUIs.
+"""Wiring checks for the main window module.
 
-These do not open a main window — constructing one touches VISA, timers and
-menus. They check the parts the setup feature actually changed: that the module
-imports, that the connect signature carries a profile through, and that the CSV
-labels follow the reader's declared signals.
+These check the parts the setup feature and the merge actually changed: that
+the module imports, that the connect signature carries a profile through, and
+that the CSV labels follow the reader's declared signals.
 """
 
 import importlib
@@ -19,7 +18,7 @@ from PyQt5.QtWidgets import QApplication  # noqa: E402
 from calorimeter_reader import CalorimeterSignal  # noqa: E402
 
 
-MODULES = ["keithley2602b_pyqt", "keithley2611a_pyqt"]
+MODULES = ["ctwa.app"]
 
 
 @pytest.fixture(scope="module")

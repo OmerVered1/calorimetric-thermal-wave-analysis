@@ -1,6 +1,0 @@
-# Requirements for Keithley 2450 Control Program
-pyvisa>=1.13.0
-pyvisa-py>=0.7.0    # Pure Python VISA backend (optional, for USB without NI-VISA)
-matplotlib>=3.7.0
-numpy>=1.24.0
-pyusb>=1.2.0        # For USB communication without NI-VISA
