@@ -135,6 +135,18 @@ def asset(name: str) -> str:
     return (root / name).as_posix()
 
 
+
+def app_icon():
+    """The CTWA icon at every size it was drawn at (tools/make_icon.py), so Qt
+    picks a sharp one for the title bar, the taskbar and Alt-Tab."""
+    from PySide6.QtGui import QIcon
+
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        icon.addFile(asset(f"app_icon_{size}.png"))
+    return icon
+
+
 _fonts_loaded = None
 
 

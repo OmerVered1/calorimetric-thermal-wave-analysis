@@ -129,6 +129,6 @@ if sys.platform == 'darwin':
         bundle_identifier='com.omervered.ctwa',
         info_plist={
             'NSHighResolutionCapable': True,
-            'CFBundleShortVersionString': '1.0.0',  # bump per release
+            'CFBundleShortVersionString': '1.0.1',  # bump per release
         },
     )

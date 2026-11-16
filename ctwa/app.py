@@ -4497,8 +4497,18 @@ class MainWindow(QMainWindow):
 # Global stylesheet for dark theme with green/amber accents
 
 def main():
+    if sys.platform == "win32":
+        # Without its own app id, Windows groups the window under the Python
+        # host and shows that icon on the taskbar instead of ours.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "OmerVered.CalorimetricThermalWaveAnalysis")
+        except Exception:
+            pass
     app = QApplication(sys.argv)
     app.setApplicationName(__app_name__)
+    app.setWindowIcon(theme.app_icon())
     theme.apply(app)
 
     window = MainWindow()
