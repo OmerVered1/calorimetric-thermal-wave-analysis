@@ -276,6 +276,31 @@ class SMU:
             self.driver.set_measure_range(fn, value)
             self.driver.set_measure_range_auto(fn, False)
 
+    def configure_source_range(self, function: str, value: Optional[float],
+                               channel: str = "a") -> None:
+        """Source range for ``"Voltage"`` or ``"Current"``; ``value=None`` means
+        auto-range. A fixed range is set, then auto-range turned off, the same
+        two steps as configure_measure_range."""
+        if function not in ("Voltage", "Current"):
+            raise ValueError("function must be 'Voltage' or 'Current'")
+        if self._tsp:
+            ch = self._ch(channel)
+            q = "v" if function == "Voltage" else "i"
+            if value is None:
+                self.driver.set_source_range_auto(True, q, **ch)
+            else:
+                self.driver.set_source_range(value, q, **ch)
+                self.driver.set_source_range_auto(False, q, **ch)
+            return
+        self._ch(channel)
+        sf = self._module.SourceFunction
+        fn = sf.VOLTAGE if function == "Voltage" else sf.CURRENT
+        if value is None:
+            self.driver.set_source_range_auto(True, fn)
+        else:
+            self.driver.set_source_range(value, fn)
+            self.driver.set_source_range_auto(False, fn)
+
     def set_nplc(self, nplc: float, channel: str = "a") -> None:
         self._require("nplc", "integration-time (NPLC) control")
         self.driver.set_nplc(nplc, **self._ch(channel))

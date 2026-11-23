@@ -724,6 +724,20 @@ class Keithley2611A:
         self._ch(channel).sense_mode = mode
         logger.info(f"Sense mode set to: {mode.name}")
 
+    def set_source_range(self, range_val: float, source_type: str = "v", channel: str = "a"):
+        """Fixed source range: source_type 'v' (volts) or 'i' (amps).
+        Every sweep level must fit inside it."""
+        smu = self._smu(channel)
+        self._write(f"{smu}.source.range{source_type} = {range_val}")
+        logger.info(f"Channel {channel} source range ({source_type}) set to: {range_val}")
+
+    def set_source_range_auto(self, auto: bool = True, source_type: str = "v", channel: str = "a"):
+        """Source auto-range on or off (on after smuX.reset())."""
+        smu = self._smu(channel)
+        val = f"{smu}.AUTORANGE_ON" if auto else f"{smu}.AUTORANGE_OFF"
+        self._write(f"{smu}.source.autorange{source_type} = {val}")
+        logger.info(f"Channel {channel} source auto-range ({source_type}): {'ON' if auto else 'OFF'}")
+
     def set_output_off_mode(self, mode: OutputOffMode, channel: str = "a"):
         """Set what the output does when turned off: NORMAL, ZERO or HIGH_Z.
         smua.reset() leaves it at NORMAL."""

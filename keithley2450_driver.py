@@ -638,6 +638,15 @@ class Keithley2450:
     def set_measure_range_auto(self, function: MeasureFunction, auto: bool = True):
         self._write(f"SENS:{function.value}:RANG:AUTO {'ON' if auto else 'OFF'}")
 
+    def set_source_range(self, range_value: float, function: Optional[SourceFunction] = None):
+        """Fixed source range for `function` (default: the current source function)."""
+        function = function or self._source_function
+        self._write(f"SOUR:{function.value}:RANG {range_value}")
+
+    def set_source_range_auto(self, auto: bool = True, function: Optional[SourceFunction] = None):
+        function = function or self._source_function
+        self._write(f"SOUR:{function.value}:RANG:AUTO {'ON' if auto else 'OFF'}")
+
     def set_nplc(self, nplc: float, function: Optional[MeasureFunction] = None):
         """Integration time in power-line cycles; both functions unless given."""
         if function:

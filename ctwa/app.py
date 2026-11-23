@@ -78,10 +78,19 @@ def apply_source_limits(value_box, compliance_box, function: str, reset_complian
         compliance_box.setValue(min(max(default, cmin), cmax))
 
 
-def source_range_labels(function: str):
+def fill_source_ranges(box: QComboBox, function: str) -> None:
+    """The connected model's ranges for sourcing `function`, each item carrying
+    its value in V or A ("Auto" carries None). A chosen range the new list also
+    has stays chosen; otherwise the choice falls back to Auto."""
     caps = registry.active()
     opts = caps.voltage_ranges if function == "Voltage" else caps.current_ranges
-    return ["Auto"] + [o.label for o in opts]
+    chosen = box.currentText()
+    box.clear()
+    box.addItem("Auto", None)
+    for o in opts:
+        box.addItem(o.label, o.value)
+    i = box.findText(chosen)
+    box.setCurrentIndex(i if i >= 0 else 0)
 
 
 @dataclass
@@ -816,7 +825,7 @@ class SourceSettingsWidget(QGroupBox):
         FormRow(form, "Mode", self.mode)
 
         self.range = QComboBox()
-        self.range.addItems(["Auto", "100 mV", "1 V", "6 V", "40 V"])
+        fill_source_ranges(self.range, "Voltage")
         self.range.setMinimumWidth(FIELD_WIDTH)
         FormRow(form, "Range", self.range)
 
@@ -833,18 +842,13 @@ class SourceSettingsWidget(QGroupBox):
         self.curr_btn.set_selected(func_name == "Current")
 
         apply_source_limits(None, self.compliance, func_name, reset_compliance=True)
-        self.range.clear()
-        self.range.addItems(source_range_labels(func_name))
+        fill_source_ranges(self.range, func_name)
         self.function_changed.emit(func_name)
 
     def set_capabilities(self, caps):
         """Re-range for a newly connected model, keeping the chosen function."""
         apply_source_limits(None, self.compliance, self.function, reset_compliance=False)
-        current = self.range.currentText()
-        self.range.clear()
-        self.range.addItems(source_range_labels(self.function))
-        i = self.range.findText(current)
-        self.range.setCurrentIndex(i if i >= 0 else 0)
+        fill_source_ranges(self.range, self.function)
 
 
 class InstrumentSettingsWidget(QGroupBox):
@@ -3272,6 +3276,7 @@ class MainWindow(QMainWindow):
             "source": {
                 "function": ss.function,
                 "mode": ss.mode.currentText(),
+                "range": ss.range.currentText(),
                 "compliance": ss.compliance.value(),
             },
             "instrument": {
@@ -3321,6 +3326,10 @@ class MainWindow(QMainWindow):
                 ss.mode.setCurrentText(src["mode"])
             if "compliance" in src:
                 ss.compliance.setValue(src["compliance"])
+            # Experiments saved before the range was stored come back at Auto,
+            # the range they were actually sourced on.
+            i = ss.range.findText(src.get("range", "Auto"))
+            ss.range.setCurrentIndex(i if i >= 0 else 0)
 
             instd = exp.get("instrument", {})
             if instd.get("sense"):
@@ -3913,6 +3922,20 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Safety Error", str(e))
             return
 
+        # A fixed source range must hold every point; the instrument would
+        # refuse the first level above it in the middle of the run.
+        source_range = self.source_settings.range.currentData()
+        if source_range is not None:
+            peak = max(abs(v) for v in sweep_values)
+            if peak > source_range:
+                unit = "V" if function == "Voltage" else "A"
+                QMessageBox.critical(
+                    self, "Source range too small",
+                    f"The sweep reaches {peak:g} {unit}, but the source range is "
+                    f"{self.source_settings.range.currentText()}.\n\n"
+                    "Choose a larger range, or Auto.")
+                return
+
         # Clear previous data
         self.measurement_data.clear()
         self.table.clear_data()
@@ -4092,8 +4115,12 @@ class MainWindow(QMainWindow):
                 az = {"On": "ON", "Off": "OFF", "Once": "ONCE"}
                 self.smu.set_auto_zero(az.get(self.measure_settings.auto_zero.currentText(), "ON"),
                                        channel)
-            # Range of the measured quantity. Sent even at Auto: the Multimeter
-            # tab sets fixed ranges, and a sweep must not inherit them.
+            # Source range, then the measured quantity's range. Both sent even
+            # at Auto: the Multimeter tab sets fixed ranges, and a sweep must
+            # not inherit them.
+            self.smu.configure_source_range(function,
+                                            self.source_settings.range.currentData(),
+                                            channel)
             self.smu.configure_measure_range(self.measure_settings.measured,
                                              self.measure_settings.measure_range.currentData(),
                                              channel)

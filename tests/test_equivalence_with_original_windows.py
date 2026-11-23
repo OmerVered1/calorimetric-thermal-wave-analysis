@@ -30,8 +30,9 @@ CASES = [(m, s) for m in ("2450", "6430", "2602B", "2611A") for s in S.SCENARIOS
 #
 # 1. The 2602B and 2611A windows showed "Output Off" and "Auto Zero" but never
 #    sent them. The merged window sends both, as the 6430 window always did.
-# 2. No window sent the Measure "Range" choice. The merged window sends it for
-#    the measured quantity (current, when sourcing voltage), Auto included, so a
+# 2. No window sent the Source or Measure "Range" choice. The merged window
+#    sends both, Auto included: the source range for the sourced quantity, the
+#    measure range for the measured one (current, when sourcing voltage), so a
 #    sweep no longer inherits a fixed range left by the Multimeter tab.
 #
 # Every model resets on connect (smua.reset() / *RST), which leaves Output off
@@ -47,6 +48,9 @@ TSP_OFF_AND_ZERO = [
 AUTO_CURRENT_RANGE = {"2450": "SENS:CURR:RANG:AUTO ON", "6430": ":SENS:CURR:RANG:AUTO ON",
                       "2602B": "smua.measure.autorangei = smua.AUTORANGE_ON",
                       "2611A": "smua.measure.autorangei = smua.AUTORANGE_ON"}
+AUTO_SOURCE_VOLTAGE_RANGE = {"2450": "SOUR:VOLT:RANG:AUTO ON", "6430": ":SOUR:VOLT:RANG:AUTO ON",
+                             "2602B": "smua.source.autorangev = smua.AUTORANGE_ON",
+                             "2611A": "smua.source.autorangev = smua.AUTORANGE_ON"}
 
 
 def expected(model, scenario):
@@ -54,7 +58,7 @@ def expected(model, scenario):
     if scenario.startswith("sweep"):
         added = TSP_OFF_AND_ZERO if model in ("2602B", "2611A") else []
         i = sent.index(OUTPUT_ON[model])
-        sent[i:i] = added + [AUTO_CURRENT_RANGE[model]]
+        sent[i:i] = added + [AUTO_SOURCE_VOLTAGE_RANGE[model], AUTO_CURRENT_RANGE[model]]
     return sent
 
 
@@ -119,9 +123,10 @@ def test_output_off_and_auto_zero_are_shown_and_sent(app, model):
         sent = _sweep(app, w)
         smu = f"smu{channel}"
         on = sent.index(f"{smu}.source.output = {smu}.OUTPUT_ON")
-        assert sent[on - 3:on] == [
+        assert sent[on - 4:on] == [
             f"{smu}.source.offmode = {smu}.OUTPUT_HIGH_Z",
             f"{smu}.measure.autozero = {smu}.AUTOZERO_ONCE",
+            f"{smu}.source.autorangev = {smu}.AUTORANGE_ON",
             f"{smu}.measure.autorangei = {smu}.AUTORANGE_ON",
         ]
     finally:
@@ -183,6 +188,69 @@ def test_measure_range_is_saved_with_the_experiment(app):
         w.measure_settings.measure_range.setCurrentText("Auto")
         w._apply_state(state)
         assert w.measure_settings.measure_range.currentText() == "10 mA"
+    finally:
+        w.close()
+        app.processEvents()
+
+
+def _source_ranges(w):
+    box = w.source_settings.range
+    return [box.itemText(i) for i in range(box.count())]
+
+
+def test_source_range_lists_the_sourced_quantity_of_the_connected_model(app):
+    w = _window("2602B")
+    try:
+        assert _source_ranges(w) == ["Auto", "200 mV", "2 V", "20 V", "40 V"]
+        w.source_settings._set_function("Current")
+        assert _source_ranges(w)[:3] == ["Auto", "100 nA", "1 \u00b5A"]
+        assert _source_ranges(w)[-1] == "3 A"
+        w.source_settings._set_function("Voltage")
+        w.connect_instrument("2450", simulate=True, simulation_resistance=1000.0)
+        assert _source_ranges(w) == ["Auto", "200 mV", "2 V", "20 V", "200 V"]
+    finally:
+        w.close()
+        app.processEvents()
+
+
+def test_fixed_source_range_reaches_the_instrument(app):
+    w = _window("2602B")
+    try:
+        w._set_channel("b")
+        w.source_settings.range.setCurrentText("2 V")
+        sent = _sweep(app, w)
+        on = sent.index("smub.source.output = smub.OUTPUT_ON")
+        assert sent[on - 3:on] == [
+            "smub.source.rangev = 2",
+            "smub.source.autorangev = smub.AUTORANGE_OFF",
+            "smub.measure.autorangei = smub.AUTORANGE_ON",
+        ]
+    finally:
+        w.close()
+        app.processEvents()
+
+
+def test_sweep_beyond_a_fixed_source_range_does_not_start(app):
+    w = _window("2602B")
+    try:
+        w.source_settings.range.setCurrentText("2 V")
+        sent = _sweep(app, w, stop=5.0)
+        assert not w.running
+        assert not any("OUTPUT_ON" in c for c in sent)
+    finally:
+        w.close()
+        app.processEvents()
+
+
+def test_source_range_is_saved_with_the_experiment(app):
+    w = _window("2602B")
+    try:
+        w.source_settings.range.setCurrentText("20 V")
+        state = w._capture_state()
+        assert state["source"]["range"] == "20 V"
+        w.source_settings.range.setCurrentText("Auto")
+        w._apply_state(state)
+        assert w.source_settings.range.currentText() == "20 V"
     finally:
         w.close()
         app.processEvents()

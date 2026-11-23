@@ -743,20 +743,16 @@ class Keithley6430:
         else:
             return float(self._query(":SOUR:CURR:LEV?"))
 
-    def set_source_range(self, range_value: float):
-        """Set source range"""
-        if self._source_function == SourceFunction.VOLTAGE:
-            self._write(f":SOUR:VOLT:RANG {range_value}")
-        else:
-            self._write(f":SOUR:CURR:RANG {range_value}")
+    def set_source_range(self, range_value: float, function: Optional[SourceFunction] = None):
+        """Set source range for `function` (default: the current source function)"""
+        function = function or self._source_function
+        self._write(f":SOUR:{function.value}:RANG {range_value}")
 
-    def set_source_range_auto(self, auto: bool = True):
-        """Enable/disable source auto-ranging"""
+    def set_source_range_auto(self, auto: bool = True, function: Optional[SourceFunction] = None):
+        """Enable/disable source auto-ranging for `function` (default: the current one)"""
+        function = function or self._source_function
         state = "ON" if auto else "OFF"
-        if self._source_function == SourceFunction.VOLTAGE:
-            self._write(f":SOUR:VOLT:RANG:AUTO {state}")
-        else:
-            self._write(f":SOUR:CURR:RANG:AUTO {state}")
+        self._write(f":SOUR:{function.value}:RANG:AUTO {state}")
 
     # === MEASUREMENT FUNCTIONS ===
 

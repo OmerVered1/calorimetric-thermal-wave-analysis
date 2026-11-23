@@ -174,6 +174,23 @@ def test_2611a_output_off_and_auto_zero():
     ]
 
 
+@pytest.mark.parametrize("model,expected", [
+    ("2602B", ["smub.source.rangev = 2", "smub.source.autorangev = smub.AUTORANGE_OFF",
+               "smua.source.autorangei = smua.AUTORANGE_ON"]),
+    ("2611A", ["smua.source.rangev = 2", "smua.source.autorangev = smua.AUTORANGE_OFF",
+               "smua.source.autorangei = smua.AUTORANGE_ON"]),
+    ("2450", ["SOUR:VOLT:RANG 2", "SOUR:VOLT:RANG:AUTO OFF", "SOUR:CURR:RANG:AUTO ON"]),
+    ("6430", [":SOUR:VOLT:RANG 2", ":SOUR:VOLT:RANG:AUTO OFF", ":SOUR:CURR:RANG:AUTO ON"]),
+])
+def test_source_range_fixed_then_auto(model, expected):
+    """Fixed: range, then auto-range off (as for measure ranges). None: auto."""
+    s = SMU.create(model, simulate=True); s.connect()
+    sent = recorder(s)
+    s.configure_source_range("Voltage", 2, channel="b" if model == "2602B" else "a")
+    s.configure_source_range("Current", None)
+    assert sent == expected
+
+
 def test_6430_fixed_range_matches_the_old_window():
     s = SMU.create("6430", simulate=True); s.connect()
     sent = recorder(s)
