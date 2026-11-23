@@ -89,6 +89,7 @@ FEATURES = {
     "high_capacitance": ("set_high_capacitance", (True,)),
     "auto_zero": ("set_auto_zero", ("ON",)),
     "guard_mode": ("set_guard_mode", (True,)),
+    "output_off_mode": ("set_output_off_mode", ("Normal",)),
 }
 
 
@@ -144,6 +145,32 @@ def test_2450_sweep_settings_match_the_old_window():
         "SENS:CURR:NPLC 1.0", "SENS:VOLT:NPLC 1.0",
         "SOUR:VOLT:HCAP ON",
         "SENS:AZER ONCE",
+    ]
+
+
+def test_2602b_output_off_and_auto_zero_go_to_the_chosen_channel():
+    s = SMU.create("2602B", simulate=True); s.connect()
+    sent = recorder(s)
+    s.set_output_off_mode("High-Z", channel="b")
+    s.set_auto_zero("once", channel="b")
+    s.set_output_off_mode("Normal")
+    s.set_auto_zero("ON")
+    assert sent == [
+        "smub.source.offmode = smub.OUTPUT_HIGH_Z",
+        "smub.measure.autozero = smub.AUTOZERO_ONCE",
+        "smua.source.offmode = smua.OUTPUT_NORMAL",
+        "smua.measure.autozero = smua.AUTOZERO_AUTO",
+    ]
+
+
+def test_2611a_output_off_and_auto_zero():
+    s = SMU.create("2611A", simulate=True); s.connect()
+    sent = recorder(s)
+    s.set_output_off_mode("Zero")
+    s.set_auto_zero("OFF")
+    assert sent == [
+        "smua.source.offmode = smua.OUTPUT_ZERO",
+        "smua.measure.autozero = smua.AUTOZERO_OFF",
     ]
 
 

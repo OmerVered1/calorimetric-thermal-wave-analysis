@@ -46,6 +46,17 @@ class SenseMode(Enum):
     FOUR_WIRE = "REMOTE"
 
 
+class OutputOffMode(Enum):
+    """What the output does when it is turned off (smua.source.offmode)"""
+    NORMAL = "OUTPUT_NORMAL"
+    ZERO = "OUTPUT_ZERO"
+    HIGH_Z = "OUTPUT_HIGH_Z"
+
+
+# smua.measure.autozero, keyed by the "ON" / "OFF" / "ONCE" the SCPI models use
+AUTO_ZERO_STATES = {"ON": "AUTOZERO_AUTO", "OFF": "AUTOZERO_OFF", "ONCE": "AUTOZERO_ONCE"}
+
+
 @dataclass
 class SafetyLimits:
     """
@@ -712,6 +723,23 @@ class Keithley2611A:
         self._write(f"smua.sense = {tsp_mode}")
         self._ch(channel).sense_mode = mode
         logger.info(f"Sense mode set to: {mode.name}")
+
+    def set_output_off_mode(self, mode: OutputOffMode, channel: str = "a"):
+        """Set what the output does when turned off: NORMAL, ZERO or HIGH_Z.
+        smua.reset() leaves it at NORMAL."""
+        smu = self._smu(channel)
+        self._write(f"{smu}.source.offmode = {smu}.{mode.value}")
+        logger.info(f"Output off mode set to: {mode.name}")
+
+    def set_auto_zero(self, state: str = "ON", channel: str = "a"):
+        """Set auto-zero: "ON" (automatic, the reset default), "OFF" or "ONCE"."""
+        smu = self._smu(channel)
+        try:
+            tsp_state = AUTO_ZERO_STATES[state.upper()]
+        except KeyError:
+            raise Keithley2611AError(f"Auto zero must be ON, OFF or ONCE, not {state!r}") from None
+        self._write(f"{smu}.measure.autozero = {smu}.{tsp_state}")
+        logger.info(f"Auto zero set to: {state.upper()}")
 
     def set_nplc(self, nplc: float, channel: str = "a"):
         """

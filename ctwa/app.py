@@ -879,7 +879,7 @@ class InstrumentSettingsWidget(QGroupBox):
         self.guard_mode = QCheckBox("Guard mode (triax)")
         self._guard_row = FormRow(form, "", self.guard_mode)
 
-        # Output off state (6430)
+        # Output off state (6430, 2602B, 2611A)
         self.output_off_mode = QComboBox()
         self.output_off_mode.addItems(["Normal", "Zero", "High-Z"])
         self.output_off_mode.setMinimumWidth(FIELD_WIDTH)
@@ -4058,10 +4058,12 @@ class MainWindow(QMainWindow):
                 # unticking the box does not send guard OFF.
                 self.smu.set_guard_mode(True)
             if caps.output_off_mode:
-                self.smu.set_output_off_mode(self.inst_settings.output_off_mode.currentText())
+                self.smu.set_output_off_mode(self.inst_settings.output_off_mode.currentText(),
+                                             channel)
             if caps.auto_zero:
                 az = {"On": "ON", "Off": "OFF", "Once": "ONCE"}
-                self.smu.set_auto_zero(az.get(self.measure_settings.auto_zero.currentText(), "ON"))
+                self.smu.set_auto_zero(az.get(self.measure_settings.auto_zero.currentText(), "ON"),
+                                       channel)
 
             self.smu.output_on(channel)
             # Update output buttons from main thread

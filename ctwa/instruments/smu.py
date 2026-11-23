@@ -299,21 +299,22 @@ class SMU:
         self._require("high_capacitance", "high-capacitance mode")
         self.driver.set_high_capacitance(enabled)
 
-    def set_auto_zero(self, state: str) -> None:
+    def set_auto_zero(self, state: str, channel: str = "a") -> None:
+        """``"ON"``, ``"OFF"`` or ``"ONCE"``."""
         self._require("auto_zero", "auto-zero control")
-        self.driver.set_auto_zero(state.upper())
+        self.driver.set_auto_zero(state.upper(), **self._ch(channel))
 
     def set_guard_mode(self, enabled: bool) -> None:
         self._require("guard_mode", "guard mode")
         self.driver.set_guard_mode(enabled)
 
-    def set_output_off_mode(self, mode: str) -> None:
-        """``"Normal"``, ``"Zero"``, ``"High-Z"`` or ``"Guard"`` — the labels
-        the 6430 window offered — mapped onto the driver's own enum."""
+    def set_output_off_mode(self, mode: str, channel: str = "a") -> None:
+        """``"Normal"``, ``"Zero"``, ``"High-Z"`` or ``"Guard"`` (6430 only),
+        the labels the old windows offered, mapped onto the driver's own enum."""
         self._require("output_off_mode", "output-off mode")
         enum = self._module.OutputOffMode
         key = mode.strip().upper().replace("-", "_")
-        self.driver.set_output_off_mode(enum[key])
+        self.driver.set_output_off_mode(enum[key], **self._ch(channel))
 
     def __repr__(self) -> str:
         how = "simulated" if self.simulate else ("connected" if self.connected else "disconnected")
