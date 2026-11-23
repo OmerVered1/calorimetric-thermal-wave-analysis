@@ -793,6 +793,8 @@ FIELD_WIDTH = theme.scaled(130)
 class SourceSettingsWidget(QGroupBox):
     """Source settings panel — no DC/Pulse for 2602B"""
 
+    function_changed = Signal(str)      # "Voltage" or "Current"
+
     def __init__(self, parent=None):
         super().__init__("Source", parent)
         self._setup_ui()
@@ -833,6 +835,7 @@ class SourceSettingsWidget(QGroupBox):
         apply_source_limits(None, self.compliance, func_name, reset_compliance=True)
         self.range.clear()
         self.range.addItems(source_range_labels(func_name))
+        self.function_changed.emit(func_name)
 
     def set_capabilities(self, caps):
         """Re-range for a newly connected model, keeping the chosen function."""
@@ -945,15 +948,32 @@ class MeasureSettingsWidget(QGroupBox):
         FormRow(form, "Quantities", quantities)
 
         self.measure_range = QComboBox()
-        self.measure_range.addItems(["Auto", "100 nA", "1 \u00b5A", "10 \u00b5A", "100 \u00b5A", "1 mA", "10 mA", "100 mA", "1 A", "3 A"])
         self.measure_range.setMinimumWidth(FIELD_WIDTH)
         FormRow(form, "Range", self.measure_range)
+        self.set_ranges(registry.active(), "Voltage")
 
         self.auto_zero = QComboBox()
         self.auto_zero.addItems(["On", "Off", "Once"])
         self.auto_zero.setMinimumWidth(FIELD_WIDTH)
         self.auto_zero_row = FormRow(form, "Auto zero", self.auto_zero)
         self.auto_zero_row.setVisible(registry.active().auto_zero)
+
+    def set_ranges(self, caps, source_function: str):
+        """List the ranges of the quantity the sweep measures: current when
+        sourcing voltage, voltage when sourcing current. Each item carries its
+        value in SI units; "Auto" carries None. A chosen range the new list
+        also has stays chosen; otherwise the choice falls back to Auto."""
+        self.measured = "i" if source_function == "Voltage" else "v"
+        options = caps.current_ranges if self.measured == "i" else caps.voltage_ranges
+        chosen = self.measure_range.currentText()
+        self.measure_range.clear()
+        self.measure_range.addItem("Auto", None)
+        for o in options:
+            self.measure_range.addItem(o.label, o.value)
+        i = self.measure_range.findText(chosen)
+        self.measure_range.setCurrentIndex(i if i >= 0 else 0)
+        self.measure_range.setToolTip(
+            "Range for the measured " + ("current" if self.measured == "i" else "voltage"))
 
 
 class TimingSettingsWidget(QGroupBox):
@@ -3118,6 +3138,8 @@ class MainWindow(QMainWindow):
 
         self.measure_settings = MeasureSettingsWidget()
         settings_layout.addWidget(self.measure_settings, 1, 0)
+        self.source_settings.function_changed.connect(
+            lambda f: self.measure_settings.set_ranges(registry.active(), f))
 
         self.timing_settings = TimingSettingsWidget()
         settings_layout.addWidget(self.timing_settings, 1, 1)
@@ -3261,6 +3283,7 @@ class MainWindow(QMainWindow):
                 "i": ms.measure_i.isChecked(),
                 "r": ms.measure_r.isChecked(),
                 "p": ms.measure_p.isChecked(),
+                "range": ms.measure_range.currentText(),
                 "auto_zero": ms.auto_zero.currentText(),
             },
             "timing": {
@@ -3316,6 +3339,10 @@ class MainWindow(QMainWindow):
             ms.measure_i.setChecked(bool(md.get("i", True)))
             ms.measure_r.setChecked(bool(md.get("r", False)))
             ms.measure_p.setChecked(bool(md.get("p", False)))
+            # Experiments saved before the range was stored come back at Auto,
+            # the range they were actually measured on.
+            i = ms.measure_range.findText(md.get("range", "Auto"))
+            ms.measure_range.setCurrentIndex(i if i >= 0 else 0)
             if md.get("auto_zero"):
                 ms.auto_zero.setCurrentText(md["auto_zero"])
 
@@ -3464,6 +3491,7 @@ class MainWindow(QMainWindow):
         for box in (self.sweep_list.start_val, self.sweep_list.stop_val):
             box.setRange(-caps.max_voltage, caps.max_voltage)
         self.inst_settings.set_capabilities(caps)
+        self.measure_settings.set_ranges(caps, self.source_settings.function)
         self.measure_settings.auto_zero_row.setVisible(caps.auto_zero)
         if getattr(self, "_caps_model", None) != caps.model:
             # A different instrument: start from what its own window started
@@ -4064,6 +4092,11 @@ class MainWindow(QMainWindow):
                 az = {"On": "ON", "Off": "OFF", "Once": "ONCE"}
                 self.smu.set_auto_zero(az.get(self.measure_settings.auto_zero.currentText(), "ON"),
                                        channel)
+            # Range of the measured quantity. Sent even at Auto: the Multimeter
+            # tab sets fixed ranges, and a sweep must not inherit them.
+            self.smu.configure_measure_range(self.measure_settings.measured,
+                                             self.measure_settings.measure_range.currentData(),
+                                             channel)
 
             self.smu.output_on(channel)
             # Update output buttons from main thread
