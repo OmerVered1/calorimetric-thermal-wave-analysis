@@ -139,13 +139,9 @@ def test_case_matches_webapp(path):
         with pytest.raises(Exception) as caught:
             run_one_file_pipeline(synced, opts)
         exc = caught.value
-        if case["error"] in ("tooFewPoints", "smoothFailed", "parseFailed", "notEnoughOverlap"):
-            assert isinstance(exc, PipelineError), f"[{case_id}] expected PipelineError, got {exc!r}"
-            assert exc.code == case["error"], (
-                f"[{case_id}] error code: expected {case['error']!r}, got {exc.code!r}")
-        else:
-            assert str(exc) == case["error"], (
-                f"[{case_id}] error message: expected {case['error']!r}, got {str(exc)!r}")
+        actual_error = exc.code if isinstance(exc, PipelineError) else str(exc)
+        assert actual_error == case["error"], (
+            f"[{case_id}] error: expected {case['error']!r}, got {actual_error!r} ({exc!r})")
         return
 
     results = restore_nonfinite(case["results"], case["nonfinite"])
@@ -184,11 +180,13 @@ def test_lagfit_matches_webapp(path):
     entries = _load_json(path)
     points_raw = entries[0]["points"]
     points = [LagPoint(period=p["period"], lag=p["lag"]) for p in points_raw]
-    fits = {fit.kind: fit for fit in fit_lag_models(points)}
-    assert set(fits) == {e["kind"] for e in entries}, (
-        f"[{case_id}] fit kinds: expected {sorted(e['kind'] for e in entries)}, got {sorted(fits)}")
-    for e in entries:
-        fit = fits[e["kind"]]
+    fits = fit_lag_models(points)
+    assert len(fits) == len(entries), (
+        f"[{case_id}] number of fits: expected {len(entries)}, got {len(fits)}")
+    assert [f.kind for f in fits] == [e["kind"] for e in entries], (
+        f"[{case_id}] fit order (best first): expected {[e['kind'] for e in entries]}, "
+        f"got {[f.kind for f in fits]}")
+    for e, fit in zip(entries, fits):
         cid = f"{case_id}/{e['kind']}"
         check_value(cid, "params", e["params"], list(fit.params))
         check_value(cid, "label", e["label"], fit.label)
@@ -198,9 +196,14 @@ def test_lagfit_matches_webapp(path):
         check_value(cid, "pMin", e["pMin"], fit.p_min)
         check_value(cid, "pMax", e["pMax"], fit.p_max)
         check_value(cid, "serialized", e["serialized"], serialize_fit(fit))
-        check_value(cid, "described", e["described"], describe_lag_model(fit.kind))
+        check_value(cid, "described", e["described"], describe_lag_model(serialize_fit(fit)))
         for period in PREDICT_PERIODS:
             check_value(cid, f"predict({period})", e["predict_at"][str(period)], fit.predict(period))
+
+
+def test_describe_lag_model_of_nothing():
+    assert describe_lag_model(None) == "\u2014"
+    assert describe_lag_model("") == "\u2014"
 
 
 SPEED_CASES = [p for p in CASE_FILES if os.path.basename(p).startswith("al2o3_ctwa__")]
