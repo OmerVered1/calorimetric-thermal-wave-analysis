@@ -10,3 +10,8 @@ def _runs_save_to_a_scratch_folder(tmp_path_factory, monkeypatch):
     folder (~/Documents/K2602B_Data), next to measurements."""
     import ctwa.app
     monkeypatch.setattr(ctwa.app, "DEFAULT_SAVE_DIR", str(tmp_path_factory.mktemp("runs")))
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "slow: takes seconds, not milliseconds (speed checks)")

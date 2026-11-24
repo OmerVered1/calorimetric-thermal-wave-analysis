@@ -1,0 +1,77 @@
+{
+ "case_id": "fiber_150_600__ManualDense_raw",
+ "error": null,
+ "input_file": "fiber_150_600.csv",
+ "nonfinite": {},
+ "options": {
+  "clicks": [
+   [
+    16673.94214,
+    0
+   ],
+   [
+    16973.94071,
+    0
+   ],
+   [
+    16782.93817,
+    0
+   ],
+   [
+    17084.9433,
+    0
+   ]
+  ],
+  "params": {
+   "analysisMode": "Manual",
+   "c80PwrUnit": "mW",
+   "c80TimeUnit": "Seconds",
+   "cycleShift": 0,
+   "manualSnap": false,
+   "modelName": "golden",
+   "r1Mm": 6.72,
+   "r2Mm": 14.86,
+   "srcPwrUnit": "mW",
+   "srcTimeUnit": "Seconds",
+   "systemLag": 0,
+   "tCal": "00:00:00",
+   "tSrc": "00:00:00",
+   "testDate": "",
+   "testTime": "",
+   "useCalibration": false
+  },
+  "selMax": 38360,
+  "selMin": 16441,
+  "smoothToSine": false,
+  "waveType": "sine"
+ },
+ "results": {
+  "alphaCombinedCal": 2.44804326467619e-7,
+  "alphaCombinedRaw": 2.44804326467619e-7,
+  "alphaPhaseCal": 1.3073088718322429e-7,
+  "alphaPhaseRaw": 1.3073088718322429e-7,
+  "amplitudeA1": 0.40713169685687045,
+  "amplitudeA2": 0.08000169635422746,
+  "angularFreqW": 0.020944050857241058,
+  "frequencyF": 0.0033333492222979624,
+  "frequencyFResp": 0.003311202031568164,
+  "lagSe": 1.0032799999989948,
+  "lagSeSource": "pairs",
+  "lnTerm": 1.2302964313487574,
+  "markerCalTime": 16782.93817,
+  "markerSrc2Time": 16973.94071,
+  "markerSrcTime": 16673.94214,
+  "meanPeakCal": 216.33271428571425,
+  "meanPeakSrc": 10,
+  "meanTroughCal": 213.1763333333333,
+  "meanTroughSrc": 0.00005850505500000001,
+  "netLagDt": 109.99931000000106,
+  "netPhasePhi": 2.3038311429014473,
+  "periodT": 299.99856999999975,
+  "periodTResp": 302.00512999999773,
+  "rawLagDt": 109.99931000000106,
+  "rawPhasePhi": 2.3038311429014473,
+  "tMax": 38360,
+  "tMin": 16441
+ }
+}

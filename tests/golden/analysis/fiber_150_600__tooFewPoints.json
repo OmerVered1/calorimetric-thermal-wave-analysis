@@ -1,0 +1,31 @@
+{
+ "case_id": "fiber_150_600__tooFewPoints",
+ "error": "tooFewPoints",
+ "input_file": "fiber_150_600.csv",
+ "nonfinite": {},
+ "options": {
+  "params": {
+   "analysisMode": "AutoFit",
+   "c80PwrUnit": "mW",
+   "c80TimeUnit": "Seconds",
+   "cycleShift": 0,
+   "manualSnap": false,
+   "modelName": "golden",
+   "r1Mm": 6.72,
+   "r2Mm": 14.86,
+   "srcPwrUnit": "mW",
+   "srcTimeUnit": "Seconds",
+   "systemLag": 0,
+   "tCal": "00:00:00",
+   "tSrc": "00:00:00",
+   "testDate": "",
+   "testTime": "",
+   "useCalibration": false
+  },
+  "selMax": 16444,
+  "selMin": 16441,
+  "smoothToSine": false,
+  "waveType": "sine"
+ },
+ "results": null
+}

@@ -1,0 +1,77 @@
+{
+ "case_id": "al2o3_c80__Manual_raw",
+ "error": null,
+ "input_file": "al2o3_c80.csv",
+ "nonfinite": {},
+ "options": {
+  "clicks": [
+   [
+    5817.989333,
+    0
+   ],
+   [
+    6237.971192,
+    0
+   ],
+   [
+    5928.971716,
+    0
+   ],
+   [
+    6347.989906,
+    0
+   ]
+  ],
+  "params": {
+   "analysisMode": "Manual",
+   "c80PwrUnit": "mW",
+   "c80TimeUnit": "Seconds",
+   "cycleShift": 0,
+   "manualSnap": false,
+   "modelName": "golden",
+   "r1Mm": 6.72,
+   "r2Mm": 14.86,
+   "srcPwrUnit": "mW",
+   "srcTimeUnit": "Seconds",
+   "systemLag": 0,
+   "tCal": "00:00:00",
+   "tSrc": "00:00:00",
+   "testDate": "",
+   "testTime": "",
+   "useCalibration": false
+  },
+  "selMax": 12745,
+  "selMin": 5463,
+  "smoothToSine": false,
+  "waveType": "sine"
+ },
+ "results": {
+  "alphaCombinedCal": 7.620437349101253e-8,
+  "alphaCombinedRaw": 7.620437349101253e-8,
+  "alphaPhaseCal": 3.6271925056217525e-8,
+  "alphaPhaseRaw": 3.6271925056217525e-8,
+  "amplitudeA1": 1.0759922244560916,
+  "amplitudeA2": 0.014151810440773434,
+  "angularFreqW": 0.07480305604318487,
+  "frequencyF": 0.011905276127652947,
+  "frequencyFResp": 0.011932656193278872,
+  "lagSe": 0.48183449999987715,
+  "lagSeSource": "pairs",
+  "lnTerm": 3.9343635097271963,
+  "markerCalTime": 5928.971716,
+  "markerSrc2Time": 6237.971192,
+  "markerSrcTime": 5817.989333,
+  "meanPeakCal": 150.351,
+  "meanPeakSrc": 30,
+  "meanTroughCal": 149.4573333333333,
+  "meanTroughSrc": 0.007017999999999999,
+  "netLagDt": 110.5005484999997,
+  "netPhasePhi": 8.265778722248145,
+  "periodT": 83.9963717999999,
+  "periodTResp": 83.80363799999995,
+  "rawLagDt": 110.5005484999997,
+  "rawPhasePhi": 8.265778722248145,
+  "tMax": 12745,
+  "tMin": 5463
+ }
+}

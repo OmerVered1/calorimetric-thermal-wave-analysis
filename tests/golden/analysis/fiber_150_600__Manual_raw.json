@@ -1,0 +1,49 @@
+{
+ "case_id": "fiber_150_600__Manual_raw",
+ "error": "The two source-response pairs disagree by more than a quarter of a period. Check that each response peak belongs to its source peak.",
+ "input_file": "fiber_150_600.csv",
+ "nonfinite": {},
+ "options": {
+  "clicks": [
+   [
+    16673.94214,
+    0
+   ],
+   [
+    17873.94385,
+    0
+   ],
+   [
+    17684.94882,
+    0
+   ],
+   [
+    19220.9437,
+    0
+   ]
+  ],
+  "params": {
+   "analysisMode": "Manual",
+   "c80PwrUnit": "mW",
+   "c80TimeUnit": "Seconds",
+   "cycleShift": 0,
+   "manualSnap": false,
+   "modelName": "golden",
+   "r1Mm": 6.72,
+   "r2Mm": 14.86,
+   "srcPwrUnit": "mW",
+   "srcTimeUnit": "Seconds",
+   "systemLag": 0,
+   "tCal": "00:00:00",
+   "tSrc": "00:00:00",
+   "testDate": "",
+   "testTime": "",
+   "useCalibration": false
+  },
+  "selMax": 38360,
+  "selMin": 16441,
+  "smoothToSine": false,
+  "waveType": "sine"
+ },
+ "results": null
+}
