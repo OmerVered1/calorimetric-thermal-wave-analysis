@@ -138,7 +138,7 @@ class SettingsPanel(QFrame):
             t_cal="00:00:00", t_src="00:00:00",
             r1_mm=self.r1_spin.value(), r2_mm=self.r2_spin.value(),
             c80_time_unit="Seconds", c80_pwr_unit="mW",
-            src_time_unit="Seconds", src_pwr_unit="mW",
+            src_time_unit="Seconds", src_pwr_unit="Watts",  # the page's defaults; unused for one file
             use_calibration=self.calib_check.isChecked(),
             system_lag=self.lag_spin.value(),
             analysis_mode=self.mode(),
@@ -146,9 +146,6 @@ class SettingsPanel(QFrame):
             cycle_shift=float(self.shift_spin.value()),
             manual_snap=False,
         )
-
-    def fft_period(self) -> Optional[float]:
-        return self.period_spin.value() or None
 
     # ---- visibility ----
     def _on_mode(self) -> None:

@@ -15,9 +15,11 @@ from typing import Dict, List, Optional, Tuple
 from ctwa.analysis.parser import decode_bytes
 from ctwa.analysis.pipeline import default_selection, load_one_file, run_one_file_pipeline
 from ctwa.analysis.run_header import parse_run_header
-from ctwa.analysis.types import AnalysisResults, CombinedParsed, PipelineOptions, SyncedData
+from ctwa.analysis.modes import run_auto_fit_analysis
+from ctwa.analysis.smoothing import smooth_to_shared_sine
+from ctwa.analysis.types import AnalysisParams, AnalysisResults, CombinedParsed, PipelineOptions, SyncedData
 
-__all__ = ["LoadedRun", "load_run", "analyze_run"]
+__all__ = ["LoadedRun", "load_run", "analyze_run", "smoothed_region", "region_info"]
 
 _CACHE_MAX = 3
 # (path, mtime_ns, size) -> LoadedRun, least recently used first
@@ -72,3 +74,76 @@ def load_run(path: str) -> LoadedRun:
 
 def analyze_run(path: str, opts: PipelineOptions) -> AnalysisResults:
     return run_one_file_pipeline(load_run(path).synced, opts)
+
+
+_SMOOTH_MAX = 4
+_SMOOTH_CACHE: "OrderedDict[Tuple[str, int, int, float, float], object]" = OrderedDict()
+
+
+def smoothed_region(path: str, sel_min: float, sel_max: float):
+    """The webapp's smoothedRegion: (t_src, v_src_smoothed, t_cal, v_cal_smoothed) over the
+    region, each signal replaced by a sine at the source's frequency; None when the region
+    has under 10 points on either signal or no sine can be fitted. Cached per file and region."""
+    st = os.stat(path)
+    key = (path, st.st_mtime_ns, st.st_size, sel_min, sel_max)
+    if key in _SMOOTH_CACHE:
+        _SMOOTH_CACHE.move_to_end(key)
+        return _SMOOTH_CACHE[key]
+    s = load_run(path).synced
+    ts = [t for t in s.t_src if sel_min <= t <= sel_max]
+    vs = [v for t, v in zip(s.t_src, s.v_src) if sel_min <= t <= sel_max]
+    tc = [t for t in s.t_cal if sel_min <= t <= sel_max]
+    vc = [v for t, v in zip(s.t_cal, s.v_cal) if sel_min <= t <= sel_max]
+    result = None
+    if len(ts) >= 10 and len(tc) >= 10:
+        sm = smooth_to_shared_sine(ts, vs, tc, vc)
+        if sm is not None:
+            result = (ts, sm[0], tc, sm[1])
+    _SMOOTH_CACHE[key] = result
+    while len(_SMOOTH_CACHE) > _SMOOTH_MAX:
+        _SMOOTH_CACHE.popitem(last=False)
+    return result
+
+
+_PERIOD_CACHE: "OrderedDict[Tuple[str, int, int, float, float], Optional[float]]" = OrderedDict()
+
+
+def _region_slices(path: str, sel_min: float, sel_max: float):
+    s = load_run(path).synced
+    ts = [t for t in s.t_src if sel_min <= t <= sel_max]
+    vs = [v for t, v in zip(s.t_src, s.v_src) if sel_min <= t <= sel_max]
+    tc = [t for t in s.t_cal if sel_min <= t <= sel_max]
+    vc = [v for t, v in zip(s.t_cal, s.v_cal) if sel_min <= t <= sel_max]
+    return ts, vs, tc, vc
+
+
+def region_period(path: str, sel_min: float, sel_max: float) -> Optional[float]:
+    """The webapp's `preview.T` (page.tsx ~L460): the period the Auto (sine fit) analysis finds
+    in the region; None when the region is too short or has no clear period."""
+    st = os.stat(path)
+    key = (path, st.st_mtime_ns, st.st_size, sel_min, sel_max)
+    if key in _PERIOD_CACHE:
+        _PERIOD_CACHE.move_to_end(key)
+        return _PERIOD_CACHE[key]
+    ts, vs, tc, vc = _region_slices(path, sel_min, sel_max)
+    period = None
+    if len(ts) >= 10 and len(tc) >= 10:
+        params = AnalysisParams(
+            model_name="", test_date="", test_time="", t_cal="00:00:00", t_src="00:00:00",
+            r1_mm=6.72, r2_mm=14.86, c80_time_unit="Seconds", c80_pwr_unit="mW",
+            src_time_unit="Seconds", src_pwr_unit="Watts", use_calibration=False, system_lag=0.0,
+            analysis_mode="AutoFit")
+        try:
+            t = run_auto_fit_analysis(tc, vc, ts, vs, params, sel_min, sel_max).period_t
+            period = t if t is not None and math.isfinite(t) and t > 0 else None
+        except Exception:
+            period = None
+    _PERIOD_CACHE[key] = period
+    while len(_PERIOD_CACHE) > _SMOOTH_MAX:
+        _PERIOD_CACHE.popitem(last=False)
+    return period
+
+
+def region_info(path: str, sel_min: float, sel_max: float, smooth: bool):
+    """(period, smoothed_region or None) for snapping Manual markers in the region."""
+    return region_period(path, sel_min, sel_max), (smoothed_region(path, sel_min, sel_max) if smooth else None)

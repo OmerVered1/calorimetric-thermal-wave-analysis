@@ -17,8 +17,8 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QSizePo
                                QVBoxLayout, QWidget)
 
 from ctwa import theme
-from ctwa.analysis.peaks import snap_to_peak
 from ctwa.analysis.runner import LoadedRun
+from ctwa.analysis.jsmath import js_round
 from ctwa.analysis.sine_fit import refine_peak, remove_period_mean, sine_lag
 from ctwa.analysis.types import AnalysisResults, PipelineOptions
 from ctwa.ui.analysis_results import ResultsPanel
@@ -30,27 +30,6 @@ MARKER_NAMES = ("S1", "S2", "R1", "R2")  # source peak 1, 2; response peak 1, 2
 
 def _round2(x: float) -> float:
     return round(x, 2)
-
-
-def _fft_period(ts: List[float], vs: List[float]) -> Optional[float]:
-    """Period of the strongest sine in the region, from a zero-padded FFT (milliseconds).
-    Only used for the reach of marker snapping, so it does not need the pipeline's
-    own (much slower) estimate."""
-    t = np.asarray(ts, dtype=float)
-    v = np.asarray(vs, dtype=float)
-    n = len(t)
-    span = t[-1] - t[0] if n else 0.0
-    if n < 16 or not span > 0:
-        return None
-    dt = span / (n - 1)
-    v = v - np.polyval(np.polyfit(t - t[0], v, 1), t - t[0])
-    spec = np.abs(np.fft.rfft(v * np.hanning(n), n=8 * n))
-    f = np.fft.rfftfreq(8 * n, d=dt)
-    ok = f >= 2.0 / span  # at least two cycles in the region
-    if not ok.any():
-        return None
-    k = int(np.argmax(np.where(ok, spec, 0.0)))
-    return 1.0 / f[k] if f[k] > 0 else None
 
 
 class AnalysisTab(QWidget):
@@ -67,6 +46,10 @@ class AnalysisTab(QWidget):
         self._options: Optional[PipelineOptions] = None
         self._placed_for = None  # (sel_min, sel_max) the markers were last placed for
         self._has_results = False
+        self._info = {}        # (path, sel_min, sel_max, smooth) -> (period, smoothed series)
+        self._pending = {}     # marker index -> dropped time, waiting for the smoothed series
+        self._pending_key = None
+        self._place_pending = False
 
         root = QVBoxLayout(self)
         self.title = theme.set_role(QLabel("Open a run from the Runs tab"), "heading")
@@ -94,6 +77,7 @@ class AnalysisTab(QWidget):
         self.analyze_btn.clicked.connect(self._on_analyze)
         self.cancel_btn.clicked.connect(self._on_cancel)
         self.worker.loaded.connect(self._on_loaded)
+        self.worker.region_ready.connect(self._on_region_ready)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
         self.settings.changed.connect(self._on_settings_changed)
@@ -164,6 +148,14 @@ class AnalysisTab(QWidget):
         self._running = False
         self._has_results = False
         self._placed_for = None
+        self._info = {}
+        self._pending = {}
+        self._pending_key = None
+        self._place_pending = False
+        self.src_curve.clear()
+        self.resp_curve.clear()
+        self.region.setBounds((None, None))
+        self.region.setRegion((0, 1))
         self.title.setText(os.path.basename(path) + "  —  loading…")
         self.results_panel.clear()
         self.worker.load(path)
@@ -204,52 +196,83 @@ class AnalysisTab(QWidget):
         m = (t >= lo) & (t <= hi)
         return t[m].tolist(), np.asarray(v)[m].tolist()
 
-    def _period(self, ts, vs) -> Optional[float]:
-        override = self.settings.fft_period()
-        if override and self.settings.mode() in ("AutoFFT", "AutoFit"):
-            return override
-        if len(ts) < 10:
-            return None
-        est = _fft_period(ts, vs)
-        return est if est is not None and math.isfinite(est) and est > 0 else None
+    def _smooth_wanted(self) -> bool:
+        return self.settings.smooth_check.isChecked() and self.settings.wave() == "sine"
 
-    def _marker_series(self, which: str):
-        """Region slice a marker snaps on: the source or the response, with the
-        slow baseline taken off when the region is three periods or more (as the webapp's chart)."""
-        s = self.run.synced
-        ts, vs = self._slice(s.t_src, s.v_src)
-        tc, vc = self._slice(s.t_cal, s.v_cal)
-        T = self._period(ts, vs)
-        t, v = (ts, vs) if which == "src" else (tc, vc)
-        if T and len(t) > 1 and (t[-1] - t[0]) / T >= 3:
-            ft, fv = remove_period_mean(t, v, T)
-            if len(ft) > 10:
-                t, v = ft, fv
-        return t, v, T, (ts, vs, tc, vc)
+    def _info_key(self):
+        lo, hi = self._region()
+        return (self.run.path, lo, hi, self._smooth_wanted())
 
-    def snap_time(self, which: str, x: float) -> float:
-        """x moved onto the peak it points at (never further than a quarter period);
-        the nearest highest sample when the period is not known."""
-        t, v, T, _ = self._marker_series(which)
-        if not t:
+    def _snap(self, which: str, x: float, T, sm) -> float:
+        """x moved onto the peak it points at (page.tsx toPeak): the smoothed series when
+        smoothing is on (sm), else the raw one with its slow baseline taken off when the
+        region is three periods or more. Where no peak is found the time stays, rounded."""
+        if not T:
             return _round2(x)
-        peak = refine_peak(t, v, x, T) if T else None
-        if peak:
-            return _round2(peak[0])
-        return _round2(snap_to_peak(x, t, v)[0])
+        if sm is not None:
+            t, v = (sm[0], sm[1]) if which == "src" else (sm[2], sm[3])
+        else:
+            s = self.run.synced
+            t, v = self._slice(*((s.t_src, s.v_src) if which == "src" else (s.t_cal, s.v_cal)))
+            lo, hi = self._region()
+            if (hi - lo) / T >= 3:
+                ft, fv = remove_period_mean(t, v, T)
+                if len(ft) > 10:
+                    t, v = ft, fv
+        peak = refine_peak(t, v, x, T) if len(t) else None
+        return _round2(peak[0] if peak else x)
+
+    def _snap_markers(self, items) -> None:
+        """Move markers {index: time} onto their peaks. The region's period (and the smoothed
+        series) come from the worker; until they arrive the markers stay where they are."""
+        if not items or self.run is None or self._running:
+            return
+        key = self._info_key()
+        if key not in self._info:
+            self._pending.update(items)
+            self._pending_key = key
+            self.worker.region_info(*key)
+            self._update_controls()
+            return
+        T, sm = self._info[key]
+        for i, x in items.items():
+            self.markers[i].setValue(self._snap("src" if i < 2 else "resp", x, T, sm))
+
+    def _on_region_ready(self, info) -> None:
+        key, self._pending_key = self._pending_key, None
+        if key is None or self.run is None:
+            return
+        self._info[key] = info
+        items, self._pending = self._pending, {}
+        place, self._place_pending = self._place_pending, False
+        if key == self._info_key():
+            if place:
+                self._place_with(info[0])
+            self._snap_markers(items)
+        self._update_controls()
 
     def _on_marker_dropped(self, line) -> None:
-        if self.run is None:
-            return
-        i = self.markers.index(line)
-        line.setValue(self.snap_time("src" if i < 2 else "resp", line.value()))
+        if self.run is not None:
+            self._snap_markers({self.markers.index(line): line.value()})
 
     def _place_markers(self) -> None:
         """Put the markers on detected peaks, as the webapp does when the peaks step opens."""
-        _, _, T, (ts, vs, tc, vc) = self._marker_series("src")
         self._placed_for = self._region()
+        key = self._info_key()
+        if key not in self._info:
+            self._place_pending = True
+            self._pending_key = key
+            self.worker.region_info(*key)
+            self._update_controls()
+            return
+        self._place_with(self._info[key][0])
+
+    def _place_with(self, T) -> None:
         if not T:
             return
+        s = self.run.synced
+        ts, vs = self._slice(s.t_src, s.v_src)
+        tc, vc = self._slice(s.t_cal, s.v_cal)
         fit = sine_lag(ts, vs, tc, vc, T)
         if fit is None:
             return
@@ -267,9 +290,7 @@ class AnalysisTab(QWidget):
             return
         first = peaks[0]
         last = peaks[-1] if len(peaks) > 1 else first + T
-        for line, which, x in zip(self.markers, ("src", "src", "resp", "resp"),
-                                  (first, last, first + fit.lag, last + fit.lag)):
-            line.setValue(self.snap_time(which, x))
+        self._snap_markers({0: first, 1: last, 2: first + fit.lag, 3: last + fit.lag})
 
     def _ensure_markers_placed(self) -> None:
         if self.run is not None and self.settings.manual() and self._placed_for != self._region():
@@ -279,13 +300,17 @@ class AnalysisTab(QWidget):
     def is_running(self) -> bool:
         return self._running
 
+    def is_snapping(self) -> bool:
+        """Markers are waiting for the region's period (and smoothed series) from the worker."""
+        return self._pending_key is not None
+
     def _options_now(self) -> PipelineOptions:
         lo, hi = self._region()
         manual = self.settings.manual()
         return PipelineOptions(
             wave_type=self.settings.wave(),
             smooth_to_sine=self.settings.smooth_check.isChecked() and self.settings.wave() == "sine",
-            sel_min=_round2(lo), sel_max=_round2(hi),
+            sel_min=lo, sel_max=hi,
             params=self.settings.build_params(),
             square_period=self.settings.square_period(),
             clicks=[(m.value(), 0.0) for m in self.markers] if manual else None,
@@ -295,6 +320,9 @@ class AnalysisTab(QWidget):
         if self._running or self.run is None or self._loading:
             return
         self._options = self._options_now()
+        self._pending = {}
+        self._pending_key = None
+        self._place_pending = False
         self._running = True
         self._has_results = False
         self.results_panel.show_busy()
@@ -327,6 +355,10 @@ class AnalysisTab(QWidget):
 
     # ---- changes ----
     def _on_region_changed(self) -> None:
+        """A finished drag: whole seconds, as the webapp's overview (Math.round)."""
+        lo, hi = self.region.getRegion()
+        if (js_round(lo), js_round(hi)) != (lo, hi):
+            self.region.setRegion((js_round(lo), js_round(hi)))
         self._on_settings_changed()
 
     def _on_settings_changed(self) -> None:
@@ -340,8 +372,11 @@ class AnalysisTab(QWidget):
         manual = self.settings.manual() and self.run is not None
         for m in self.markers:
             m.setVisible(manual)
-        ready = self.run is not None and not self._running and not self._loading \
+        ready = self.run is not None and not self._running and not self._loading and not self.is_snapping() \
             and self.settings.radii_ok()
         self.analyze_btn.setEnabled(ready)
         self.cancel_btn.setVisible(self._running)
+        self.region.setMovable(not self._running)
+        for m in self.markers:
+            m.setMovable(not self._running)
         self.settings.setEnabled(not self._running)

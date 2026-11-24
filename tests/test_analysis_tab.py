@@ -68,6 +68,11 @@ def tab(qapp, run_file):
     w.worker.shutdown()
 
 
+def settle(w):
+    """Wait for the markers' snapping (period / smoothed series from the worker)."""
+    assert wait_until(lambda: not w.is_snapping()), "markers never settled"
+
+
 def analyze_and_wait(w):
     w.analyze_btn.click()
     assert wait_until(lambda: w.analyze_btn.isEnabled() and not w.is_running())
@@ -112,12 +117,14 @@ def test_manual_shows_four_markers_and_drop_snaps_to_peak(tab):
     tab.show()
     assert all(m.isVisible() for m in tab.markers)
     assert len(tab.markers) == 4
+    settle(tab)
     # a marker dropped away from any peak moves onto the nearest source peak
     x0 = tab.markers[0].value()
     T = 80.24
     off = x0 + T / 4.0
     tab.markers[0].setValue(off)
     tab.markers[0].sigPositionChangeFinished.emit(tab.markers[0])
+    settle(tab)
     x = tab.markers[0].value()
     assert x != off
     assert abs(x - off) <= T / 4.0 + 1.0
@@ -129,13 +136,20 @@ def test_manual_shows_four_markers_and_drop_snaps_to_peak(tab):
 
 
 def test_manual_run_sends_marker_times_as_placed(tab):
+    # the default region spans idle gaps between bursts, where the webapp's own Manual
+    # analysis also fails (golden al2o3_ctwa__Manual_raw); use one burst
+    tab.region.setRegion((10700, 12000))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
     tab.settings.set_mode("Manual")
     tab.show()
     tab.settings.calib_check.setChecked(False)
+    assert not tab.analyze_btn.isEnabled()  # markers still being placed
+    settle(tab)
+    assert tab.analyze_btn.isEnabled()
     got = []
     tab.result_ready.connect(got.append)
     analyze_and_wait(tab)
-    assert len(got) == 1
+    assert len(got) == 1, tab.results_panel.message()
     opts = got[0][1]
     assert opts.params.analysis_mode == "Manual"
     assert opts.params.manual_snap is False
@@ -207,7 +221,75 @@ def test_settings_follow_mode_and_wave(tab):
     p = s.build_params()
     assert (p.r1_mm, p.r2_mm) == (6.72, 14.86)
     assert (p.t_cal, p.t_src) == ("00:00:00", "00:00:00")
-    assert p.c80_time_unit == "Seconds" and p.src_pwr_unit == "mW"
+    assert p.c80_time_unit == "Seconds" and p.c80_pwr_unit == "mW"
+    assert p.src_time_unit == "Seconds" and p.src_pwr_unit == "Watts"  # the page's useState defaults
+
+
+def test_open_run_while_analyzing_drops_the_old_result(tab, run_file):
+    got = []
+    tab.result_ready.connect(got.append)
+    tab.analyze_btn.click()
+    assert tab.is_running()
+    tab.open_run(run_file)
+    assert not tab.is_running()
+    assert tab.run is None
+    assert tab.title.text().endswith("loading\u2026")
+    assert len(tab.src_curve.xData if tab.src_curve.xData is not None else []) == 0
+    assert wait_until(lambda: tab.run is not None)
+    wait_until(lambda: False, 4.0)
+    assert got == []
+    assert tab.results_panel.text("alpha_phase_raw") == "\u2014"
+
+
+def test_region_and_markers_locked_while_running(tab):
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    assert tab.region.movable and all(m.movable for m in tab.markers)
+    tab.analyze_btn.click()
+    assert tab.is_running()
+    assert not tab.region.movable
+    assert not any(m.movable for m in tab.markers)
+    assert wait_until(lambda: not tab.is_running())
+    assert tab.region.movable and all(m.movable for m in tab.markers)
+
+
+def test_region_edges_are_whole_seconds_after_a_drag(tab):
+    tab.region.setRegion((5463.4, 12744.6))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    assert tab.region.getRegion() == (5463, 12745)
+
+
+def test_marker_stays_where_dropped_when_no_peak_found(tab, monkeypatch):
+    import ctwa.ui.analysis_tab as mod
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    monkeypatch.setattr(mod, "refine_peak", lambda *a, **k: None)
+    tab.markers[1].setValue(7001.2345)
+    tab.markers[1].sigPositionChangeFinished.emit(tab.markers[1])
+    settle(tab)
+    assert tab.markers[1].value() == 7001.23
+
+
+@pytest.mark.slow
+def test_manual_with_smoothing_snaps_on_the_smoothed_series(tab):
+    from ctwa.analysis import runner
+    from ctwa.analysis.sine_fit import refine_peak
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    tab.settings.smooth_check.setChecked(True)
+    lo, hi = tab.region.getRegion()
+    line = tab.markers[0]
+    off = 7000.4
+    line.setValue(off)
+    line.sigPositionChangeFinished.emit(line)
+    assert line.value() == off  # smoothing runs in the worker; the marker waits where dropped
+    settle(tab)
+    assert line.value() != off
+    sm = runner.smoothed_region(tab.run.path, lo, hi)
+    t_s, v_s = sm[0], sm[1]
+    peak = refine_peak(t_s, v_s, off, runner.region_period(tab.run.path, lo, hi))
+    expected = round(peak[0] if peak else off, 2)
+    assert line.value() == expected
 
 
 def test_screenshot(tab):

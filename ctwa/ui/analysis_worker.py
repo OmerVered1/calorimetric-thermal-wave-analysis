@@ -24,6 +24,7 @@ __all__ = ["AnalysisWorker"]
 class AnalysisWorker(QObject):
     loaded = Signal(object)    # LoadedRun
     finished = Signal(object)  # AnalysisResults
+    region_ready = Signal(object)  # runner.region_info's (period, smoothed) for the last request
     failed = Signal(str, str)  # kind ("pipeline" | "analysis" | "crash"), message
 
     # request id, "loaded"/"finished"/"failed", payload or (kind, message)
@@ -46,6 +47,9 @@ class AnalysisWorker(QObject):
 
     def analyze(self, path: str, opts) -> None:
         self._submit("finished", runner.analyze_run, path, opts)
+
+    def region_info(self, path: str, sel_min: float, sel_max: float, smooth: bool) -> None:
+        self._submit("region", runner.region_info, path, sel_min, sel_max, smooth)
 
     def cancel(self) -> None:
         """Drop the running request (its result is ignored). The process is only
@@ -127,5 +131,7 @@ class AnalysisWorker(QObject):
             self.failed.emit(fail_kind, message)
         elif kind == "loaded":
             self.loaded.emit(payload)
+        elif kind == "region":
+            self.region_ready.emit(payload)
         else:
             self.finished.emit(payload)

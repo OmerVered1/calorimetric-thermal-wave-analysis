@@ -26,16 +26,16 @@ SE_SOURCES = {"blocks": "from the scatter between cycles",
               "pairs": "half the difference between the two pairs",
               "formal": "from the fit residuals; optimistic with few cycles"}
 
-ROWS = [  # key, label
-    ("alpha_phase_raw", "α phase, raw (mm²/s)"),
-    ("alpha_phase_cal", "α phase, calibrated (mm²/s)"),
-    ("alpha_combined_raw", "α combined, raw (mm²/s)"),
-    ("alpha_combined_cal", "α combined, calibrated (mm²/s)"),
-    ("lag", "Net lag ± SE (s)"),
-    ("a1", "Amplitude A₁ (mW)"),
-    ("a2", "Amplitude A₂ (mW)"),
-    ("period", "Period T (s)"),
-    ("ln_term", "ln(A₁√r₁ / A₂√r₂)"),
+ROWS = [  # key, label (lib/i18n/en.ts), unit
+    ("alpha_phase_raw", "\u03b1 Phase (Raw)", "mm\u00b2/s"),
+    ("alpha_phase_cal", "\u03b1 Phase (Calibrated)", "mm\u00b2/s"),
+    ("alpha_combined_raw", "\u03b1 Combined (Raw)", "mm\u00b2/s"),
+    ("alpha_combined_cal", "\u03b1 Combined (Calibrated)", "mm\u00b2/s"),
+    ("lag", "Net Time Lag \u00b1 standard error", "s"),
+    ("a1", "Amplitude A\u2081", "mW"),
+    ("a2", "Amplitude A\u2082", "mW"),
+    ("period", "Period T", "s"),
+    ("ln_term", "ln(A\u2081\u221ar\u2081 / A\u2082\u221ar\u2082)", ""),
 ]
 
 
@@ -76,12 +76,13 @@ class ResultsPanel(QFrame):
         grid.setColumnStretch(0, 1)
         lay.addLayout(grid)
         self._values: Dict[str, QLabel] = {}
-        for i, (key, label) in enumerate(ROWS):
+        for i, (key, label, unit) in enumerate(ROWS):
             grid.addWidget(theme.set_role(QLabel(label), "stat-label"), i, 0)
             v = theme.set_role(QLabel(DASH), "stat-value")
             v.setFont(theme.numeric_font(theme.TEXT))
             grid.addWidget(v, i, 1)
             self._values[key] = v
+            grid.addWidget(theme.set_role(QLabel(unit), "faint"), i, 2)
         self._note = theme.set_role(QLabel(), "faint")
         self._note.setWordWrap(True)
         lay.addWidget(self._note)
@@ -140,10 +141,10 @@ class ResultsPanel(QFrame):
             self._values[key].setText(text)
         notes = []
         if r.lag_se is not None and r.lag_se_source:
-            notes.append("Lag SE %s." % SE_SOURCES.get(r.lag_se_source, r.lag_se_source))
+            notes.append("Lag standard error: %s" % SE_SOURCES.get(r.lag_se_source, r.lag_se_source))
         if r.lag_cycles:
-            notes.append("The lag includes %d whole period(s)." % r.lag_cycles)
-        self._note.setText(" ".join(notes))
+            notes.append("includes %d whole period(s)" % r.lag_cycles)
+        self._note.setText(" \u00b7 ".join(notes))
         if r.lag_near_edge:
-            self._warning.setText("Check the cycle. " + EDGE_WARNING)
+            self._warning.setText(EDGE_WARNING)
             self._warning.show()

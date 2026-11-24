@@ -115,6 +115,47 @@ def test_load_run_ctwa(tmp_path):
     assert len(pickle.loads(pickle.dumps(run)).parsed.time) == 17700
 
 
+def test_region_period_is_the_autofit_period_of_the_region(tmp_path):
+    from ctwa.analysis.runner import region_period
+    path = _unzip("al2o3_ctwa", tmp_path)
+    case = json.load(open(os.path.join(GOLDEN_DIR, "al2o3_ctwa__AutoFit_raw.json")))
+    assert region_period(path, case["options"]["selMin"], case["options"]["selMax"]) == \
+        pytest.approx(case["results"]["periodT"], rel=1e-9)
+    assert region_period(path, 5463, 5466) is None
+
+
+def test_smoothed_region_matches_the_pipeline_smoothing(tmp_path):
+    from ctwa.analysis.runner import load_run, smoothed_region
+    from ctwa.analysis.smoothing import smooth_to_shared_sine
+    path = _unzip("al2o3_ctwa", tmp_path)
+    s = load_run(path).synced
+    lo, hi = 5463, 12745
+    ts = [t for t in s.t_src if lo <= t <= hi]
+    vs = [v for t, v in zip(s.t_src, s.v_src) if lo <= t <= hi]
+    tc = [t for t in s.t_cal if lo <= t <= hi]
+    vc = [v for t, v in zip(s.t_cal, s.v_cal) if lo <= t <= hi]
+    sm = smoothed_region(path, lo, hi)
+    ref = smooth_to_shared_sine(ts, vs, tc, vc)
+    assert sm[0] == ts and sm[2] == tc and sm[1] == ref[0] and sm[3] == ref[1]
+    assert smoothed_region(path, 5463, 5466) is None  # too few points
+
+
+def test_worker_region_info_emits_region_ready(worker, tmp_path):
+    path = _unzip("al2o3_ctwa", tmp_path)
+    got = []
+    worker.region_ready.connect(got.append)
+    worker.region_info(path, 5463, 12745, True)
+    loop = QEventLoop()
+    t = QTimer()
+    t.timeout.connect(lambda: loop.quit() if got else None)
+    t.start(10)
+    QTimer.singleShot(30000, loop.quit)
+    loop.exec()
+    t.stop()
+    period, sm = got[0]
+    assert period == pytest.approx(80.24, abs=0.01) and len(sm) == 4
+
+
 def test_load_run_c80_has_no_header(tmp_path):
     from ctwa.analysis.runner import load_run
     run = load_run(_unzip("al2o3_c80", tmp_path))
