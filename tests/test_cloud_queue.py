@@ -205,3 +205,26 @@ def test_concurrent_enqueue_during_flush(tmp_path):
     sent2, left = q.flush(c)
     assert sent + sent2 == 40 and left == 0
     assert len(c.inserted) == 40
+
+
+def test_transient_read_error_skips_row_without_moving_it(tmp_path, monkeypatch):
+    import builtins
+    q = UploadQueue(str(tmp_path))
+    ids = [q.enqueue(r) for r in rows(2)]
+    real_open = builtins.open
+    state = {"n": 0}
+
+    def flaky(path, *a, **k):
+        if str(path).endswith(ids[0] + ".json") and state["n"] == 0:
+            state["n"] += 1
+            raise PermissionError("locked")
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", flaky)
+    c = FakeClient()
+    assert q.flush(c) == (1, 1)
+    assert [r["x"] for r in c.inserted] == [1]
+    assert (tmp_path / (ids[0] + ".json")).exists()
+    assert not (tmp_path / (ids[0] + ".corrupt")).exists()
+    assert q.flush(c) == (1, 0)
+    assert sorted(r["x"] for r in c.inserted) == [0, 1]

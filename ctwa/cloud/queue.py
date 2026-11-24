@@ -77,9 +77,9 @@ class UploadQueue:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except FileNotFoundError:
+        except OSError:  # missing or transient: skip, leave the file alone
             return None
-        except (OSError, ValueError):
+        except ValueError:  # genuinely bad content
             data = None
         if not isinstance(data, dict):
             try:
