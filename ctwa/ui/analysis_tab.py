@@ -50,7 +50,6 @@ class AnalysisTab(QWidget):
         self._pending = {}     # marker index -> dropped time, waiting for the smoothed series
         self._pending_key = None
         self._place_pending = False
-        self._loading_or_running_before = False
 
         root = QVBoxLayout(self)
         self.title = theme.set_role(QLabel("Open a run from the Runs tab"), "heading")
@@ -79,6 +78,7 @@ class AnalysisTab(QWidget):
         self.cancel_btn.clicked.connect(self._on_cancel)
         self.worker.loaded.connect(self._on_loaded)
         self.worker.region_ready.connect(self._on_region_ready)
+        self.worker.region_failed.connect(self._on_region_failed)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
         self.settings.changed.connect(self._on_settings_changed)
@@ -354,17 +354,21 @@ class AnalysisTab(QWidget):
         self.result_ready.emit((self.run, self._options, res))
 
     def _on_failed(self, kind: str, message: str) -> None:
-        self._loading_or_running_before = self._running or self._loading
+        """A load or an analysis failed."""
         self._running = False
         self._loading = False
         self._has_results = False
-        if self._pending_key is not None and not self._loading_or_running_before:
-            self._pending_key = None
-            self._pending = {}
-            self._place_pending = False
-            self.results_panel.show_note("Couldn't snap the markers; they stay where you dropped them.")
-        else:
-            self.results_panel.show_error(kind, message)
+        self.results_panel.show_error(kind, message)
+        self._update_controls()
+
+    def _on_region_failed(self, _kind: str, _message: str) -> None:
+        """The region's period / smoothed series could not be had: markers stay where
+        they are and Analyze is free again."""
+        self._pending_key = None
+        self._pending = {}
+        self._place_pending = False
+        self._has_results = False
+        self.results_panel.show_note("Couldn't snap the markers; they stay where you dropped them.")
         self._update_controls()
 
     # ---- changes ----

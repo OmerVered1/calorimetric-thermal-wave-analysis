@@ -25,6 +25,7 @@ class AnalysisWorker(QObject):
     loaded = Signal(object)    # LoadedRun
     finished = Signal(object)  # AnalysisResults
     region_ready = Signal(object)  # runner.region_info's (period, smoothed) for the last request
+    region_failed = Signal(str, str)  # a region_info request failed (same kinds as `failed`)
     failed = Signal(str, str)  # kind ("pipeline" | "analysis" | "crash"), message
 
     # request id, "loaded"/"finished"/"failed", payload or (kind, message)
@@ -100,36 +101,44 @@ class AnalysisWorker(QObject):
             try:
                 fut = self._ensure_pool().submit(fn, *args)
             except Exception as e2:
-                self._delivered.emit(req, "failed", ("crash", "could not start the analysis process: %s" % e2))
+                self._delivered.emit(req, self._fail_kind(ok_kind),
+                                     ("crash", "could not start the analysis process: %s" % e2))
                 return
         fut.add_done_callback(lambda f, req=req, k=ok_kind: self._on_future(req, k, f))
+
+    @staticmethod
+    def _fail_kind(ok_kind: str) -> str:
+        # region requests have their own failure signal, so a failed snap is never
+        # taken for a failed load or analysis
+        return "region_failed" if ok_kind == "region" else "failed"
 
     def _on_future(self, req: int, ok_kind: str, fut: Future) -> None:
         # runs in the pool's thread: only turn the outcome into a signal
         if fut.cancelled():
             return
         exc = fut.exception()
+        fail = self._fail_kind(ok_kind)
         if exc is None:
             self._delivered.emit(req, ok_kind, fut.result())
         elif isinstance(exc, PipelineError):
-            self._delivered.emit(req, "failed", ("pipeline", exc.code))
+            self._delivered.emit(req, fail, ("pipeline", exc.code))
         elif isinstance(exc, ValueError):
-            self._delivered.emit(req, "failed", ("analysis", str(exc)))
+            self._delivered.emit(req, fail, ("analysis", str(exc)))
         elif isinstance(exc, BrokenProcessPool):
-            self._delivered.emit(req, "failed", ("crash", "the analysis process stopped unexpectedly"))
+            self._delivered.emit(req, fail, ("crash", "the analysis process stopped unexpectedly"))
         else:
-            self._delivered.emit(req, "failed", ("crash", "%s: %s" % (type(exc).__name__, exc)))
+            self._delivered.emit(req, fail, ("crash", "%s: %s" % (type(exc).__name__, exc)))
 
     @Slot(int, str, object)
     def _on_delivered(self, req: int, kind: str, payload: object) -> None:
         if req != self._current:
             return  # superseded or cancelled
         self._busy = False
-        if kind == "failed":
+        if kind in ("failed", "region_failed"):
             fail_kind, message = payload
             if fail_kind == "crash":
                 self._discard_pool()  # next request gets a fresh process
-            self.failed.emit(fail_kind, message)
+            (self.region_failed if kind == "region_failed" else self.failed).emit(fail_kind, message)
         elif kind == "loaded":
             self.loaded.emit(payload)
         elif kind == "region":

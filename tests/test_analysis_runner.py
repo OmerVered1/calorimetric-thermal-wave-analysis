@@ -170,6 +170,22 @@ def test_worker_region_info_emits_region_ready(worker, tmp_path):
     assert period == pytest.approx(80.24, abs=0.01) and len(sm) == 4
 
 
+def test_failed_region_request_uses_region_failed_not_failed(worker, tmp_path):
+    got, fails, rfails = [], [], []
+    worker.region_ready.connect(got.append)
+    worker.failed.connect(lambda k, m: fails.append((k, m)))
+    worker.region_failed.connect(lambda k, m: rfails.append((k, m)))
+    worker.region_info(str(tmp_path / "missing.csv"), 0, 100, False)
+    loop = QEventLoop()
+    t = QTimer()
+    t.timeout.connect(lambda: loop.quit() if rfails or fails else None)
+    t.start(10)
+    QTimer.singleShot(30000, loop.quit)
+    loop.exec()
+    t.stop()
+    assert len(rfails) == 1 and fails == [] and got == []
+
+
 def test_load_run_c80_has_no_header(tmp_path):
     from ctwa.analysis.runner import load_run
     run = load_run(_unzip("al2o3_c80", tmp_path))

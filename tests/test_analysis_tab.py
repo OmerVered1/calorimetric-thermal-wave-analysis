@@ -300,13 +300,38 @@ def test_failed_region_request_frees_the_tab(tab):
     assert tab.is_snapping()
     assert not tab.analyze_btn.isEnabled()
     before = [m.value() for m in tab.markers]
-    tab.worker.failed.emit("crash", "boom")
+    tab.worker.region_failed.emit("crash", "boom")
     assert not tab.is_snapping()
     assert tab.analyze_btn.isEnabled()
     assert [m.value() for m in tab.markers] == before
     assert tab.results_panel.message() == \
         "Couldn't snap the markers; they stay where you dropped them."
     assert tab._pending == {} and not tab._place_pending
+
+
+def test_region_request_that_really_fails_in_the_worker(tab):
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    failed, region_failed = [], []
+    tab.worker.failed.connect(lambda k, m: failed.append((k, m)))
+    tab.worker.region_failed.connect(lambda k, m: region_failed.append((k, m)))
+    tab.run.path = tab.run.path + ".gone"   # the worker cannot stat it
+    tab.region.setRegion((10600, 11900))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    assert tab.is_snapping()
+    assert wait_until(lambda: not tab.is_snapping())
+    assert len(region_failed) == 1 and failed == []
+    assert tab.analyze_btn.isEnabled()
+    assert "Couldn't snap" in tab.results_panel.message()
+
+
+def test_analysis_failure_after_a_snap_shows_the_analysis_error(tab):
+    tab.settings.set_mode("Manual")
+    settle(tab)   # a snap finished; the default region is gappy, so Manual analysis fails
+    tab.settings.calib_check.setChecked(False)
+    analyze_and_wait(tab)
+    msg = tab.results_panel.message()
+    assert "disagree" in msg and "Couldn't snap" not in msg
 
 
 def test_pending_items_of_an_older_region_are_dropped(tab):
