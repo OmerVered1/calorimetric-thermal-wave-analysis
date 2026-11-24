@@ -41,6 +41,7 @@ def parse_run_header(text_or_lines: Union[str, Iterable[str]]) -> Dict[str, obje
             if line:
                 break  # the header row: comments are over
             continue
+        line = line.rstrip(",").rstrip()  # a spreadsheet pads comment rows with commas
         m = _LINE.match(line)
         if not m:
             continue
