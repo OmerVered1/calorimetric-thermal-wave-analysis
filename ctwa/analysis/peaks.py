@@ -9,6 +9,8 @@ import math
 from functools import cmp_to_key
 from typing import List, Tuple
 
+from ctwa.analysis.jsmath import array_max, array_min, js_floor
+
 
 def find_peaks(values: List[float], distance: float) -> List[int]:
     """Local maxima at least `distance` samples apart, in ascending index order."""
@@ -48,7 +50,7 @@ def find_peaks(values: List[float], distance: float) -> List[int]:
 def auto_detect_peaks(
     time: List[float], values: List[float], min_distance_fraction: float = 0.05
 ) -> Tuple[List[int], List[float]]:
-    distance = max(math.floor(len(values) * min_distance_fraction), 10)
+    distance = max(js_floor(len(values) * min_distance_fraction), 10)
     indices = find_peaks(values, distance)
     times = [time[i] for i in indices]
     return indices, times
@@ -58,25 +60,9 @@ def find_troughs(values: List[float], distance: float) -> List[int]:
     return find_peaks([-v for v in values], distance)
 
 
-def _array_max(a: List[float]) -> float:
-    v = -math.inf
-    for x in a:
-        if x > v:
-            v = x
-    return v
-
-
-def _array_min(a: List[float]) -> float:
-    v = math.inf
-    for x in a:
-        if x < v:
-            v = x
-    return v
-
-
 def compute_cycle_amplitude(values: List[float], peak_indices: List[int]) -> float:
     if len(peak_indices) < 2:
-        return (_array_max(values) - _array_min(values)) / 2
+        return (array_max(values) - array_min(values)) / 2
 
     amplitudes: List[float] = []
     for k in range(len(peak_indices) - 1):
@@ -92,7 +78,7 @@ def compute_cycle_amplitude(values: List[float], peak_indices: List[int]) -> flo
         amplitudes.append((peak_avg - trough_val) / 2)
 
     if len(amplitudes) == 0:
-        return (_array_max(values) - _array_min(values)) / 2
+        return (array_max(values) - array_min(values)) / 2
 
     amplitudes.sort(key=cmp_to_key(lambda a, b: a - b))
     mid = len(amplitudes) // 2

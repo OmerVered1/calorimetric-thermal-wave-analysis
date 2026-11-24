@@ -10,38 +10,8 @@ from __future__ import annotations
 import math
 from typing import List, Optional, Tuple
 
+from ctwa.analysis.jsmath import js_div, js_fmod, js_max, js_min, js_round
 from ctwa.analysis.types import LagChoice, SineFit, SineLag
-
-
-def _div(a: float, b: float) -> float:
-    """JS division: x/0 gives +-Infinity or NaN instead of raising."""
-    try:
-        return a / b
-    except ZeroDivisionError:
-        if a != a or a == 0:
-            return math.nan
-        neg = (a < 0) != (math.copysign(1.0, b) < 0)
-        return -math.inf if neg else math.inf
-
-
-def _js_round(x: float) -> float:
-    """Math.round: floor(x + 0.5) (non-finite values pass through)."""
-    if x != x or x in (math.inf, -math.inf):
-        return x
-    return math.floor(x + 0.5)
-
-
-def _js_min(a: float, b: float) -> float:
-    """Math.min of two numbers (NaN propagates)."""
-    if a != a or b != b:
-        return math.nan
-    return a if a < b else b
-
-
-def _js_max(a: float, b: float) -> float:
-    if a != a or b != b:
-        return math.nan
-    return a if a > b else b
 
 
 def _least_squares(rows: List[List[float]], y: List[float]) -> Optional[List[float]]:
@@ -78,7 +48,7 @@ def _least_squares(rows: List[List[float]], y: List[float]) -> Optional[List[flo
 
 
 def baseline_degree(cycles: float) -> int:
-    return int(_js_min(6, _js_max(2, _js_round(cycles / 3))))
+    return int(js_min(6, js_max(2, js_round(cycles / 3))))
 
 
 def fit_sine(
@@ -142,7 +112,7 @@ def remove_period_mean(
     def up_to(x: float, j: int) -> Tuple[float, int]:
         while j < n - 2 and time[j + 1] < x:
             j += 1
-        f = _div(x - time[j], time[j + 1] - time[j])
+        f = js_div(x - time[j], time[j + 1] - time[j])
         vx = value[j] + f * (value[j + 1] - value[j])
         return integral[j] + 0.5 * (value[j] + vx) * (x - time[j]), j
 
@@ -170,7 +140,7 @@ def refine_period(time: List[float], value: List[float], period: float) -> float
     if not (cycles >= 4):
         return period
     degree = baseline_degree(cycles)
-    span = _js_min(0.04, 0.4 / cycles)
+    span = js_min(0.04, 0.4 / cycles)
 
     def amp(f: float) -> float:
         r = fit_sine(time, value, 2 * math.pi * f, degree)
@@ -203,16 +173,13 @@ def refine_period(time: List[float], value: List[float], period: float) -> float
 
 def lag_into_period(lag: float, period: float) -> float:
     """Bring a lag into [0, T); `%` follows JS (sign of the dividend)."""
-    try:
-        m = math.fmod(lag, period)
-    except ValueError:
-        return math.nan
+    m = js_fmod(lag, period)
     return m + period if m < 0 else m
 
 
 def choose_lag_cycle(lag: float, period: float, shift: float = 0) -> LagChoice:
     lag0 = lag_into_period(lag, period)
-    cycles = int(_js_max(0, _js_round(shift)))
+    cycles = int(js_max(0, js_round(shift)))
     frac = lag0 / period
     return LagChoice(
         dt=lag0 + cycles * period,
@@ -242,14 +209,14 @@ def sine_lag(
         return None
     omega = (2 * math.pi) / period
 
-    span = _js_min(t_src[-1], t_cal[-1]) - _js_max(t_src[0], t_cal[0])
+    span = js_min(t_src[-1], t_cal[-1]) - js_max(t_src[0], t_cal[0])
     if span / period >= 3:
         s_t, s_v = remove_period_mean(t_src, v_src, period)
         c_t, c_v = remove_period_mean(t_cal, v_cal, period)
         if len(s_t) >= 8 and len(c_t) >= 8:
             t_src, v_src, t_cal, v_cal = s_t, s_v, c_t, c_v
-    start = _js_max(t_src[0], t_cal[0])
-    end = _js_min(t_src[-1], t_cal[-1])
+    start = js_max(t_src[0], t_cal[0])
+    end = js_min(t_src[-1], t_cal[-1])
     cycles = (end - start) / period
 
     src = fit_sine(t_src, v_src, omega, 2)
@@ -307,8 +274,8 @@ def sine_lag(
                 d -= period
             if d < -period / 2:
                 d += period
-            lo = _js_min(lo, d)
-            hi = _js_max(hi, d)
+            lo = js_min(lo, d)
+            hi = js_max(hi, d)
         lag_se = math.hypot(lag_se, (hi - lo) / 2)
 
     return SineLag(
@@ -340,7 +307,7 @@ def refine_peak(
         return None
 
     step = (time[hi] - time[lo]) / (hi - lo)
-    w = int(_js_max(1, _js_round(_div(period / 20, step))))
+    w = int(js_max(1, js_round(js_div(period / 20, step))))
     best = lo
     best_val = -math.inf
     for i in range(lo, hi + 1):
@@ -368,8 +335,8 @@ def refine_peak(
         c = _least_squares(rows, y)
         if c is None or not (c[2] < 0):
             break
-        shift = _js_max(-period / 8, _js_min(period / 8, -c[1] / (2 * c[2])))
-        at = _js_max(around - reach, _js_min(around + reach, centre + shift))
+        shift = js_max(-period / 8, js_min(period / 8, -c[1] / (2 * c[2])))
+        at = js_max(around - reach, js_min(around + reach, centre + shift))
         d = at - centre
         peak = (at, c[0] + c[1] * d + c[2] * d * d)
         centre = at
