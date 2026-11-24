@@ -17,6 +17,9 @@ pyserial>=3.5         # 6430 over RS-232
 #   Linux    built in; run with sudo, or grant CAP_NET_RAW.
 scapy>=2.5.0
 
+# Cloud login: keeps the webapp token in the OS keyring
+keyring>=24
+
 # Building installers
 pyinstaller>=6.0.0
 Pillow>=10.0.0
