@@ -10,6 +10,8 @@ from __future__ import annotations
 import math
 from typing import Iterable
 
+from ctwa.analysis.jstrig import cos_array, sin_array
+
 
 # JS whitespace (String.prototype.trim, regex \s)
 JS_WHITESPACE = (" \t\n\v\f\r\u00a0\u1680" + "".join(map(chr, range(0x2000, 0x200B)))
@@ -37,6 +39,13 @@ def js_floor(x: float) -> float:
     if x != x or x in (math.inf, -math.inf):
         return x
     return float(math.floor(x))
+
+
+def js_ceil(x: float) -> float:
+    """Math.ceil: NaN and +-Infinity pass through (math.ceil raises on them)."""
+    if x != x or x in (math.inf, -math.inf):
+        return x
+    return float(math.ceil(x))
 
 
 def js_round(x: float) -> float:
@@ -85,13 +94,13 @@ def js_sqrt(x: float) -> float:
 
 
 def js_cos(x: float) -> float:
-    """Math.cos: NaN for Infinity."""
-    return math.nan if x in (math.inf, -math.inf) else math.cos(x)
+    """Math.cos as V8 computes it (fdlibm, see jstrig); NaN for Infinity."""
+    return float(cos_array([x])[0])
 
 
 def js_sin(x: float) -> float:
-    """Math.sin: NaN for Infinity."""
-    return math.nan if x in (math.inf, -math.inf) else math.sin(x)
+    """Math.sin as V8 computes it (fdlibm, see jstrig); NaN for Infinity."""
+    return float(sin_array([x])[0])
 
 
 def array_max(a: Iterable[float]) -> float:

@@ -14,6 +14,7 @@ import numpy as np
 
 from ctwa.analysis.diffusivity import calculate_thermal_diffusivity
 from ctwa.analysis.jsmath import array_max, array_min, js_div
+from ctwa.analysis.jstrig import cos_sin_array
 from ctwa.analysis.sine_fit import choose_lag_cycle
 from ctwa.analysis.types import AnalysisParams, AnalysisResults
 
@@ -66,8 +67,7 @@ def extract_fourier_fundamental(time: List[float], value: List[float], freq: flo
 
         d = v - mean
         angle = omega * t
-        cs = np.cos(angle)
-        sn = np.sin(angle)
+        cs, sn = cos_sin_array(angle)
         dt = t[1:] - t[:-1]
         c_terms = 0.5 * (d[:-1] * cs[:-1] + d[1:] * cs[1:]) * dt
         s_terms = 0.5 * (d[:-1] * sn[:-1] + d[1:] * sn[1:]) * dt

@@ -10,22 +10,28 @@ from __future__ import annotations
 import math
 from typing import List, Optional, Tuple
 
+import numpy as np
+
+from ctwa.analysis.jstrig import cos_sin_array
 from ctwa.analysis.jsmath import js_div, js_fmod, js_max, js_min, js_round
 from ctwa.analysis.types import LagChoice, SineFit, SineLag
 
 
-def _least_squares(rows: List[List[float]], y: List[float]) -> Optional[List[float]]:
-    """Solve the normal equations of rows.x = y (Gaussian elimination, partial pivoting)."""
-    n = len(rows[0])
-    g = [[0.0] * (n + 1) for _ in range(n)]
-    for r in range(len(rows)):
-        row = rows[r]
-        for i in range(n):
-            gi = g[i]
-            ri = row[i]
-            for j in range(n):
-                gi[j] += ri * row[j]
-            gi[n] += ri * y[r]
+def _least_squares(rows, y) -> Optional[List[float]]:
+    """Solve the normal equations of rows.x = y (Gaussian elimination, partial pivoting).
+
+    The normal-equation sums run over the samples in order (cumsum is
+    sequential), so they are the TypeScript's own.
+    """
+    r_arr = np.asarray(rows, dtype=np.float64)
+    y_arr = np.asarray(y, dtype=np.float64)
+    n = r_arr.shape[1]
+    with np.errstate(all="ignore"):
+        prod = r_arr[:, :, None] * r_arr[:, None, :]
+        rhs = r_arr * y_arr[:, None]
+        sums = np.cumsum(prod, axis=0)[-1]
+        rsum = np.cumsum(rhs, axis=0)[-1]
+    g = [[float(sums[i, j]) for j in range(n)] + [float(rsum[i])] for i in range(n)]
     for i in range(n):
         p = i
         for k in range(i + 1, n):
@@ -63,27 +69,26 @@ def fit_sine(
     if not (half > 0):
         return None
 
-    rows: List[List[float]] = []
-    for i in range(n):
-        u = (time[i] - mid) / half
-        row = [0.0] * terms
-        p = 1.0
+    t_arr = np.asarray(time, dtype=np.float64)
+    angle = omega * t_arr
+    with np.errstate(all="ignore"):
+        u = (t_arr - mid) / half
+        mat = np.empty((n, terms), dtype=np.float64)
+        p = np.ones(n, dtype=np.float64)
         for d in range(degree + 1):
-            row[d] = p
-            p *= u
-        row[degree + 1] = math.cos(omega * time[i])
-        row[degree + 2] = math.sin(omega * time[i])
-        rows.append(row)
-    x = _least_squares(rows, value)
+            mat[:, d] = p
+            p = p * u
+        mat[:, degree + 1], mat[:, degree + 2] = cos_sin_array(angle)
+    x = _least_squares(mat, value)
     if x is None:
         return None
 
-    ss = 0.0
-    for i in range(n):
-        fit = 0.0
+    with np.errstate(all="ignore"):
+        fit = np.zeros(n, dtype=np.float64)
         for j in range(terms):
-            fit += rows[i][j] * x[j]
-        ss += (value[i] - fit) ** 2
+            fit = fit + mat[:, j] * x[j]
+        resid = np.asarray(value, dtype=np.float64) - fit
+        ss = float(np.cumsum(resid * resid)[-1])
     amplitude = math.hypot(x[degree + 1], x[degree + 2])
     if not (amplitude > 0) or not math.isfinite(amplitude):
         return None

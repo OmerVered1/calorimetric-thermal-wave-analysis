@@ -11,7 +11,10 @@ import math
 from functools import cmp_to_key
 from typing import List, Optional, Tuple
 
+import numpy as np
+
 from ctwa.analysis.jsmath import js_div, js_floor, js_max, js_min
+from ctwa.analysis.jstrig import cos_array
 from ctwa.analysis.peaks import find_peaks
 from ctwa.analysis.square import extract_fourier_fundamental
 
@@ -94,7 +97,8 @@ def reconstruct_sine_at(time: List[float], value: List[float], freq: float) -> L
     mean /= len(value)
     f = extract_fourier_fundamental(time, value, freq)
     w = 2 * math.pi * freq
-    return [mean + f.amplitude * math.cos(w * t - f.phase) for t in time]
+    angle = w * np.asarray(time, dtype=np.float64) - f.phase
+    return [mean + f.amplitude * c for c in cos_array(angle).tolist()]
 
 
 def smooth_to_shared_sine(
