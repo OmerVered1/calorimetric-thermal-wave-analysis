@@ -59,8 +59,10 @@ class FakeClient:
         if self.error:
             raise self.error
         out = self.rows
+        if query.get("c80_filename") == "is.null":
+            out = [r for r in out if r.get("c80_filename") is None]
         for key in ("c80_filename", "test_date"):
-            if key in query:
+            if key in query and query[key] != "is.null":
                 vals = {v.replace('\\"', '"') for v in re.findall(r'"((?:[^"\\]|\\.)*)"', query[key])}
                 out = [r for r in out if r.get(key) in vals]
         return list(out)
@@ -173,8 +175,9 @@ def test_exact_and_same_day_counts(env):
     a, b, c = (row_of(tab, n) for n in ("a.csv", "b.csv", "c.csv"))
     assert cell(tab, a, 3) == "2" and cell(tab, a, 4) == "newest"
     assert cell(tab, a, 3, Qt.ForegroundRole) is None
-    # b has no exact match: same day (17/11/2026) holds 3 rows, shown grey with the tooltip
-    assert cell(tab, b, 3) == "3" and cell(tab, b, 4) == ""
+    # b has no exact match: the same day (17/11/2026) holds ONE row that names no file (a.csv's
+    # two rows belong to a.csv), shown grey with the tooltip
+    assert cell(tab, b, 3) == "1" and cell(tab, b, 4) == ""
     assert cell(tab, b, 3, Qt.ForegroundRole) is not None
     assert cell(tab, b, 3, Qt.ToolTipRole) == "same day; older results don't record their file"
     assert cell(tab, c, 3) == "0"
@@ -379,8 +382,10 @@ class PagingClient:
     def select(self, table, query):
         self.queries.append(dict(query))
         out = self.rows
+        if query.get("c80_filename") == "is.null":
+            out = [r for r in out if r.get("c80_filename") is None]
         for key in ("c80_filename", "test_date"):
-            if key in query:
+            if key in query and query[key] != "is.null":
                 vals = {v.replace('\\"', '"').replace("\\\\", "\\")
                         for v in re.findall(r'"((?:[^"\\]|\\.)*)"', query[key])}
                 out = [r for r in out if r.get(key) in vals]
@@ -414,7 +419,7 @@ def test_names_are_chunked_at_20(tmp_path):
     runs = _runs(tmp_path, [f"r{i:02d}.csv" for i in range(45)])
     c = PagingClient([])
     run_index.query_saved_rows(c, runs)
-    name_queries = [q for q in c.queries if "c80_filename" in q]
+    name_queries = [q for q in c.queries if q.get("c80_filename", "").startswith("in.(")]
     assert [q["c80_filename"].count('"') // 2 for q in name_queries] == [20, 20, 5]
 
 
@@ -461,3 +466,103 @@ def test_scan_failure_shows_its_reason_not_zero_runs(env, monkeypatch):
     settle(tab)
     assert "the folder vanished" in tab.status.text()
     assert "0 run files" not in tab.status.text()
+
+
+# ---- final fix wave ----
+
+def _trip(monkeypatch):
+    """Parsing a run file in the GUI process is a bug: trip on every way in."""
+    from ctwa.analysis import runner
+
+    def boom(*a, **k):
+        raise AssertionError("run file parsed in the GUI process")
+    monkeypatch.setattr(run_index, "compute_mean_temperature", boom)
+    monkeypatch.setattr(run_index, "parse_combined_file", boom)
+    monkeypatch.setattr(runner, "parse_combined_file", boom)   # the child imports its own copy
+
+
+def test_means_come_from_a_separate_process_never_the_gui_one(env, monkeypatch):
+    make, auto, _, tmp = env
+    make_run(str(auto / "a.csv"), mean_t=27.5)
+    make_run(str(auto / "b.csv"), mean_t=30.0)
+    _trip(monkeypatch)
+    tab = make(FakeClient())
+    tab.refresh()
+    settle(tab)
+    assert cell(tab, row_of(tab, "a.csv"), 5) == "27.5 °C"
+    assert cell(tab, row_of(tab, "b.csv"), 5) == "30.0 °C"
+    assert os.path.exists(tmp / "cache" / "c.json")   # saved once the process was done
+    tab.shutdown()
+
+
+def test_no_means_are_computed_while_a_run_is_recording(env, monkeypatch):
+    make, auto, _, tmp = env
+    rec = make_run(str(auto / "rec.csv"), mean_t=20.0)
+    make_run(str(auto / "other.csv"), mean_t=31.0)
+    tab = make(FakeClient())
+    submitted = []
+    real_submit = tab._means.submit
+    tab._means.submit = lambda gen, paths: (submitted.extend(paths), real_submit(gen, paths))[1]
+    tab.set_recording_path(rec)
+    tab.refresh()
+    settle(tab)
+    assert submitted == [] and tab._means.pending() == 0
+    assert cell(tab, row_of(tab, "other.csv"), 5) in (None, "")
+    tab.set_recording_path(None)   # the recording ended (the app refreshes next)
+    tab.refresh()
+    settle(tab)
+    assert sorted(os.path.basename(p) for p in submitted) == ["other.csv", "rec.csv"]
+    assert cell(tab, row_of(tab, "other.csv"), 5) == "31.0 °C"
+    tab.shutdown()
+
+
+def test_recording_starting_cancels_the_queued_means(env):
+    make, auto, *_ = env
+    for i in range(6):
+        make_run(str(auto / f"r{i}.csv"))
+    tab = make(FakeClient())
+    tab.refresh()
+    tab.wait_for_workers()          # scanned; means queued in the process
+    tab.set_recording_path(str(auto / "r0.csv"))
+    assert tab._means.pending() == 0
+    tab.shutdown()
+
+
+def test_open_refuses_the_file_being_recorded(env, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    make, auto, *_ = env
+    p = make_run(str(auto / "a.csv"))
+    tab = make(FakeClient())
+    tab.set_recording_path(p)
+    got = []
+    tab.open_run.connect(got.append)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        staticmethod(lambda *a, **k: (str(auto / ".." / "auto" / "a.csv"), "")))
+    tab._choose_file()
+    assert got == [] and tab.status.text() == "This run is being recorded"
+    tab.set_recording_path(None)
+    tab._choose_file()
+    assert len(got) == 1
+    tab.shutdown()
+
+
+def test_same_day_fallback_counts_only_rows_without_a_file_name():
+    from ctwa.ui.run_index import RunInfo, query_saved_rows
+    started = datetime(2026, 11, 17, 9, 10, 19)
+    run = RunInfo("/x/a.csv", "a.csv", started, 10.0, 1, 0.0)
+    rows = [{"id": 1, "c80_filename": "other.csv", "model_name": "x", "test_date": "17/11/2026"},
+            {"id": 2, "c80_filename": None, "model_name": "old", "test_date": "17/11/2026"}]
+    queries = []
+
+    class C:
+        def select(self, table, query):
+            queries.append(dict(query))
+            out = rows
+            if query.get("c80_filename") == "is.null":
+                out = [r for r in rows if r["c80_filename"] is None]
+            elif "c80_filename" in query:
+                out = []
+            return out
+    info = query_saved_rows(C(), [run])[run.path]
+    assert any(q.get("c80_filename") == "is.null" and "test_date" in q for q in queries)
+    assert info.count == 1 and not info.exact and info.sample == ""

@@ -264,6 +264,8 @@ def query_saved_rows(client, runs: Sequence[RunInfo], chunk: int = CHUNK) -> Dic
         part = days[i:i + chunk]
         for row in _select_all(client, {
                 "select": sel, "order": "id.desc",
+                # only rows that name no file: another file's row is not "this day's" result
+                "c80_filename": "is.null",
                 "test_date": "in.(" + ",".join(_q(d) for d in part) + ")"}):
             by_day.setdefault(row.get("test_date"), []).append(row)
     out: Dict[str, SavedInfo] = {}

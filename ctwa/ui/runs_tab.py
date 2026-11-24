@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHea
 
 from ctwa import theme
 from ctwa.ui import run_index
+from ctwa.ui.mean_worker import MeanTempWorker
 from ctwa.ui.run_index import MeanTempCache, RunInfo, SavedInfo
 
 try:  # the app's own names, so the tab shares its settings
@@ -26,6 +27,7 @@ COLUMNS = ["Name", "Started", "Length", "Saved analyses", "Sample", "Temperature
 _NAME, _STARTED, _LENGTH, _SAVED, _SAMPLE, _TEMP = range(6)
 SAME_DAY_TIP = "same day; older results don't record their file"
 NOT_CAPTURE_TIP = "Not a CTWA/C80 one-file capture"
+RECORDING_TIP = "This run is being recorded"
 FOLDERS_KEY = "runs/folders"
 
 
@@ -160,11 +162,9 @@ class RunsModel(QAbstractTableModel):
 
 class _Signals(QObject):
     scanned = Signal(int, object, bool, object)   # generation, runs, truncated, means
-    mean = Signal(int, str, object)   # generation, path, mean or None
     saved = Signal(int, object)       # generation, {path: SavedInfo}
     cloud_error = Signal(int, str)
     scan_failed = Signal(int, str)
-    done = Signal(int)
 
 
 class _ScanWorker(QRunnable):
@@ -188,24 +188,6 @@ class _ScanWorker(QRunnable):
             self.signals.scan_failed.emit(self.gen, f"Could not scan the folders: {e}")
             return
         self.signals.scanned.emit(self.gen, runs, truncated, means)
-
-
-class _MeanWorker(QRunnable):
-    def __init__(self, gen: int, runs: List[RunInfo], cache: MeanTempCache,
-                 signals: _Signals, is_current):
-        super().__init__()
-        self.gen, self.runs, self.cache = gen, runs, cache
-        self.signals, self.is_current = signals, is_current
-
-    def run(self):
-        for r in self.runs:
-            if not self.is_current(self.gen):
-                break
-            mean = run_index.compute_mean_temperature(r)
-            self.cache.put(r, mean)
-            self.signals.mean.emit(self.gen, r.path, mean)
-        self.cache.save()
-        self.signals.done.emit(self.gen)
 
 
 class _CloudWorker(QRunnable):
@@ -244,9 +226,12 @@ class RunsTab(QWidget):
         self._recording: Optional[str] = None
         self._truncated = False
         self._cache_lock = threading.Lock()
+        self._todo: Dict[str, RunInfo] = {}   # files whose mean the process is still working out
+        self._means = MeanTempWorker(self)   # parsing happens in a separate process
+        self._means.mean.connect(self._on_mean)
+        self._means.idle.connect(self._on_means_idle)
         self._signals = _Signals(self)
         self._signals.scanned.connect(self._on_scanned, Qt.QueuedConnection)
-        self._signals.mean.connect(self._on_mean, Qt.QueuedConnection)
         self._signals.saved.connect(self._on_saved, Qt.QueuedConnection)
         self._signals.cloud_error.connect(self._on_cloud_error, Qt.QueuedConnection)
         self._signals.scan_failed.connect(self._on_scan_failed, Qt.QueuedConnection)
@@ -336,6 +321,9 @@ class RunsTab(QWidget):
 
     def set_recording_path(self, path: Optional[str]) -> None:
         self._recording = path
+        if path is not None:   # a sweep is running: no parsing at all until it ends
+            self._means.cancel()
+            self._todo = {}
         self.model.set_recording(path)
         self._update_buttons()
 
@@ -349,6 +337,8 @@ class RunsTab(QWidget):
     def refresh(self) -> None:
         """Returns at once: the scan runs in the worker pool."""
         self._gen += 1
+        self._means.cancel()
+        self._todo = {}
         self.status.setText("Scanning\u2026")
         self._pool.start(_ScanWorker(self._gen, self.folders(), self._get_cache, self._signals))
 
@@ -364,9 +354,9 @@ class RunsTab(QWidget):
         self.model.set_recording(self._recording)
         self._update_status(len(runs))
         self._update_buttons()
-        if todo:
-            self._pool.start(_MeanWorker(gen, todo, self._get_cache(), self._signals,
-                                         lambda g: g == self._gen))
+        if todo and rec is None:   # nothing is parsed while a run is being recorded
+            self._todo = {r.path: r for r in todo}
+            self._means.submit(gen, [r.path for r in todo])
         cap = [r for r in runs if r.is_capture]
         if self.client is None:
             self.model.set_cloud_error("Not connected to the cloud")
@@ -387,18 +377,42 @@ class RunsTab(QWidget):
 
     def wait_for_workers(self, msecs: int = 30000) -> bool:
         """Block until the workers and the results they queued are all done (tests)."""
+        import time
         from PySide6.QtCore import QCoreApplication
+        end = time.monotonic() + msecs / 1000.0
         for _ in range(10):   # a finished scan starts the next workers
-            if not self._pool.waitForDone(msecs):
+            if not self._pool.waitForDone(max(1, int((end - time.monotonic()) * 1000))):
                 return False
             QCoreApplication.processEvents()
-            if self._pool.activeThreadCount() == 0:
+            while self._means.pending() and time.monotonic() < end:
+                QCoreApplication.processEvents()
+                time.sleep(0.005)
+            QCoreApplication.processEvents()
+            if self._pool.activeThreadCount() == 0 and not self._means.pending():
                 return True
         return True
 
+    def shutdown(self) -> None:
+        """Stop the mean-temperature process and forget what is queued (window closing)."""
+        self._gen += 1   # whatever is still running is stale
+        self._means.shutdown()
+        try:
+            if self._cache is not None:
+                self._cache.save()
+        except Exception:
+            pass
+
     def _on_mean(self, gen: int, path: str, mean) -> None:
+        if gen != self._gen or self._recording is not None:
+            return
+        run = self._todo.pop(path, None)
+        if run is not None:
+            self._get_cache().put(run, mean)
+        self.model.set_mean(path, mean)   # ignores the recording file
+
+    def _on_means_idle(self, gen: int) -> None:
         if gen == self._gen:
-            self.model.set_mean(path, mean)   # ignores the recording file
+            self._get_cache().save()
 
     def _on_saved(self, gen: int, saved) -> None:
         if gen == self._gen:
@@ -422,7 +436,7 @@ class RunsTab(QWidget):
         if run is None:
             tip = "Select a run first"
         elif self.model.is_recording(run):
-            tip = "This run is being recorded"
+            tip = RECORDING_TIP
         elif not run.is_capture:
             tip = NOT_CAPTURE_TIP
         else:
@@ -438,8 +452,12 @@ class RunsTab(QWidget):
     def _choose_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open a run file", self.auto_save_dir,
                                               "Run files (*.csv *.txt);;All files (*)")
-        if path:
-            self.open_run.emit(path)
+        if not path:
+            return
+        if self._recording and _norm(path) == _norm(self._recording):
+            self.status.setText(RECORDING_TIP)   # same refusal as the list's Analyze
+            return
+        self.open_run.emit(path)
 
     def _choose_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Add a folder of runs", self.auto_save_dir)
