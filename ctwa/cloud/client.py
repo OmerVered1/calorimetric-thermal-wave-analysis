@@ -101,11 +101,21 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 
 def _check_url(url: str) -> str:
     url = url.rstrip("/")
-    ok = (url.startswith("https://")
-          or url.startswith("http://127.0.0.1")
-          or url.startswith("http://localhost"))
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+        parts.port  # raises ValueError on a bad port
+    except ValueError:
+        raise ValueError("Invalid cloud URL") from None
+    ok = False
+    if parts.scheme == "https":
+        ok = bool(host) and parts.username is None and parts.password is None
+    elif parts.scheme == "http":
+        ok = (host in ("localhost", "127.0.0.1")
+              and parts.username is None and parts.password is None)
     if not ok:
-        raise ValueError("Cloud URL must be https:// (got a non-HTTPS URL)")
+        raise ValueError("Cloud URL must be https:// (http only for "
+                         "localhost, without credentials)")
     return url
 
 

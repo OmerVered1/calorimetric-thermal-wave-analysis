@@ -311,3 +311,28 @@ def test_keyring_errors_become_runtime_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "keyring", kr)
     with pytest.raises(RuntimeError, match="keyring"):
         TokenStore().get()
+
+
+@pytest.mark.parametrize("bad", [
+    "http://localhost.evil.com", "http://127.0.0.1.evil.com",
+    "http://localhost@evil.com", "http://user:pw@127.0.0.1:8000",
+    "ftp://example.com", "https://", "http://example.com"])
+def test_unsafe_urls_rejected(bad):
+    with pytest.raises(ValueError):
+        CloudClient(bad, "https://x.supabase.co", "A", MemoryTokenStore())
+    with pytest.raises(ValueError):
+        CloudClient("https://x.vercel.app", bad, "A", MemoryTokenStore())
+
+
+@pytest.mark.parametrize("good", [
+    "http://127.0.0.1:8000", "http://localhost:3000",
+    "https://omersthesis.vercel.app", "https://omersthesis.vercel.app/"])
+def test_safe_urls_accepted(good):
+    CloudClient(good, good, "A", MemoryTokenStore())
+
+
+def test_401_keeps_server_error_text(fake):
+    fake.responses[("POST", "/api/auth")] = (401, {"error": "Wrong password"})
+    c, _ = make(fake)
+    with pytest.raises(NotLoggedIn, match="Wrong password"):
+        c.login("x")
