@@ -219,9 +219,9 @@ SPEED_CASES = [p for p in CASE_FILES if os.path.basename(p).startswith("al2o3_ct
 @pytest.mark.slow
 @pytest.mark.parametrize("path", SPEED_CASES, ids=_ids(SPEED_CASES))
 def test_pipeline_speed(path):
+    """Every mode on al2o3_ctwa finishes in under 10 s (errors count: they ran the maths too)."""
     from ctwa.analysis.pipeline import load_one_file, run_one_file_pipeline
 
-    """Every mode on al2o3_ctwa finishes in under 10 s (errors count: they ran the maths too)."""
     case = _load_json(path)
     synced, _parsed = load_one_file(read_input(case["input_file"]))
     opts = build_options(case["options"])

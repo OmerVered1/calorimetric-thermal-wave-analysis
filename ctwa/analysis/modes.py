@@ -1,10 +1,11 @@
 """The Auto, Manual, AutoHybrid, AutoFFT and AutoFit analysis modes.
 
 Literal port of runAutoAnalysis and runManualAnalysis of lib/analysis.ts of the
-webapp, with the private helpers they use (strongPeaks, fittedAmplitudes,
-linearDetrend, estimateFundamentalPeriod, ...). The helpers that the later
-modes share are public here: linear_detrend, estimate_fundamental_period,
-mean_diff, mean_of_indices, mean_trough_between_peaks.
+webapp, with the private helpers they use. The public entry points are
+run_auto_analysis, run_manual_analysis, run_auto_hybrid_analysis,
+run_auto_fft_analysis and run_auto_fit_analysis. The mean helpers mean_diff,
+mean_of_indices and mean_trough_between_peaks are public here; linear_detrend and
+estimate_fundamental_period live in ctwa.analysis.smoothing and are imported from there.
 """
 
 from __future__ import annotations
