@@ -577,3 +577,34 @@ def test_successful_login_rearms_manager(env, monkeypatch):
     panel.sample_edit.setText("A")
     save_and_wait(panel)
     assert mgr._login_asked is False
+
+
+def test_replace_then_login_cancelled_is_not_queued(env, monkeypatch):
+    import ctwa.ui.save_panel as sp
+
+    class LoggedOutUpdate(FakeClient):
+        def update(self, table, id, data):
+            raise NotLoggedIn("no")
+
+    class Cancel:
+        def __init__(self, c, parent=None):
+            pass
+
+        def exec(self):
+            return QDialog.Rejected
+
+    monkeypatch.setattr(sp, "LoginDialog", Cancel)
+    client = LoggedOutUpdate()
+    panel, mgr, _ = env(client)
+    res = panel._results
+    client.candidates = [{"id": 7, "model_name": "Alumina", "analysis_mode": "AutoFit",
+                          "period_t": res.period_t, "amplitude_a1": res.amplitude_a1}]
+    panel.sample_edit.setText("Alumina")
+    monkeypatch.setattr(panel, "_ask_duplicate", lambda m: "replace")
+    got = []
+    panel.saved.connect(got.append)
+    panel.save_btn.click()
+    assert wait(lambda: panel.status_label.text() == "Not replaced: you're not logged in."
+                and panel.save_btn.isEnabled())
+    assert mgr.count() == 0 and got == []
+    assert panel.sample_edit.text() == "Alumina"

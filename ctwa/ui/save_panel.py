@@ -314,6 +314,9 @@ class SavePanel(QWidget):
                 self._manager.login_succeeded()
                 self._start(out["kind"] if out["kind"] != "save" else "insert", row=row,
                             target_id=out["target_id"], retried=True)
+            elif out["kind"] == "update":  # the queue only inserts: never queue a replace
+                self._set_busy(False)
+                self.status_label.setText("Not replaced: you're not logged in.")
             else:
                 self._queue(row)
         else:
