@@ -8,6 +8,7 @@ import http.client
 import json
 import re
 import socket
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -127,6 +128,7 @@ class CloudClient:
         self.anon_key = anon_key
         self.tokens = tokens
         self.timeout = timeout
+        self._token_lock = threading.Lock()  # login, flush and save workers share the store
 
     # -- transport ---------------------------------------------------------
     def _request(self, method: str, url: str, headers: Dict[str, str],
@@ -170,7 +172,8 @@ class CloudClient:
             raise ServerError(200, "Invalid JSON in response") from None
 
     def _bearer(self) -> Dict[str, str]:
-        token = self.tokens.get()
+        with self._token_lock:
+            token = self.tokens.get()
         if not token:
             raise NotLoggedIn("Not logged in")
         return {"Authorization": "Bearer " + token}
@@ -182,10 +185,13 @@ class CloudClient:
         token = out.get("token") if isinstance(out, dict) else None
         if not token:
             raise ServerError(200, "Login response had no token")
-        self.tokens.set(token)
+        with self._token_lock:
+            self.tokens.set(token)
 
     def check_session(self) -> bool:
-        if not self.tokens.get():
+        with self._token_lock:
+            has_token = bool(self.tokens.get())
+        if not has_token:
             return False
         try:
             out = self._request("GET", self.webapp_url + "/api/auth",

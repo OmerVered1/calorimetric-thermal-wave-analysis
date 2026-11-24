@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import urllib.parse
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
@@ -134,7 +135,10 @@ class _SaveJob(QRunnable):
             out["state"] = "error"
             out["message"] = "%s: %s" % (type(e).__name__, e)
         finally:
-            self._signals.finished.emit(out)
+            try:
+                self._signals.finished.emit(out)
+            except RuntimeError:  # the panel was deleted while the call ran
+                pass
 
 
 class SavePanel(QWidget):
@@ -145,13 +149,12 @@ class SavePanel(QWidget):
         super().__init__(parent)
         self._manager = manager
         self._settings = settings if settings is not None else QSettings(_ORGANIZATION, __app_name__)
-        self._pool = QThreadPool(self)
-        self._pool.setMaxThreadCount(1)
+        self._closed = False
         self._signals = _Signals(self)
         self._signals.finished.connect(self._on_finished, Qt.QueuedConnection)
         self._run = self._opts = self._results = None
         self._busy = False
-        self._pending_row: Optional[dict] = None
+        self._job: Dict[str, Any] = {}  # snapshot taken at click time
 
         self.sample_edit = QLineEdit()
         self.date_edit = QLineEdit()
@@ -165,6 +168,7 @@ class SavePanel(QWidget):
         self.gas_combo = QComboBox()
         self.gas_combo.setEditable(True)
         self.gas_combo.addItems(GAS_CHOICES)
+        self.gas_combo.currentTextChanged.connect(lambda _t: self._refresh_enabled())
         self.save_btn = QPushButton("Save to database")
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self._on_save_clicked)
@@ -189,9 +193,11 @@ class SavePanel(QWidget):
                         self.response_device_edit, self.temperature_edit, self.gas_combo)
 
     # ---- pre-fill ----
-    def _experiment_key(self, field: str) -> Optional[str]:
-        exp = self._run.header.get("experiment") if self._run is not None else None
-        return "save/last/%s/%s" % (exp, field) if exp else None
+    @staticmethod
+    def _experiment_key(run, field: str) -> Optional[str]:
+        exp = run.header.get("experiment") if run is not None else None
+        # quoted: a "/" in the name must not nest QSettings groups
+        return "save/last/%s/%s" % (urllib.parse.quote(str(exp), safe=""), field) if exp else None
 
     def set_result(self, payload: Tuple[Any, Any, Any]) -> None:
         """Slot for AnalysisTab.result_ready."""
@@ -203,18 +209,27 @@ class SavePanel(QWidget):
         self.source_device_edit.setText(instrument_device(h.get("instrument")))  # type: ignore[arg-type]
         self.response_device_edit.setText(calorimeter_device(h.get("calorimeter")))  # type: ignore[arg-type]
         self.temperature_edit.setText(region_temperature(self._run.parsed, self._opts.sel_min, self._opts.sel_max))
-        k = self._experiment_key("sample")
+        k = self._experiment_key(self._run, "sample")
         self.sample_edit.setText(str(self._settings.value(k, "")) if k else "")
-        k = self._experiment_key("gas")
+        k = self._experiment_key(self._run, "gas")
         self.gas_combo.setCurrentText(str(self._settings.value(k, "Ar")) if k else "Ar")
-        self.status_label.setText("")
-        self._set_busy(False)
+        if not self._busy:  # a save in flight keeps Save disabled until its job ends
+            self.status_label.setText("")
+            self._refresh_enabled()
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
-        self.save_btn.setEnabled(not busy and self._results is not None)
         for w in self._fields:
             w.setEnabled(not busy)
+        self._refresh_enabled()
+
+    def _refresh_enabled(self) -> None:
+        gas_ok = bool(self.gas_combo.currentText().strip())
+        self.save_btn.setEnabled(not self._busy and self._results is not None and gas_ok)
+        if self._results is not None and not self._busy and not gas_ok:
+            self.status_label.setText("Enter the gas (for example Ar or Air).")
+        elif gas_ok and self.status_label.text().startswith("Enter the gas"):
+            self.status_label.setText("")
 
     # ---- save ----
     def _validated_meta(self) -> Optional[RowMeta]:
@@ -250,8 +265,9 @@ class SavePanel(QWidget):
             source_file_name=os.path.basename(self._run.path))
 
     def _on_save_clicked(self) -> None:
-        if self._busy or self._results is None:
+        if self._busy or self._results is None or self._closed:
             return
+        self._manager.login_succeeded()  # an explicit save may ask for the login again
         meta = self._validated_meta()
         if meta is None:
             return
@@ -260,15 +276,18 @@ class SavePanel(QWidget):
         def build_row() -> dict:  # in the worker: the plot is the slow part
             return build_analysis_row(results, meta, build_analysis_plot(run.synced, results, opts))
 
-        self._remember = (meta.model_name, meta.gas_atmosphere)
-        self._build_row = build_row
+        self._job = {"build_row": build_row, "sample": meta.model_name, "gas": meta.gas_atmosphere,
+                     "sample_key": self._experiment_key(run, "sample"),
+                     "gas_key": self._experiment_key(run, "gas")}
         self._start("save")
 
     def _start(self, kind: str, row=None, target_id=None, retried: bool = False) -> None:
+        if self._closed:
+            return
         self._set_busy(True)
         self.status_label.setText("Saving…")
-        self._pool.start(_SaveJob(self._signals, self._manager.client, kind, self._build_row,
-                                  row, target_id, retried))
+        QThreadPool.globalInstance().start(_SaveJob(
+            self._signals, self._manager.client, kind, self._job["build_row"], row, target_id, retried))
 
     def _on_finished(self, out: dict) -> None:
         state, row = out["state"], out.get("row")
@@ -284,10 +303,15 @@ class SavePanel(QWidget):
                 self._start("insert", row=row)
             elif choice == "replace":
                 self._start("update", row=row, target_id=out["match"]["id"])
+        elif state == "offline" and out["kind"] == "update":
+            # the queue only inserts: a queued replace would add a second row
+            self._set_busy(False)
+            self.status_label.setText("Couldn't replace while offline; try again when you're online.")
         elif state == "offline":
             self._queue(row)
         elif state == "login":
             if not out["retried"] and self._login():
+                self._manager.login_succeeded()
                 self._start(out["kind"] if out["kind"] != "save" else "insert", row=row,
                             target_id=out["target_id"], retried=True)
             else:
@@ -307,13 +331,20 @@ class SavePanel(QWidget):
         self.saved.emit(row_id)
 
     def _remember_values(self) -> None:
-        sample, gas = getattr(self, "_remember", ("", ""))
-        ks, kg = self._experiment_key("sample"), self._experiment_key("gas")
-        if ks and sample:
-            self._settings.setValue(ks, sample)
-        if kg and gas:
-            self._settings.setValue(kg, gas)
+        j = self._job
+        if j.get("sample_key") and j.get("sample"):
+            self._settings.setValue(j["sample_key"], j["sample"])
+        if j.get("gas_key") and j.get("gas"):
+            self._settings.setValue(j["gas_key"], j["gas"])
         self._settings.sync()
+
+    def shutdown(self) -> None:
+        """Stop accepting new jobs (a running one finishes harmlessly)."""
+        self._closed = True
+
+    def closeEvent(self, event) -> None:
+        self.shutdown()
+        super().closeEvent(event)
 
     # ---- dialogs (overridable in tests) ----
     def _login(self) -> bool:

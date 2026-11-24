@@ -42,7 +42,10 @@ class _LoginJob(QRunnable):
             message = "Login failed (%s)" % type(e).__name__
         finally:
             del password
-        self._signals.finished.emit(message)
+        try:
+            self._signals.finished.emit(message)
+        except RuntimeError:  # the dialog is gone
+            pass
 
 
 class LoginDialog(QDialog):
@@ -50,7 +53,7 @@ class LoginDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Log in to the results database")
         self._client = client
-        self._pool = QThreadPool(self)
+        self._busy = False
         self._signals = _Signals(self)
         self._signals.finished.connect(self._on_finished, Qt.QueuedConnection)
 
@@ -83,10 +86,12 @@ class LoginDialog(QDialog):
         self.password_edit.clear()
         self.error_label.setText("")
         self._set_busy(True)
-        self._pool.start(_LoginJob(self._client, password, self._signals))
+        QThreadPool.globalInstance().start(_LoginJob(self._client, password, self._signals))
 
     def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
         self.ok_btn.setEnabled(not busy)
+        self.cancel_btn.setEnabled(not busy)
         self.password_edit.setEnabled(not busy)
 
     def _on_finished(self, message: str) -> None:
@@ -96,6 +101,10 @@ class LoginDialog(QDialog):
             self.password_edit.setFocus()
         else:
             self.accept()
+
+    def reject(self) -> None:
+        if not self._busy:  # Esc while the login runs would orphan the job
+            super().reject()
 
     def done(self, result: int) -> None:
         self.password_edit.clear()

@@ -53,7 +53,10 @@ class _FlushJob(QRunnable):
             waiting = len(self._queue.pending())
         except Exception:
             waiting = -1
-        self._signals.done.emit(waiting, spy.unauthorised)
+        try:
+            self._signals.done.emit(waiting, spy.unauthorised)
+        except RuntimeError:  # the manager was deleted meanwhile
+            pass
 
 
 class UploadManager(QObject):
@@ -74,6 +77,7 @@ class UploadManager(QObject):
         self._timer.setInterval(interval_ms)
         self._timer.timeout.connect(self.request_flush)
         self._closed = False
+        self._login_asked = False
 
     def count(self) -> int:
         return self._count
@@ -105,5 +109,10 @@ class UploadManager(QObject):
     def _on_done(self, waiting: int, unauthorised: bool) -> None:
         if waiting >= 0:
             self._set_count(waiting)
-        if unauthorised:
+        if unauthorised and not self._login_asked:
+            self._login_asked = True  # once per logged-out period
             self.needs_login.emit()
+
+    def login_succeeded(self) -> None:
+        """Call after a successful login (or when the user saves again): needs_login may fire again."""
+        self._login_asked = False

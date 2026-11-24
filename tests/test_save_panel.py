@@ -7,6 +7,7 @@ import os
 import shutil
 import time
 from datetime import datetime
+from urllib.parse import quote
 
 import pytest
 
@@ -159,7 +160,7 @@ def test_sample_and_gas_remembered_per_experiment(env, run_and_results):
     panel.gas_combo.setCurrentText("Air")
     save_and_wait(panel)
     experiment = run_and_results[0].header["experiment"]
-    assert settings.value("save/last/%s/sample" % experiment) == "Alumina"
+    assert settings.value("save/last/%s/sample" % quote(experiment, safe="")) == "Alumina"
     # same settings file -> remembered
     from ctwa.ui.save_panel import SavePanel
     p = SavePanel(panel._manager, settings=settings)
@@ -422,3 +423,157 @@ def test_login_dialog_offline_and_success(qapp):
     d2.ok_btn.click()
     assert wait(lambda: d2.result() == QDialog.Accepted)
     assert c.passwords == ["right"]
+
+
+# ---- review round 1 ----
+
+def test_double_click_save_makes_one_insert(env):
+    client = FakeClient()
+    panel, _, _ = env(client)
+    panel.sample_edit.setText("A")
+    panel.save_btn.click()
+    panel.save_btn.click()
+    assert wait(lambda: panel.save_btn.isEnabled())
+    assert len(client.inserts) == 1
+
+
+def test_new_result_during_save_keeps_save_disabled_and_remembers_original(env, run_and_results):
+    import threading
+
+    class Gated(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.gate = threading.Event()
+
+        def insert(self, table, row):
+            self.gate.wait(5)
+            return super().insert(table, row)
+
+    client = Gated()
+    panel, _, settings = env(client)
+    run, opts, res = run_and_results
+    panel.sample_edit.setText("Alumina")
+    panel.gas_combo.setCurrentText("Air")
+    got = []
+    panel.saved.connect(got.append)
+    panel.save_btn.click()
+    assert wait(lambda: not panel.save_btn.isEnabled())
+    from types import SimpleNamespace
+    other = SimpleNamespace(path=run.path, synced=run.synced, parsed=run.parsed,
+                            header=dict(run.header, experiment="Other run"))
+    panel.set_result((other, opts, res))
+    assert not panel.save_btn.isEnabled()
+    panel.save_btn.click()
+    client.gate.set()
+    assert wait(lambda: got)
+    assert wait(lambda: panel.save_btn.isEnabled())
+    assert len(client.inserts) == 1
+    exp = run.header["experiment"]
+    from urllib.parse import quote
+    assert settings.value("save/last/%s/sample" % quote(exp, safe="")) == "Alumina"
+    assert settings.value("save/last/%s/sample" % quote("Other run", safe="")) is None
+
+
+def test_replace_while_offline_is_not_queued(env, monkeypatch):
+    class OfflineUpdate(FakeClient):
+        def update(self, table, id, data):
+            raise Offline("down")
+
+    client = OfflineUpdate()
+    panel, mgr, _ = env(client)
+    res = panel._results
+    client.candidates = [{"id": 7, "model_name": "Alumina", "analysis_mode": "AutoFit",
+                          "period_t": res.period_t, "amplitude_a1": res.amplitude_a1}]
+    panel.sample_edit.setText("Alumina")
+    monkeypatch.setattr(panel, "_ask_duplicate", lambda m: "replace")
+    got = []
+    panel.saved.connect(got.append)
+    panel.save_btn.click()
+    msg = "Couldn't replace while offline; try again when you're online."
+    assert wait(lambda: panel.status_label.text() == msg and panel.save_btn.isEnabled())
+    assert mgr.count() == 0 and got == []
+    assert panel.sample_edit.text() == "Alumina"
+
+
+def test_experiment_name_with_slash_does_not_nest(env, run_and_results, tmp_path):
+    panel, _, settings = env(FakeClient())
+    panel._run.header["experiment"] = "a/b run"
+    panel.sample_edit.setText("S")
+    save_and_wait(panel)
+    assert "a/b run" not in "".join(settings.allKeys()) or "a%2Fb" in "".join(settings.allKeys())
+    assert not any(k.startswith("save/last/a/") for k in settings.allKeys())
+
+
+def test_empty_gas_disables_save_with_hint(env):
+    panel, _, _ = env(FakeClient())
+    panel.gas_combo.setCurrentText("")
+    assert not panel.save_btn.isEnabled()
+    assert panel.status_label.text()
+    panel.gas_combo.setCurrentText("Ar")
+    assert panel.save_btn.isEnabled()
+
+
+def test_needs_login_emitted_once_while_logged_out(qapp, tmp_path):
+    from ctwa.ui.upload_manager import UploadManager
+    q = UploadQueue(str(tmp_path / "q"))
+    q.enqueue({"model_name": "x"})
+    mgr = UploadManager(FakeClient(insert_script=[NotLoggedIn("no")] * 5), q, interval_ms=10 ** 9)
+    asked, counts = [], []
+    mgr.needs_login.connect(lambda: asked.append(1))
+    mgr.count_changed.connect(counts.append)
+    mgr.request_flush()
+    assert wait(lambda: asked)
+    n = len(counts)
+    mgr.request_flush()
+    assert wait(lambda: len(counts) > n)
+    assert asked == [1]
+    mgr.login_succeeded()
+    n = len(counts)
+    mgr.request_flush()
+    assert wait(lambda: len(counts) > n)
+    assert asked == [1, 1] or mgr.client.insert_script == []
+    mgr.shutdown()
+
+
+def test_login_dialog_cancel_disabled_while_busy(qapp):
+    import threading
+    from ctwa.ui.login_dialog import LoginDialog
+
+    class Slow(LoginClient):
+        def __init__(self):
+            super().__init__()
+            self.gate = threading.Event()
+
+        def login(self, password):
+            self.gate.wait(5)
+
+    c = Slow()
+    d = LoginDialog(c)
+    d.password_edit.setText("pw")
+    d.ok_btn.click()
+    assert not d.cancel_btn.isEnabled() and not d.password_edit.isEnabled()
+    rejected = []
+    d.rejected.connect(lambda: rejected.append(1))
+    d.reject()  # Esc while busy is ignored
+    assert rejected == []
+    c.gate.set()
+    assert wait(lambda: d.result() == QDialog.Accepted)
+
+
+def test_successful_login_rearms_manager(env, monkeypatch):
+    import ctwa.ui.save_panel as sp
+    client = FakeClient(insert_script=[NotLoggedIn("no")])
+
+    class Ok:
+        def __init__(self, c, parent=None):
+            pass
+
+        def exec(self):
+            return QDialog.Accepted
+
+    monkeypatch.setattr(sp, "LoginDialog", Ok)
+    panel, mgr, _ = env(client)
+    mgr._login_asked = True
+    panel.sample_edit.setText("A")
+    save_and_wait(panel)
+    assert mgr._login_asked is False

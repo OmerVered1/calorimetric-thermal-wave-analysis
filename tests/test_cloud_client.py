@@ -336,3 +336,44 @@ def test_401_keeps_server_error_text(fake):
     c, _ = make(fake)
     with pytest.raises(NotLoggedIn, match="Wrong password"):
         c.login("x")
+
+
+def test_token_store_is_never_used_concurrently(fake):
+    """login, check_session and writes run on different threads: token access is serialised."""
+    fake.responses[("POST", "/api/auth")] = (200, {"ok": True, "token": "tok"})
+    fake.responses[("GET", "/api/auth")] = (200, {"ok": True})
+
+    class Slow(MemoryTokenStore):
+        def __init__(self):
+            super().__init__("tok")
+            self.inside = 0
+            self.overlap = False
+            self.guard = threading.Lock()
+
+        def _enter(self):
+            with self.guard:
+                self.inside += 1
+                if self.inside > 1:
+                    self.overlap = True
+            time.sleep(0.01)
+            with self.guard:
+                self.inside -= 1
+
+        def get(self):
+            self._enter()
+            return self.token
+
+        def set(self, token):
+            self._enter()
+            self.token = token
+
+    store = Slow()
+    c = CloudClient(fake.url, fake.url, "ANON", store, timeout=3)
+    threads = [threading.Thread(target=f) for f in
+               [lambda: c.login("pw")] * 3 + [c.check_session] * 3]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not store.overlap
+    assert store.token == "tok"
