@@ -50,6 +50,7 @@ class AnalysisTab(QWidget):
         self._pending = {}     # marker index -> dropped time, waiting for the smoothed series
         self._pending_key = None
         self._place_pending = False
+        self._loading_or_running_before = False
 
         root = QVBoxLayout(self)
         self.title = theme.set_role(QLabel("Open a run from the Runs tab"), "heading")
@@ -156,7 +157,7 @@ class AnalysisTab(QWidget):
         self.resp_curve.clear()
         self.region.setBounds((None, None))
         self.region.setRegion((0, 1))
-        self.title.setText(os.path.basename(path) + "  —  loading…")
+        self.title.setText(os.path.basename(path) + "  —  Loading...")
         self.results_panel.clear()
         self.worker.load(path)
         self._update_controls()
@@ -201,7 +202,7 @@ class AnalysisTab(QWidget):
 
     def _info_key(self):
         lo, hi = self._region()
-        return (self.run.path, lo, hi, self._smooth_wanted())
+        return (self.run.path, lo, hi, self._smooth_wanted(), self.settings.wave())
 
     def _snap(self, which: str, x: float, T, sm) -> float:
         """x moved onto the peak it points at (page.tsx toPeak): the smoothed series when
@@ -222,6 +223,16 @@ class AnalysisTab(QWidget):
         peak = refine_peak(t, v, x, T) if len(t) else None
         return _round2(peak[0] if peak else x)
 
+    def _request_region(self, key) -> None:
+        """Ask the worker for a region's period (and smoothed series). Whatever was queued
+        for another region is stale and goes."""
+        if self._pending_key != key:
+            self._pending = {}
+            self._place_pending = False
+        self._pending_key = key
+        self.worker.region_info(*key)
+        self._update_controls()
+
     def _snap_markers(self, items) -> None:
         """Move markers {index: time} onto their peaks. The region's period (and the smoothed
         series) come from the worker; until they arrive the markers stay where they are."""
@@ -229,10 +240,8 @@ class AnalysisTab(QWidget):
             return
         key = self._info_key()
         if key not in self._info:
+            self._request_region(key)
             self._pending.update(items)
-            self._pending_key = key
-            self.worker.region_info(*key)
-            self._update_controls()
             return
         T, sm = self._info[key]
         for i, x in items.items():
@@ -260,10 +269,8 @@ class AnalysisTab(QWidget):
         self._placed_for = self._region()
         key = self._info_key()
         if key not in self._info:
+            self._request_region(key)
             self._place_pending = True
-            self._pending_key = key
-            self.worker.region_info(*key)
-            self._update_controls()
             return
         self._place_with(self._info[key][0])
 
@@ -347,10 +354,17 @@ class AnalysisTab(QWidget):
         self.result_ready.emit((self.run, self._options, res))
 
     def _on_failed(self, kind: str, message: str) -> None:
+        self._loading_or_running_before = self._running or self._loading
         self._running = False
         self._loading = False
         self._has_results = False
-        self.results_panel.show_error(kind, message)
+        if self._pending_key is not None and not self._loading_or_running_before:
+            self._pending_key = None
+            self._pending = {}
+            self._place_pending = False
+            self.results_panel.show_note("Couldn't snap the markers; they stay where you dropped them.")
+        else:
+            self.results_panel.show_error(kind, message)
         self._update_controls()
 
     # ---- changes ----

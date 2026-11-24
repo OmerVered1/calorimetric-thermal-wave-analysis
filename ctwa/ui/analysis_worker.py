@@ -48,8 +48,9 @@ class AnalysisWorker(QObject):
     def analyze(self, path: str, opts) -> None:
         self._submit("finished", runner.analyze_run, path, opts)
 
-    def region_info(self, path: str, sel_min: float, sel_max: float, smooth: bool) -> None:
-        self._submit("region", runner.region_info, path, sel_min, sel_max, smooth)
+    def region_info(self, path: str, sel_min: float, sel_max: float, smooth: bool,
+                    wave: str = "sine") -> None:
+        self._submit("region", runner.region_info, path, sel_min, sel_max, smooth, wave)
 
     def cancel(self) -> None:
         """Drop the running request (its result is ignored). The process is only

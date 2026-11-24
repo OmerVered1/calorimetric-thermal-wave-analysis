@@ -129,6 +129,12 @@ class ResultsPanel(QFrame):
         self._message.setText("Settings changed since this result; press Analyze.")
         self._message.show()
 
+    def show_note(self, text: str) -> None:
+        self.clear()
+        theme.set_role(self._message, "muted")
+        self._message.setText(text)
+        self._message.show()
+
     def show_busy(self) -> None:
         self.clear()
         theme.set_role(self._message, "muted")

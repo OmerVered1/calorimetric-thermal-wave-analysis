@@ -233,7 +233,7 @@ def test_open_run_while_analyzing_drops_the_old_result(tab, run_file):
     tab.open_run(run_file)
     assert not tab.is_running()
     assert tab.run is None
-    assert tab.title.text().endswith("loading\u2026")
+    assert tab.title.text().endswith("Loading...")
     assert len(tab.src_curve.xData if tab.src_curve.xData is not None else []) == 0
     assert wait_until(lambda: tab.run is not None)
     wait_until(lambda: False, 4.0)
@@ -290,6 +290,36 @@ def test_manual_with_smoothing_snaps_on_the_smoothed_series(tab):
     peak = refine_peak(t_s, v_s, off, runner.region_period(tab.run.path, lo, hi))
     expected = round(peak[0] if peak else off, 2)
     assert line.value() == expected
+
+
+def test_failed_region_request_frees_the_tab(tab):
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    tab.region.setRegion((10700, 12000))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    assert tab.is_snapping()
+    assert not tab.analyze_btn.isEnabled()
+    before = [m.value() for m in tab.markers]
+    tab.worker.failed.emit("crash", "boom")
+    assert not tab.is_snapping()
+    assert tab.analyze_btn.isEnabled()
+    assert [m.value() for m in tab.markers] == before
+    assert tab.results_panel.message() == \
+        "Couldn't snap the markers; they stay where you dropped them."
+    assert tab._pending == {} and not tab._place_pending
+
+
+def test_pending_items_of_an_older_region_are_dropped(tab):
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    tab.region.setRegion((10600, 11900))   # a region the worker has not seen yet
+    tab.markers[0].setValue(7000.0)
+    tab.markers[0].sigPositionChangeFinished.emit(tab.markers[0])
+    assert tab._pending == {0: 7000.0}
+    tab.region.setRegion((10700, 12000))
+    tab.markers[1].setValue(11000.0)
+    tab.markers[1].sigPositionChangeFinished.emit(tab.markers[1])
+    assert 0 not in tab._pending and 1 in tab._pending
 
 
 def test_screenshot(tab):

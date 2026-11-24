@@ -17,6 +17,7 @@ from ctwa.analysis.pipeline import default_selection, load_one_file, run_one_fil
 from ctwa.analysis.run_header import parse_run_header
 from ctwa.analysis.modes import run_auto_fit_analysis
 from ctwa.analysis.smoothing import smooth_to_shared_sine
+from ctwa.analysis.square import detect_square_period
 from ctwa.analysis.types import AnalysisParams, AnalysisResults, CombinedParsed, PipelineOptions, SyncedData
 
 __all__ = ["LoadedRun", "load_run", "analyze_run", "smoothed_region", "region_info"]
@@ -105,7 +106,7 @@ def smoothed_region(path: str, sel_min: float, sel_max: float):
     return result
 
 
-_PERIOD_CACHE: "OrderedDict[Tuple[str, int, int, float, float], Optional[float]]" = OrderedDict()
+_PERIOD_CACHE: "OrderedDict[Tuple[str, int, int, float, float, str], Optional[float]]" = OrderedDict()
 
 
 def _region_slices(path: str, sel_min: float, sel_max: float):
@@ -117,17 +118,21 @@ def _region_slices(path: str, sel_min: float, sel_max: float):
     return ts, vs, tc, vc
 
 
-def region_period(path: str, sel_min: float, sel_max: float) -> Optional[float]:
+def region_period(path: str, sel_min: float, sel_max: float, wave: str = "sine") -> Optional[float]:
     """The webapp's `preview.T` (page.tsx ~L460): the period the Auto (sine fit) analysis finds
-    in the region; None when the region is too short or has no clear period."""
+    in the region (for a square wave, detectSquarePeriod of the source, L470-474);
+    None when the region is too short or has no clear period."""
     st = os.stat(path)
-    key = (path, st.st_mtime_ns, st.st_size, sel_min, sel_max)
+    key = (path, st.st_mtime_ns, st.st_size, sel_min, sel_max, wave)
     if key in _PERIOD_CACHE:
         _PERIOD_CACHE.move_to_end(key)
         return _PERIOD_CACHE[key]
     ts, vs, tc, vc = _region_slices(path, sel_min, sel_max)
     period = None
-    if len(ts) >= 10 and len(tc) >= 10:
+    if len(ts) >= 10 and len(tc) >= 10 and wave == "square":
+        t = detect_square_period(ts, vs)
+        period = t if math.isfinite(t) and t > 0 else None
+    elif len(ts) >= 10 and len(tc) >= 10:
         params = AnalysisParams(
             model_name="", test_date="", test_time="", t_cal="00:00:00", t_src="00:00:00",
             r1_mm=6.72, r2_mm=14.86, c80_time_unit="Seconds", c80_pwr_unit="mW",
@@ -144,6 +149,7 @@ def region_period(path: str, sel_min: float, sel_max: float) -> Optional[float]:
     return period
 
 
-def region_info(path: str, sel_min: float, sel_max: float, smooth: bool):
+def region_info(path: str, sel_min: float, sel_max: float, smooth: bool, wave: str = "sine"):
     """(period, smoothed_region or None) for snapping Manual markers in the region."""
-    return region_period(path, sel_min, sel_max), (smoothed_region(path, sel_min, sel_max) if smooth else None)
+    return (region_period(path, sel_min, sel_max, wave),
+            smoothed_region(path, sel_min, sel_max) if smooth and wave != "square" else None)

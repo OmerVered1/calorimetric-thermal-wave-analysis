@@ -124,6 +124,20 @@ def test_region_period_is_the_autofit_period_of_the_region(tmp_path):
     assert region_period(path, 5463, 5466) is None
 
 
+def test_region_period_for_square_waves_is_detect_square_period(tmp_path):
+    from ctwa.analysis.runner import load_run, region_period
+    from ctwa.analysis.square import detect_square_period
+    path = _unzip("al2o3_ctwa", tmp_path)
+    s = load_run(path).synced
+    lo, hi = 10700, 12000
+    ts = [t for t in s.t_src if lo <= t <= hi]
+    vs = [v for t, v in zip(s.t_src, s.v_src) if lo <= t <= hi]
+    expected = detect_square_period(ts, vs)
+    got = region_period(path, lo, hi, "square")
+    assert got == expected
+    assert got != region_period(path, lo, hi, "sine")
+
+
 def test_smoothed_region_matches_the_pipeline_smoothing(tmp_path):
     from ctwa.analysis.runner import load_run, smoothed_region
     from ctwa.analysis.smoothing import smooth_to_shared_sine
