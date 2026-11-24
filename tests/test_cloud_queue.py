@@ -124,12 +124,73 @@ def test_nan_row_raises_valueerror_and_leaves_nothing(tmp_path):
     assert os.listdir(str(tmp_path)) == []
 
 
-def test_unexpected_exception_keeps_row_and_propagates(tmp_path):
+def test_unexpected_exception_keeps_row_records_error_and_stops(tmp_path):
     q = UploadQueue(str(tmp_path))
-    q.enqueue({"a": 1})
-    with pytest.raises(RuntimeError):
-        q.flush(FakeClient([RuntimeError("boom")]))
-    assert len(q.pending()) == 1
+    ids = [q.enqueue(r) for r in rows(2)]
+    c = FakeClient([RuntimeError("boom")])
+    assert q.flush(c) == (0, 2)
+    assert c.calls == 1
+    assert "boom" in q.last_error(ids[0])
+    assert len(q.pending()) == 2
+
+
+def test_pending_with_errors(tmp_path):
+    q = UploadQueue(str(tmp_path))
+    ids = [q.enqueue(r) for r in rows(2)]
+    q.flush(FakeClient([ServerError(500, "nope"), Offline("x")]))
+    got = q.pending_with_errors()
+    assert [g[0] for g in got] == ids
+    assert "nope" in got[0][2] and got[1][2] is None
+
+
+def test_corrupt_file_moved_aside_and_not_counted(tmp_path):
+    q = UploadQueue(str(tmp_path))
+    (tmp_path / "00000000000000000001-bad.json").write_text('{"half')
+    rid = q.enqueue({"a": 1})
+    assert q.flush(FakeClient([Offline("x")])) == (0, 1)
+    assert (tmp_path / "00000000000000000001-bad.corrupt").exists()
+    assert not (tmp_path / "00000000000000000001-bad.json").exists()
+    assert q.pending() == [(rid, {"a": 1})]
+
+
+def test_old_temp_files_removed_on_init(tmp_path):
+    old = tmp_path / "a.json.tmp"
+    new = tmp_path / "b.json.tmp"
+    old.write_text("x")
+    new.write_text("x")
+    t = os.stat(str(old)).st_mtime - 3600
+    os.utime(str(old), (t, t))
+    UploadQueue(str(tmp_path))
+    assert not old.exists() and new.exists()
+
+
+def test_enqueue_not_blocked_by_slow_upload(tmp_path):
+    q = UploadQueue(str(tmp_path))
+    q.enqueue({"n": 0})
+    started, release = threading.Event(), threading.Event()
+
+    class Slow(FakeClient):
+        def insert(self, table, row):
+            started.set()
+            release.wait(10)
+            return FakeClient.insert(self, table, row)
+
+    c = Slow()
+    result = []
+    t = threading.Thread(target=lambda: result.append(q.flush(c)))
+    t.start()
+    assert started.wait(5)
+    done = threading.Event()
+    t2 = threading.Thread(target=lambda: (q.enqueue({"n": 1}), done.set()))
+    t2.start()
+    assert done.wait(0.5), "enqueue blocked behind the network call"
+    # a second flush while one is running returns immediately
+    assert q.flush(FakeClient()) == (0, 2)
+    release.set()
+    t.join(5)
+    t2.join(5)
+    q.flush(c)
+    assert sorted(r["n"] for r in c.inserted) == [0, 1]
 
 
 def test_concurrent_enqueue_during_flush(tmp_path):
