@@ -8,6 +8,7 @@ TypeScript's behaviour, so every operation that can differ lives here.
 from __future__ import annotations
 
 import math
+import re
 from typing import Iterable
 
 from ctwa.analysis.jstrig import cos_array, sin_array
@@ -21,6 +22,22 @@ JS_WHITESPACE = (" \t\n\v\f\r\u00a0\u1680" + "".join(map(chr, range(0x2000, 0x20
 def js_trim(s: str) -> str:
     """String.prototype.trim: strips exactly the JS whitespace set."""
     return s.strip(JS_WHITESPACE)
+
+
+_NUMBER = re.compile(r"[+-]?(?:Infinity|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\Z", re.ASCII)
+_RADIX = re.compile(r"0(?:[xX][0-9a-fA-F]+|[oO][0-7]+|[bB][01]+)\Z", re.ASCII)
+
+
+def js_number(s: str) -> float:
+    """JS Number(string): whole string must be a number; blank is 0, else NaN."""
+    t = js_trim(s)
+    if t == "":
+        return 0.0
+    if _RADIX.match(t):
+        return float(int(t[2:], {"x": 16, "o": 8, "b": 2}[t[1].lower()]))
+    if _NUMBER.match(t):
+        return float(t.replace("Infinity", "inf"))
+    return math.nan
 
 
 def js_truthy(x) -> bool:

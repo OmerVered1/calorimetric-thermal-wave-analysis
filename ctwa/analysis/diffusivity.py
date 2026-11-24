@@ -9,10 +9,9 @@ known alpha.
 from __future__ import annotations
 
 import math
-import re
 from typing import Dict, List, Optional
 
-from ctwa.analysis.jsmath import array_max, array_min, js_div, js_log, js_sqrt, js_trim
+from ctwa.analysis.jsmath import array_max, array_min, js_div, js_log, js_number, js_sqrt
 from ctwa.analysis.types import AnalysisParams, AnalysisResults, SyncedData
 
 TIME_FACTORS: Dict[str, float] = {
@@ -28,20 +27,7 @@ POWER_FACTORS: Dict[str, float] = {
     "uW": 0.001,
 }
 
-_NUMBER = re.compile(r"[+-]?(?:Infinity|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\Z", re.ASCII)
-_RADIX = re.compile(r"0(?:[xX][0-9a-fA-F]+|[oO][0-7]+|[bB][01]+)\Z", re.ASCII)
-
-
-def _js_number(s: str) -> float:
-    """JS Number(string): whole string must be a number; blank is 0, else NaN."""
-    t = js_trim(s)
-    if t == "":
-        return 0.0
-    if _RADIX.match(t):
-        return float(int(t[2:], {"x": 16, "o": 8, "b": 2}[t[1].lower()]))
-    if _NUMBER.match(t):
-        return float(t.replace("Infinity", "inf"))
-    return math.nan
+_js_number = js_number  # kept for existing importers; the implementation lives in jsmath
 
 
 def _hhmmss_to_seconds(hms: str) -> float:
