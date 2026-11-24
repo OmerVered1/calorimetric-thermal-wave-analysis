@@ -15,9 +15,10 @@ from typing import List, Optional
 from .types import CombinedParsed
 
 # JS whitespace (String.prototype.trim, regex \s)
-_WS = " \t\n\v\f\r   -     　﻿"
+_WS = (" \t\n\v\f\r\u00a0\u1680" + "".join(map(chr, range(0x2000, 0x200B)))
+       + "\u2028\u2029\u202f\u205f\u3000\ufeff")
 _S = "[" + _WS + "]"
-_NOT_NL = "[^\n\r  ]"  # JS `.`
+_NOT_NL = "[^\n\r\u2028\u2029]"  # JS `.`
 _F = re.ASCII  # \d, \w, [a-z] with i-less patterns behave like JS
 
 
