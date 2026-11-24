@@ -13,7 +13,7 @@ from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QObject, Signal, Slot
 
 from ctwa.analysis import runner
 from ctwa.analysis.types import PipelineError
@@ -34,7 +34,11 @@ class AnalysisWorker(QObject):
         self._executor: Optional[ProcessPoolExecutor] = None
         self._ids = itertools.count(1)
         self._current = 0  # the only request whose result is still wanted
+        self._busy = False  # a request is in flight in the process
         self._delivered.connect(self._on_delivered)
+        app = QCoreApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.shutdown)
 
     # ---- public API (GUI thread) ----
     def load(self, path: str) -> None:
@@ -44,12 +48,16 @@ class AnalysisWorker(QObject):
         self._submit("finished", runner.analyze_run, path, opts)
 
     def cancel(self) -> None:
-        """Drop the running request; its result is ignored and the process is replaced."""
+        """Drop the running request (its result is ignored). The process is only
+        replaced if it is busy; an idle one keeps its warm start and parse cache."""
         self._current = next(self._ids)
-        self._discard_pool()
+        if self._busy:
+            self._busy = False
+            self._discard_pool()
 
     def shutdown(self) -> None:
         self._current = next(self._ids)
+        self._busy = False
         self._discard_pool()
 
     # ---- internals ----
@@ -66,6 +74,7 @@ class AnalysisWorker(QObject):
             for p in list((getattr(ex, "_processes", None) or {}).values()):
                 try:
                     p.terminate()
+                    p.join(2)  # no zombie left behind
                 except Exception:
                     pass
         finally:
@@ -76,6 +85,9 @@ class AnalysisWorker(QObject):
         # in the process first; its result is dropped by id)
         req = next(self._ids)
         self._current = req
+        if self._busy:
+            self._discard_pool()  # never queue behind a slow old job
+        self._busy = True
         try:
             fut = self._ensure_pool().submit(fn, *args)
         except Exception as e:  # pool already broken
@@ -107,6 +119,7 @@ class AnalysisWorker(QObject):
     def _on_delivered(self, req: int, kind: str, payload: object) -> None:
         if req != self._current:
             return  # superseded or cancelled
+        self._busy = False
         if kind == "failed":
             fail_kind, message = payload
             if fail_kind == "crash":

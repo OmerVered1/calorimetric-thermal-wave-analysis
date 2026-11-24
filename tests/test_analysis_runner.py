@@ -12,6 +12,8 @@ from datetime import datetime
 
 import pytest
 
+from tests import child_probe
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
@@ -240,3 +242,91 @@ def test_gui_thread_not_blocked_during_analysis(worker, tmp_path):
     expected = int(elapsed / 0.020)
     missed = expected - len(ticks)
     assert missed <= 5, "GUI thread starved: %d of %d ticks missed" % (missed, expected)
+
+
+# ---- fix round 1 -------------------------------------------------------------
+
+def test_spawned_child_never_imports_pyside(qapp):
+    from concurrent.futures import ProcessPoolExecutor
+    from multiprocessing import get_context
+    with ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn")) as ex:
+        assert ex.submit(child_probe.modules).result(timeout=60) == (False, False, False)
+
+
+def test_main_py_has_no_top_level_gui_import():
+    import ast
+    with open(os.path.join(HERE, "..", "main.py")) as f:
+        tree = ast.parse(f.read())
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [getattr(node, "module", None) or ""] + [a.name for a in node.names]
+            assert not any(n.split(".")[0] in ("ctwa", "PySide6", "pyqtgraph") for n in names), names
+
+
+def test_spawn_with_main_py_as_main_module_keeps_gui_out(tmp_path):
+    import subprocess
+    import sys
+    root = os.path.abspath(os.path.join(HERE, ".."))
+    script = tmp_path / "probe.py"
+    script.write_text(
+        "import sys, runpy, multiprocessing as mp\n"
+        "from concurrent.futures import ProcessPoolExecutor\n"
+        "sys.path.insert(0, %r)\n"
+        "import tests.child_probe\n"
+        "if __name__ == '__main__':\n"
+        "    mp.freeze_support()\n"
+        "    ns = runpy.run_path(%r, run_name='__mp_main__')\n"  # what a spawned child does to main.py
+        "    print('GUI_IN_MAIN_IMPORT', 'PySide6' in sys.modules)\n" % (root, os.path.join(root, "main.py")))
+    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=120,
+                         cwd=str(tmp_path), env=dict(os.environ, QT_QPA_PLATFORM="offscreen"))
+    assert "GUI_IN_MAIN_IMPORT False" in out.stdout, out.stdout + out.stderr
+
+
+def test_cancel_when_idle_keeps_process_and_cache(worker, tmp_path):
+    p = _unzip("al2o3_ctwa", tmp_path)
+    c = Collector(worker)
+    worker.load(p)
+    c.wait()
+    pids = {pr.pid for pr in worker._executor._processes.values()}
+    worker.cancel()
+    assert {pr.pid for pr in worker._executor._processes.values()} == pids
+    opts, _ = _opts("al2o3_ctwa__AutoFit_raw.json")
+    worker.analyze(p, opts)
+    c.wait()
+    worker.analyze(p, opts)
+    c.wait()
+    assert {pr.pid for pr in worker._executor._processes.values()} == pids
+
+
+@pytest.mark.slow
+def test_second_analyze_supersedes_slow_first(worker, tmp_path):
+    p = _unzip("fiber_150_600", tmp_path)
+    opts, case = _opts("fiber_150_600__AutoFit_raw.json")
+    c = Collector(worker)
+    worker.load(p)
+    c.wait(60)
+    worker.analyze(p, opts)
+    time.sleep(0.5)
+    first = {pr.pid for pr in worker._executor._processes.values()}
+    t0 = time.perf_counter()
+    worker.analyze(p, opts)
+    kind, res = c.wait(60)
+    assert kind == "finished"
+    assert math.isclose(res.alpha_phase_raw, case["results"]["alphaPhaseRaw"], rel_tol=1e-9)
+    # a fresh process computed it (the old one was killed, not waited for)
+    assert {pr.pid for pr in worker._executor._processes.values()} != first
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        QApplication.processEvents()
+    assert c.events == []
+
+
+def test_shutdown_on_app_quit(qapp):
+    from ctwa.ui.analysis_worker import AnalysisWorker
+    w = AnalysisWorker()
+    w._ensure_pool().submit(child_probe.pid).result(timeout=60)
+    procs = list(w._executor._processes.values())
+    qapp.aboutToQuit.emit()
+    for pr in procs:
+        pr.join(10)
+    assert not any(pr.is_alive() for pr in procs)

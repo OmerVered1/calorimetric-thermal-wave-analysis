@@ -6,8 +6,10 @@ meter model when you connect.
 
 import multiprocessing
 
-from ctwa.app import main
-
 if __name__ == "__main__":
-    multiprocessing.freeze_support()  # first thing: the frozen app spawns its analysis process
+    # First thing: the frozen app spawns its analysis process. The GUI import
+    # stays below this guard so a spawned child (which re-runs this file as
+    # __mp_main__) never loads Qt.
+    multiprocessing.freeze_support()
+    from ctwa.app import main
     main()
