@@ -15,7 +15,7 @@ from ctwa.analysis.jsmath import (js_div, js_log, js_number_to_string, js_round,
                                   js_to_precision)
 from ctwa.analysis.references import material_color
 
-__all__ = ["format_alpha", "parse_test_date", "with_ln_validity", "run_label", "row_matches",
+__all__ = ["format_alpha", "parse_test_date", "sort_key_test_date", "with_ln_validity", "run_label", "row_matches",
            "material_color"]
 
 DASH = "—"
@@ -85,6 +85,16 @@ def parse_test_date(s: Optional[str]) -> Optional[date]:
         return date(year, month0 + 1, 1) + timedelta(days=day - 1)
     except (OverflowError, ValueError):
         return None
+
+
+_EPOCH = date(1970, 1, 1)
+
+
+def sort_key_test_date(s: Optional[str]) -> date:
+    """parse_test_date, with unparsable dates as the 1970 epoch, as the webapp's parseTestDate
+    gives them. Results and Statistics must use this for sorting and date-range filters, so
+    undated rows land where they do in the webapp (oldest), never raise or drop out."""
+    return parse_test_date(s) or _EPOCH
 
 
 # ---- ln validity ----

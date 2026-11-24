@@ -4649,6 +4649,8 @@ class MainWindow(QMainWindow):
             self.save_panel.shutdown()
         if self.upload_manager is not None:
             self.upload_manager.shutdown(500)   # a row still uploading stays in the queue
+        if getattr(self, "results_loader", None) is not None:
+            self.results_loader.shutdown()
         self.runs_tab.shutdown()
         self.analysis_tab.worker.shutdown()
         self.multimeter_panel.stop_live()

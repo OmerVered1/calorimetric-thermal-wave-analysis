@@ -517,6 +517,16 @@ def test_parse_test_date_specifics():
     assert helpers.parse_test_date("   ") is None
 
 
+def test_sort_key_test_date_unparsable_is_the_1970_epoch():
+    epoch = date(1970, 1, 1)
+    assert helpers.sort_key_test_date("05/03/2025") == date(2025, 3, 5)
+    assert helpers.sort_key_test_date("31/02/2026") == date(2026, 3, 3)   # rolls over, as in JS
+    for bad in (None, "", "garbage", "1/2"):
+        assert helpers.sort_key_test_date(bad) == epoch
+    dates = ["05/03/2025", None, "garbage", "01/01/2020", ""]
+    assert sorted(dates, key=helpers.sort_key_test_date)[-2:] == ["01/01/2020", "05/03/2025"]
+
+
 def test_run_label_pinned():
     assert len(RUN_ROWS) == len(RUN_TS)
     for row, expected in zip(RUN_ROWS, RUN_TS):
@@ -949,3 +959,16 @@ def test_main_window_has_a_results_loader_and_save_refreshes_it(qapp, monkeypatc
         assert calls == [1]
     finally:
         win.close()
+
+
+def test_closing_the_window_shuts_the_loader_down(qapp, monkeypatch):
+    from ctwa import app as appmod
+    monkeypatch.setattr(appmod.MainWindow, "_check_license_agreement", lambda self: True)
+    win = appmod.MainWindow()
+    calls = []
+    monkeypatch.setattr(win.results_loader, "shutdown", lambda *a: calls.append(1))
+    win.close()
+    assert calls == [1]
+    win2 = appmod.MainWindow()
+    win2.results_loader = None          # cloud off
+    win2.close()
