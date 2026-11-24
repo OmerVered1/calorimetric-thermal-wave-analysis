@@ -3225,7 +3225,7 @@ class MainWindow(QMainWindow):
             print(f"Cloud features off: {self._cloud_off_reason}")
         self.runs_tab = RunsTab(self.auto_save_path, client=self.cloud_client,
                                 settings=self.settings)
-        self.analysis_tab = AnalysisTab()
+        self.analysis_tab = AnalysisTab(settings=self.settings)
         if self.upload_manager is not None:
             self.save_panel = SavePanel(self.upload_manager, settings=self.settings)
             self.analysis_tab.set_save_panel(self.save_panel)

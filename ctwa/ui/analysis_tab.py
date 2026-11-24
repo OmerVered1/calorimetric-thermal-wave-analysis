@@ -12,8 +12,8 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+                               QSizePolicy, QSplitter, QVBoxLayout, QWidget)
 
 from ctwa import theme
 from ctwa.analysis.runner import LoadedRun, RegionInfo
@@ -33,11 +33,12 @@ def _round2(x: float) -> float:
 
 class AnalysisTab(QWidget):
     result_ready = Signal(object)  # (LoadedRun, PipelineOptions, AnalysisResults, plot or None)
-    result_cleared = Signal()      # the result announced last no longer stands (new run / Analyze / failure)
+    result_cleared = Signal()      # the result announced last no longer stands (new run / Analyze / failure / settings or region changed)
     run_loaded = Signal(object)    # LoadedRun, once the plot shows it
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: Optional[QWidget] = None, settings=None) -> None:
         super().__init__(parent)
+        self._app_settings = settings   # the app's QSettings (splitter state), or None
         self.run: Optional[LoadedRun] = None
         self.worker = AnalysisWorker(self)
         self._path: Optional[str] = None
@@ -54,10 +55,24 @@ class AnalysisTab(QWidget):
         root = QVBoxLayout(self)
         self.title = theme.set_role(QLabel("Open a run from the Runs tab"), "heading")
         root.addWidget(self.title)
-        root.addWidget(self._build_plot(), stretch=3)
+        self.splitter = QSplitter(Qt.Vertical)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self._build_plot())
+        root.addWidget(self.splitter, stretch=1)
 
-        bottom = QHBoxLayout()
-        root.addLayout(bottom, stretch=2)
+        bottom_area = QWidget()
+        bottom = QHBoxLayout(bottom_area)
+        bottom.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()   # a short bottom half scrolls instead of refusing to shrink
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(bottom_area)
+        self.splitter.addWidget(scroll)
+        self.splitter.setStretchFactor(0, 45)
+        self.splitter.setStretchFactor(1, 55)
+        self.splitter.setSizes([450, 550])
+        self._restore_splitter()
+        self.splitter.splitterMoved.connect(self._save_splitter)
         left = QVBoxLayout()
         self.settings = SettingsPanel()
         left.addWidget(self.settings, stretch=1)
@@ -86,6 +101,20 @@ class AnalysisTab(QWidget):
         self.settings.changed.connect(self._on_settings_changed)
         self.settings.mode_changed.connect(lambda _m: self._on_settings_changed())
         self._update_controls()
+
+    def _restore_splitter(self) -> None:
+        if self._app_settings is None:
+            return
+        try:
+            state = self._app_settings.value("analysis/splitter")
+            if state:
+                self.splitter.restoreState(state)
+        except Exception:
+            pass
+
+    def _save_splitter(self, *_args) -> None:
+        if self._app_settings is not None:
+            self._app_settings.setValue("analysis/splitter", self.splitter.saveState())
 
     # ---- plot ----
     def _build_plot(self) -> QWidget:
@@ -364,6 +393,7 @@ class AnalysisTab(QWidget):
         if self._has_results:
             self._has_results = False
             self.results_panel.show_stale()
+            self.result_cleared.emit()   # Save waits for the next analysis
         self._ensure_markers_placed()
         self._update_controls()
 

@@ -522,3 +522,63 @@ def test_a_crash_while_loading_says_to_open_the_run_again(qapp, run_file):
         assert w.title.text() == os.path.basename(run_file)
     finally:
         w.worker.shutdown()
+
+
+# ---- save follows staleness; resizable divider ----
+
+def _save_panel(tab):
+    from types import SimpleNamespace
+    from ctwa.ui.save_panel import SavePanel
+    panel = SavePanel(SimpleNamespace(client=None, login_succeeded=lambda: None))
+    tab.set_save_panel(panel)
+    return panel
+
+
+def test_save_disabled_when_a_setting_changes_until_reanalyzed(tab):
+    panel = _save_panel(tab)
+    analyze_and_wait(tab)
+    assert panel.save_btn.isEnabled()
+    tab.settings.smooth_check.toggle()
+    assert not panel.save_btn.isEnabled()
+    analyze_and_wait(tab)
+    assert panel.save_btn.isEnabled()
+    panel.shutdown()
+
+
+def test_save_disabled_when_the_region_moves_until_reanalyzed(tab):
+    panel = _save_panel(tab)
+    analyze_and_wait(tab)
+    assert panel.save_btn.isEnabled()
+    lo, hi = tab.region.getRegion()
+    tab.region.setRegion((lo + 5, hi))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    assert not panel.save_btn.isEnabled()
+    analyze_and_wait(tab)
+    assert panel.save_btn.isEnabled()
+    panel.shutdown()
+
+
+def test_divider_is_a_splitter_with_a_roomy_plot_and_remembers_its_state(qapp, tmp_path):
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QSplitter
+    path = str(tmp_path / "s.ini")
+    s1 = QSettings(path, QSettings.IniFormat)
+    a = AnalysisTab(settings=s1)
+    a.resize(1200, 800)
+    a.show()
+    qapp.processEvents()
+    assert isinstance(a.splitter, QSplitter)
+    plot_h, bottom_h = a.splitter.sizes()
+    assert plot_h / (plot_h + bottom_h) >= 0.40
+    a.splitter.setSizes([200, 500])
+    a.splitter.splitterMoved.emit(200, 1)
+    a.worker.shutdown()
+    s1.sync()
+    s2 = QSettings(path, QSettings.IniFormat)
+    b = AnalysisTab(settings=s2)
+    b.resize(1200, 800)
+    b.show()
+    qapp.processEvents()
+    p, q = b.splitter.sizes()
+    assert abs(p / (p + q) - 200 / 700) < 0.03
+    b.worker.shutdown()
