@@ -330,3 +330,11 @@ def test_shutdown_on_app_quit(qapp):
     for pr in procs:
         pr.join(10)
     assert not any(pr.is_alive() for pr in procs)
+
+
+def test_parse_run_header_ignores_trailing_commas():
+    from datetime import datetime
+    from ctwa.analysis.run_header import parse_run_header
+    h = parse_run_header(["# Started: 2026-01-01 10:00:00,,,,", "# Experiment: x,,,"])
+    assert h["started"] == datetime(2026, 1, 1, 10, 0, 0)
+    assert h["experiment"] == "x"

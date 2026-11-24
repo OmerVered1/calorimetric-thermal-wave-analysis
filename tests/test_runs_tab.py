@@ -199,7 +199,7 @@ def test_no_client_shows_dash(env):
     assert cell(tab, 0, 3) == "—"
 
 
-def test_mean_temperature_filled_in_by_worker_and_cached(env):
+def test_mean_temperature_filled_in_by_worker_and_cached(env, monkeypatch):
     make, auto, _, tmp = env
     make_run(str(auto / "a.csv"), mean_t=27.5)
     tab = make(FakeClient())
@@ -207,10 +207,13 @@ def test_mean_temperature_filled_in_by_worker_and_cached(env):
     settle(tab)
     assert cell(tab, 0, 5) == "27.5 °C"
     assert os.path.exists(tmp / "cache" / "c.json")
+    def boom(_run):
+        raise AssertionError("must come from the cache")
+    monkeypatch.setattr(run_index, "compute_mean_temperature", boom)
     tab2 = make(FakeClient())
-    tab2.refresh()   # straight from the cache, before any worker finishes
-    assert cell(tab2, 0, 5) == "27.5 °C"
+    tab2.refresh()
     settle(tab2)
+    assert cell(tab2, 0, 5) == "27.5 °C"
 
 
 def test_length_formatted(env):
@@ -228,6 +231,7 @@ def test_recording_path_disables_analyze(env):
     make_run(str(auto / "b.csv"))
     tab = make(FakeClient())
     tab.refresh()
+    settle(tab)
     tab.set_recording_path(p)
     got = []
     tab.open_run.connect(got.append)
@@ -251,6 +255,7 @@ def test_non_capture_file_cannot_be_analyzed(env):
     (auto / "other.csv").write_text("a,b\n1,2\n")
     tab = make(FakeClient())
     tab.refresh()
+    settle(tab)
     tab.table.selectRow(0)
     assert not tab.analyze_btn.isEnabled()
     assert tab.analyze_btn.toolTip() == "Not a CTWA/C80 one-file capture"
@@ -262,6 +267,7 @@ def test_double_click_opens(env):
     make_run(str(auto / "a.csv"))
     tab = make(FakeClient())
     tab.refresh()
+    settle(tab)
     got = []
     tab.open_run.connect(got.append)
     tab.table.selectRow(0)
@@ -281,6 +287,7 @@ def test_added_folder_persists_and_auto_folder_cannot_be_removed(env):
     tab2 = make(FakeClient())
     assert tab2.folders() == [str(auto), os.path.normpath(str(extra))]
     tab2.refresh()
+    settle(tab2)
     assert [r.name for r in tab2.model.runs] == ["e.csv"]
     assert not tab2.remove_folder(str(auto))
     assert tab2.remove_folder(str(extra))
@@ -294,6 +301,150 @@ def test_stale_results_from_an_earlier_refresh_are_ignored(env):
     make_run(str(auto / "a.csv"))
     tab = make(FakeClient())
     tab.refresh()
-    tab._on_cloud_error(tab._gen - 1, "stale")
-    assert tab.model.cloud_state == "loading"
     settle(tab)
+    tab.model.set_saved({})
+    tab._on_cloud_error(tab._gen - 1, "stale")
+    assert tab.model.cloud_state == "ok"
+    settle(tab)
+
+
+# -- fix round 1 ---------------------------------------------------------------
+
+def test_refresh_does_not_scan_on_the_gui_thread(env):
+    make, auto, *_ = env
+    for i in range(300):
+        make_run(str(auto / f"r{i}.csv"))
+    tab = make(FakeClient())
+    t0 = time.perf_counter()
+    tab.refresh()
+    assert time.perf_counter() - t0 < 0.05
+    assert tab.model.rowCount() == 0          # nothing yet: the scan is in the worker
+    assert "Scanning" in tab.status.text()
+    settle(tab)
+    assert tab.model.rowCount() == 300
+    assert "300" in tab.status.text()
+
+
+def test_stale_scan_result_is_ignored(env):
+    make, auto, *_ = env
+    make_run(str(auto / "a.csv"))
+    tab = make(FakeClient())
+    tab.refresh()
+    settle(tab)
+    tab._on_scanned(tab._gen - 1, [], False, {})
+    assert tab.model.rowCount() == 1
+
+
+def test_signals_object_is_created_once(env):
+    make, auto, *_ = env
+    make_run(str(auto / "a.csv"))
+    tab = make(FakeClient())
+    tab.refresh()
+    first = tab._signals
+    settle(tab)
+    tab.refresh()
+    settle(tab)
+    assert tab._signals is first
+
+
+def test_recording_file_shows_no_mean(env):
+    make, auto, *_ = env
+    p = make_run(str(auto / "a.csv"), mean_t=27.5)
+    tab = make(FakeClient())
+    tab.refresh()
+    settle(tab)
+    assert cell(tab, 0, 5) == "27.5 \u00b0C"
+    tab.set_recording_path(p)
+    assert cell(tab, 0, 5) is None            # cached value is stale while recording
+    tab._on_mean(tab._gen, os.path.normpath(p), 99.0)
+    assert cell(tab, 0, 5) is None            # and a late result is ignored
+    tab.set_recording_path(None)
+
+
+def test_set_mean_uses_a_path_index(env):
+    make, auto, *_ = env
+    make_run(str(auto / "a.csv"))
+    make_run(str(auto / "b.csv"))
+    tab = make(FakeClient())
+    tab.refresh()
+    settle(tab)
+    assert set(tab.model._row_of) == {r.path for r in tab.model.runs}
+
+
+class PagingClient:
+    """Honours in.(...) filters, order, limit and offset like PostgREST."""
+    def __init__(self, rows):
+        self.rows, self.queries = rows, []
+
+    def select(self, table, query):
+        self.queries.append(dict(query))
+        out = self.rows
+        for key in ("c80_filename", "test_date"):
+            if key in query:
+                vals = {v.replace('\\"', '"').replace("\\\\", "\\")
+                        for v in re.findall(r'"((?:[^"\\]|\\.)*)"', query[key])}
+                out = [r for r in out if r.get(key) in vals]
+        out = sorted(out, key=lambda r: -r["id"])
+        off, lim = int(query.get("offset", 0)), int(query.get("limit", 1000))
+        return out[off:off + lim]
+
+
+def _runs(tmp_path, names, started="2026-11-17 09:00:00"):
+    for n in names:
+        make_run(str(tmp_path / n), started=started)
+    return run_index.scan([str(tmp_path)])
+
+
+def test_query_strings_are_quoted_and_escaped(tmp_path):
+    names = ['a.csv', 'b,c d.csv', 'q"x\\y.csv', '\u00e9\u05d0.csv']
+    runs = _runs(tmp_path, names)
+    c = PagingClient([])
+    run_index.query_saved_rows(c, runs)
+    q = c.queries[0]
+    assert q["select"] == "id,c80_filename,model_name,test_date"
+    assert q["order"] == "id.desc"
+    assert q["limit"] == "1000" and q["offset"] == "0"
+    assert q["c80_filename"] == ('in.("a.csv","b,c d.csv","q\\"x\\\\y.csv",'
+                                 '"\u00e9\u05d0.csv")')
+    # no exact matches, so the same-day query follows
+    assert c.queries[1]["test_date"] == 'in.("17/11/2026")'
+
+
+def test_names_are_chunked_at_20(tmp_path):
+    runs = _runs(tmp_path, [f"r{i:02d}.csv" for i in range(45)])
+    c = PagingClient([])
+    run_index.query_saved_rows(c, runs)
+    name_queries = [q for q in c.queries if "c80_filename" in q]
+    assert [q["c80_filename"].count('"') // 2 for q in name_queries] == [20, 20, 5]
+
+
+def test_dates_are_chunked_at_20(tmp_path):
+    for i in range(25):
+        make_run(str(tmp_path / f"r{i}.csv"), started=f"2026-01-{i + 1:02d} 10:00:00")
+    runs = run_index.scan([str(tmp_path)])
+    c = PagingClient([])
+    run_index.query_saved_rows(c, runs)
+    day_queries = [q for q in c.queries if "test_date" in q]
+    assert sorted(q["test_date"].count('"') // 2 for q in day_queries) == [5, 20]
+
+
+def test_paging_fetches_every_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_index, "PAGE", 3)
+    runs = _runs(tmp_path, ["a.csv"], started="2026-11-17 09:00:00")
+    rows = [{"id": i, "c80_filename": None, "model_name": "m", "test_date": "17/11/2026"}
+            for i in range(1, 9)]          # 8 same-day rows: pages of 3, 3, 2
+    c = PagingClient(rows)
+    out = run_index.query_saved_rows(c, runs)
+    assert out[runs[0].path].count == 8 and not out[runs[0].path].exact
+    day = [q for q in c.queries if "test_date" in q]
+    assert [q["offset"] for q in day] == ["0", "3", "6"]
+
+
+def test_paging_stops_on_exact_page_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_index, "PAGE", 2)
+    runs = _runs(tmp_path, ["a.csv"])
+    rows = [{"id": i, "c80_filename": "a.csv", "model_name": f"m{i}", "test_date": "17/11/2026"}
+            for i in range(1, 5)]          # 4 rows: full, full, empty page
+    c = PagingClient(rows)
+    out = run_index.query_saved_rows(c, runs)
+    assert out[runs[0].path].count == 4 and out[runs[0].path].sample == "m4"

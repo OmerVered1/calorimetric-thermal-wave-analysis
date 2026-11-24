@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import (QAbstractTableModel, QModelIndex, QObject, QRunnable,
@@ -49,6 +50,7 @@ class RunsModel(QAbstractTableModel):
         self.means: Dict[str, Optional[float]] = {}
         self.cloud_state: str = "loading"   # "loading" | "ok" | an error reason
         self.recording: Optional[str] = None
+        self._row_of: Dict[str, int] = {}
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.runs)
@@ -67,6 +69,7 @@ class RunsModel(QAbstractTableModel):
     def set_runs(self, runs: List[RunInfo], means: Dict[str, Optional[float]]) -> None:
         self.beginResetModel()
         self.runs = runs
+        self._row_of = {r.path: i for i, r in enumerate(runs)}
         self.means = dict(means)
         self.saved = {}
         self.cloud_state = "loading"
@@ -86,11 +89,12 @@ class RunsModel(QAbstractTableModel):
         self._touch([_SAVED, _SAMPLE])
 
     def set_mean(self, path: str, mean: Optional[float]) -> None:
+        r = self._row_of.get(path)
+        if r is None or (self.recording is not None and _norm(path) == self.recording):
+            return   # unknown file, or the recording one (its mean would be stale)
         self.means[path] = mean
-        for r, run in enumerate(self.runs):
-            if run.path == path:
-                i = self.index(r, _TEMP)
-                self.dataChanged.emit(i, i)
+        i = self.index(r, _TEMP)
+        self.dataChanged.emit(i, i)
 
     def set_recording(self, path: Optional[str]) -> None:
         self.recording = _norm(path) if path else None
@@ -118,7 +122,7 @@ class RunsModel(QAbstractTableModel):
         elif c in (_SAVED, _SAMPLE):
             return self._cloud_data(run, c, role)
         elif c == _TEMP:
-            m = self.means.get(run.path)
+            m = None if self.is_recording(run) else self.means.get(run.path)
             if role == Qt.DisplayRole and m is not None:
                 return f"{m:.1f} °C"
             if role == Qt.TextAlignmentRole:
@@ -155,10 +159,33 @@ class RunsModel(QAbstractTableModel):
 
 
 class _Signals(QObject):
+    scanned = Signal(int, object, bool, object)   # generation, runs, truncated, means
     mean = Signal(int, str, object)   # generation, path, mean or None
     saved = Signal(int, object)       # generation, {path: SavedInfo}
     cloud_error = Signal(int, str)
     done = Signal(int)
+
+
+class _ScanWorker(QRunnable):
+    """Walks the folders, reads headers/tails, looks up the cached means."""
+
+    def __init__(self, gen: int, folders: List[str], get_cache, signals: _Signals):
+        super().__init__()
+        self.gen, self.folders, self.get_cache, self.signals = gen, folders, get_cache, signals
+
+    def run(self):
+        try:
+            runs, truncated = run_index.scan_limited(self.folders)
+            cache = self.get_cache()
+            means = {}
+            for r in runs:
+                if r.is_capture:
+                    known, mean = cache.lookup(r)
+                    if known:
+                        means[r.path] = mean
+        except Exception:
+            runs, truncated, means = [], False, {}
+        self.signals.scanned.emit(self.gen, runs, truncated, means)
 
 
 class _MeanWorker(QRunnable):
@@ -214,6 +241,12 @@ class RunsTab(QWidget):
         self._gen = 0
         self._recording: Optional[str] = None
         self._truncated = False
+        self._cache_lock = threading.Lock()
+        self._signals = _Signals(self)
+        self._signals.scanned.connect(self._on_scanned, Qt.QueuedConnection)
+        self._signals.mean.connect(self._on_mean, Qt.QueuedConnection)
+        self._signals.saved.connect(self._on_saved, Qt.QueuedConnection)
+        self._signals.cloud_error.connect(self._on_cloud_error, Qt.QueuedConnection)
 
         self.model = RunsModel(self)
         self.table = QTableView()
@@ -305,42 +338,37 @@ class RunsTab(QWidget):
 
     # -- refresh --------------------------------------------------------------
     def _get_cache(self) -> MeanTempCache:
-        if self._cache is None:
-            self._cache = MeanTempCache(self._cache_path or run_index.default_cache_path())
-        return self._cache
+        with self._cache_lock:
+            if self._cache is None:
+                self._cache = MeanTempCache(self._cache_path or run_index.default_cache_path())
+            return self._cache
 
     def refresh(self) -> None:
+        """Returns at once: the scan runs in the worker pool."""
         self._gen += 1
-        gen = self._gen
-        runs, self._truncated = run_index.scan_limited(self.folders())
-        cache = self._get_cache()
-        means: Dict[str, Optional[float]] = {}
-        todo: List[RunInfo] = []
+        self.status.setText("Scanning\u2026")
+        self._pool.start(_ScanWorker(self._gen, self.folders(), self._get_cache, self._signals))
+
+    def _on_scanned(self, gen: int, runs, truncated: bool, means) -> None:
+        if gen != self._gen:
+            return
+        self._truncated = truncated
         rec = _norm(self._recording) if self._recording else None
-        for r in runs:
-            if not r.is_capture:
-                continue
-            known, mean = cache.lookup(r)
-            if known:
-                means[r.path] = mean
-            elif rec is None or _norm(r.path) != rec:   # a growing file: skip
-                todo.append(r)
+        means = {p: m for p, m in means.items() if rec is None or _norm(p) != rec}
+        todo = [r for r in runs if r.is_capture and r.path not in means
+                and (rec is None or _norm(r.path) != rec)]   # a growing file: skip
         self.model.set_runs(runs, means)
         self.model.set_recording(self._recording)
         self._update_status(len(runs))
         self._update_buttons()
-
-        sig = _Signals(self)
-        sig.mean.connect(self._on_mean, Qt.QueuedConnection)
-        sig.saved.connect(self._on_saved, Qt.QueuedConnection)
-        sig.cloud_error.connect(self._on_cloud_error, Qt.QueuedConnection)
         if todo:
-            self._pool.start(_MeanWorker(gen, todo, cache, sig, lambda g: g == self._gen))
+            self._pool.start(_MeanWorker(gen, todo, self._get_cache(), self._signals,
+                                         lambda g: g == self._gen))
         cap = [r for r in runs if r.is_capture]
         if self.client is None:
             self.model.set_cloud_error("Not connected to the cloud")
         elif cap:
-            self._pool.start(_CloudWorker(gen, cap, self.client, sig))
+            self._pool.start(_CloudWorker(gen, cap, self.client, self._signals))
         else:
             self.model.set_saved({})
 
@@ -351,11 +379,19 @@ class RunsTab(QWidget):
         self.status.setText(msg)
 
     def wait_for_workers(self, msecs: int = 30000) -> bool:
-        return self._pool.waitForDone(msecs)
+        """Block until the workers and the results they queued are all done (tests)."""
+        from PySide6.QtCore import QCoreApplication
+        for _ in range(10):   # a finished scan starts the next workers
+            if not self._pool.waitForDone(msecs):
+                return False
+            QCoreApplication.processEvents()
+            if self._pool.activeThreadCount() == 0:
+                return True
+        return True
 
     def _on_mean(self, gen: int, path: str, mean) -> None:
         if gen == self._gen:
-            self.model.set_mean(path, mean)
+            self.model.set_mean(path, mean)   # ignores the recording file
 
     def _on_saved(self, gen: int, saved) -> None:
         if gen == self._gen:

@@ -229,17 +229,32 @@ def _q(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def query_saved_rows(client, runs: Sequence[RunInfo], chunk: int = 40) -> Dict[str, SavedInfo]:
+PAGE = 1000   # PostgREST returns at most this many rows per request by default
+CHUNK = 20    # names / dates per query, which also keeps the URL short
+
+
+def _select_all(client, query: Dict[str, str]) -> List[dict]:
+    """Every row of a query, fetched page by page (limit/offset)."""
+    out: List[dict] = []
+    offset = 0
+    while True:
+        page = client.select("analyses", dict(query, limit=str(PAGE), offset=str(offset)))
+        out.extend(page)
+        if len(page) < PAGE:
+            return out
+        offset += PAGE
+
+
+def query_saved_rows(client, runs: Sequence[RunInfo], chunk: int = CHUNK) -> Dict[str, SavedInfo]:
     """path -> SavedInfo. Raises the client's NotLoggedIn / Offline / ServerError."""
     sel = "id,c80_filename,model_name,test_date"
     by_name: Dict[str, List[dict]] = {}
     names = sorted({r.name for r in runs})
     for i in range(0, len(names), chunk):
         part = names[i:i + chunk]
-        rows = client.select("analyses", {
-            "select": sel, "order": "id.desc",
-            "c80_filename": "in.(" + ",".join(_q(n) for n in part) + ")"})
-        for row in rows:
+        for row in _select_all(client, {
+                "select": sel, "order": "id.desc",
+                "c80_filename": "in.(" + ",".join(_q(n) for n in part) + ")"}):
             by_name.setdefault(row.get("c80_filename"), []).append(row)
     exact_names = set(by_name)
     days = sorted({fmt_date(r.started) for r in runs
@@ -247,10 +262,9 @@ def query_saved_rows(client, runs: Sequence[RunInfo], chunk: int = 40) -> Dict[s
     by_day: Dict[str, List[dict]] = {}
     for i in range(0, len(days), chunk):
         part = days[i:i + chunk]
-        rows = client.select("analyses", {
-            "select": sel, "order": "id.desc",
-            "test_date": "in.(" + ",".join(_q(d) for d in part) + ")"})
-        for row in rows:
+        for row in _select_all(client, {
+                "select": sel, "order": "id.desc",
+                "test_date": "in.(" + ",".join(_q(d) for d in part) + ")"}):
             by_day.setdefault(row.get("test_date"), []).append(row)
     out: Dict[str, SavedInfo] = {}
     for r in runs:
