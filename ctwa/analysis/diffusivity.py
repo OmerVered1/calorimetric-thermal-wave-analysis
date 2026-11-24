@@ -12,8 +12,7 @@ import math
 import re
 from typing import Dict, List, Optional
 
-from ctwa.analysis.jsmath import array_max, array_min, js_div, js_log, js_sqrt
-from ctwa.analysis.parser import _js_trim
+from ctwa.analysis.jsmath import array_max, array_min, js_div, js_log, js_sqrt, js_trim
 from ctwa.analysis.types import AnalysisParams, AnalysisResults, SyncedData
 
 TIME_FACTORS: Dict[str, float] = {
@@ -35,7 +34,7 @@ _RADIX = re.compile(r"0(?:[xX][0-9a-fA-F]+|[oO][0-7]+|[bB][01]+)\Z", re.ASCII)
 
 def _js_number(s: str) -> float:
     """JS Number(string): whole string must be a number; blank is 0, else NaN."""
-    t = _js_trim(s)
+    t = js_trim(s)
     if t == "":
         return 0.0
     if _RADIX.match(t):

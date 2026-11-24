@@ -12,18 +12,12 @@ import codecs
 import re
 from typing import List, Optional
 
+from .jsmath import JS_WHITESPACE as _WS, js_trim
 from .types import CombinedParsed
 
-# JS whitespace (String.prototype.trim, regex \s)
-_WS = (" \t\n\v\f\r\u00a0\u1680" + "".join(map(chr, range(0x2000, 0x200B)))
-       + "\u2028\u2029\u202f\u205f\u3000\ufeff")
 _S = "[" + _WS + "]"
 _NOT_NL = "[^\n\r\u2028\u2029]"  # JS `.`
 _F = re.ASCII  # \d, \w, [a-z] with i-less patterns behave like JS
-
-
-def _js_trim(s: str) -> str:
-    return s.strip(_WS)
 
 
 def _js_lower(s: str) -> str:
@@ -101,9 +95,9 @@ def _heat_flow_unit(c: str) -> Optional[str]:
 
 
 def _combined_columns(line: str) -> Optional[_Columns]:
-    trimmed = _js_trim(line)
+    trimmed = js_trim(line)
     if "\t" in trimmed:
-        cols = [_js_lower(_js_trim(s)) for s in trimmed.split("\t")]
+        cols = [_js_lower(js_trim(s)) for s in trimmed.split("\t")]
         t = _find_index(cols, lambda c: _RE_TIME.search(c) is not None)
         src = _find_index(cols, lambda c: "smu" in c)
         resp = _find_index(cols, lambda c: "heatflow" in c or "heat flow" in c)
@@ -113,7 +107,7 @@ def _combined_columns(line: str) -> Optional[_Columns]:
                         _find_index(cols, lambda c: c.startswith("temperature")), 1.0, 1.0)
     if trimmed.startswith("#") or "," not in trimmed:
         return None
-    cols = [_js_lower(_js_trim(s)) for s in trimmed.split(",")]
+    cols = [_js_lower(js_trim(s)) for s in trimmed.split(",")]
     t = _find_index(cols, lambda c: c == "elapsed(s)" or c == "time(s)")
     src = _find_index(cols, lambda c: c == "power(mw)" or c == "power(w)")
     resp = _find_index(cols, lambda c: _heat_flow_unit(c) is not None)
@@ -142,7 +136,7 @@ def parse_combined_file(data: bytes) -> Optional[CombinedParsed]:
     cols: Optional[_Columns] = None
 
     for line in lines:
-        trimmed = _js_trim(line)
+        trimmed = js_trim(line)
         if not trimmed:
             continue
 
@@ -177,7 +171,7 @@ def extract_start_date(data: bytes) -> Optional[str]:
     lines = _NEWLINE.split(decode_bytes(data))[:40]
     for line in lines:
         lower = _js_lower(line)
-        if "zone start time" not in lower and not (_js_trim(line).startswith("#") and "started" in lower):
+        if "zone start time" not in lower and not (js_trim(line).startswith("#") and "started" in lower):
             continue
         iso = _RE_ISO.search(line)
         if iso:

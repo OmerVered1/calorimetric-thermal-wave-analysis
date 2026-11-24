@@ -146,6 +146,7 @@ import os  # noqa: E402
 from ctwa.analysis import diffusivity as dfs  # noqa: E402
 from ctwa.analysis import jsmath as jm  # noqa: E402
 from ctwa.analysis import modes as md  # noqa: E402
+from ctwa.analysis import smoothing as sm  # noqa: E402
 from ctwa.analysis import square as sq  # noqa: E402
 from ctwa.analysis.parser import parse_combined_file  # noqa: E402
 from ctwa.analysis.types import AnalysisParams  # noqa: E402
@@ -303,9 +304,9 @@ def _golden_clicks(name):
 
 
 def test_ts_pinned_estimate_fundamental_period(real_run):
-    est = md.estimate_fundamental_period(real_run["t_src"], md.linear_detrend(real_run["t_src"], real_run["v_src"]))
+    est = sm.estimate_fundamental_period(real_run["t_src"], sm.linear_detrend(real_run["t_src"], real_run["v_src"]))
     assert est == pytest.approx(80.2460169850423, rel=1e-9)
-    assert md.estimate_fundamental_period([0.0] * 3, [1.0] * 3) is None
+    assert sm.estimate_fundamental_period([0.0] * 3, [1.0] * 3) is None
 
 
 def test_ts_pinned_fourier_and_square_period(real_run):

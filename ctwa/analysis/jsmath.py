@@ -11,6 +11,16 @@ import math
 from typing import Iterable
 
 
+# JS whitespace (String.prototype.trim, regex \s)
+JS_WHITESPACE = (" \t\n\v\f\r\u00a0\u1680" + "".join(map(chr, range(0x2000, 0x200B)))
+       + "\u2028\u2029\u202f\u205f\u3000\ufeff")
+
+
+def js_trim(s: str) -> str:
+    """String.prototype.trim: strips exactly the JS whitespace set."""
+    return s.strip(JS_WHITESPACE)
+
+
 def js_div(a: float, b: float) -> float:
     """JS division: x/0 gives +-Infinity or NaN instead of raising."""
     try:

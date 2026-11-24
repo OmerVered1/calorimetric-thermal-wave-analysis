@@ -8,8 +8,9 @@ import os
 
 import pytest
 
+from ctwa.analysis.jsmath import js_trim
 from ctwa.analysis.parser import (
-    _js_trim, _parse_float,
+    _parse_float,
     decode_bytes, extract_date_from_filename, extract_start_date,
     extract_temperature_from_filename, is_combined_file, parse_combined_file,
 )
@@ -76,9 +77,9 @@ def test_filename_helpers():
 
 
 def test_js_trim_and_parse_float():
-    assert _js_trim("-x-") == "-x-"
-    assert _js_trim(" x ") == "x"
-    assert _js_trim("\u2003x\u2009\ufeff") == "x"
+    assert js_trim("-x-") == "-x-"
+    assert js_trim(" x ") == "x"
+    assert js_trim("\u2003x\u2009\ufeff") == "x"
     assert _parse_float("-5.5") == -5.5
     assert _parse_float(" -5") == -5.0
     assert _parse_float("12abc") == 12.0

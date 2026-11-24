@@ -1,4 +1,4 @@
-"""The Auto (peak detection) and Manual (clicked peaks) analysis modes.
+"""The Auto, Manual, AutoHybrid, AutoFFT and AutoFit analysis modes.
 
 Literal port of runAutoAnalysis and runManualAnalysis of lib/analysis.ts of the
 webapp, with the private helpers they use (strongPeaks, fittedAmplitudes,
@@ -22,7 +22,7 @@ from ctwa.analysis.sine_fit import (
     refine_peak,
     sine_lag,
 )
-from ctwa.analysis.square import extract_fourier_fundamental
+from ctwa.analysis.smoothing import estimate_fundamental_period, linear_detrend
 from ctwa.analysis.types import AnalysisParams, AnalysisResults, LagChoice
 
 
@@ -54,74 +54,6 @@ def mean_trough_between_peaks(values: List[float], peak_indices: List[int]) -> f
                 min_val = values[i]
         total += min_val
     return total / (len(peak_indices) - 1)
-
-
-def linear_detrend(time: List[float], value: List[float]) -> List[float]:
-    """Subtract a least-squares linear trend (a + b t) from `value`."""
-    n = len(value)
-    if n < 2:
-        return list(value)
-    sx = sy = sxx = sxy = 0.0
-    for i in range(n):
-        sx += time[i]
-        sy += value[i]
-        sxx += time[i] * time[i]
-        sxy += time[i] * value[i]
-    denom = n * sxx - sx * sx
-    if denom == 0:
-        return list(value)
-    b = (n * sxy - sx * sy) / denom
-    a = (sy - b * sx) / n
-    return [value[i] - (a + b * time[i]) for i in range(n)]
-
-
-def estimate_fundamental_period(
-    time: List[float],
-    value: List[float],
-    max_cycles: Optional[float] = None,
-    grid_size: Optional[float] = None,
-) -> Optional[float]:
-    """Period of the largest Fourier amplitude over a log-spaced frequency scan plus one finer pass."""
-    if len(time) < 8 or len(value) != len(time):
-        return None
-    t0 = time[0]
-    t_n = time[-1]
-    length = t_n - t0
-    if length <= 0:
-        return None
-
-    # Allow as many cycles as the sampling can resolve (~5 samples/cycle).
-    dt = length / (len(time) - 1)
-    resolvable_cycles = js_floor(js_div(length, 5 * dt))
-    mc = js_min(400, js_max(20, resolvable_cycles)) if max_cycles is None else max_cycles
-    grid = js_min(240, js_max(80, mc * 2)) if grid_size is None else grid_size
-    f_min = 2 / length  # 2 cycles in window
-    f_max = mc / length  # up to mc cycles in window
-
-    best_freq = f_min
-    best_amp = -1.0
-    i = 0
-    while i < grid:  # logarithmic scan
-        frac = js_div(i, grid - 1)
-        freq = f_min * math.pow(f_max / f_min, frac)
-        amplitude = extract_fourier_fundamental(time, value, freq).amplitude
-        if amplitude > best_amp:
-            best_amp = amplitude
-            best_freq = freq
-        i += 1
-    # One refine pass around the best (linear, finer)
-    refine_range = js_div(f_max - f_min, grid)
-    f0 = js_max(f_min, best_freq - refine_range)
-    f1 = js_min(f_max, best_freq + refine_range)
-    i = 0
-    while i < grid:
-        freq = f0 + (f1 - f0) * js_div(i, grid - 1)
-        amplitude = extract_fourier_fundamental(time, value, freq).amplitude
-        if amplitude > best_amp:
-            best_amp = amplitude
-            best_freq = freq
-        i += 1
-    return 1 / best_freq if best_freq > 0 else None
 
 
 def _strong_peaks(time: List[float], value: List[float], period: Optional[float]) -> List[int]:
