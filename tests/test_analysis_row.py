@@ -28,8 +28,12 @@ def _ids(paths):
 
 
 def _case(path):
-    name = os.path.basename(path)[4:-5]
-    with open(os.path.join(GOLDEN_DIR, f"al2o3_ctwa__{name}.json"), encoding="utf-8") as f:
+    name = os.path.basename(path)[4:-5]  # "<case>" (al2o3_ctwa) or "flat_source_<case>"
+    if name.startswith("flat_source_"):  # row files avoid "__" (the case-file glob of the golden test)
+        name = "flat_source__" + name[len("flat_source_"):]
+    else:
+        name = f"al2o3_ctwa__{name}"
+    with open(os.path.join(GOLDEN_DIR, f"{name}.json"), encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -121,3 +125,28 @@ def test_find_duplicate():
     # first match wins
     second = dict(base, id=2)
     assert find_duplicate([base, second], row)["id"] == 1
+
+
+def test_none_result_keeps_key_with_null():
+    import dataclasses
+    from ctwa.analysis.pipeline import load_one_file, run_one_file_pipeline
+    from ctwa.analysis.row import RowMeta, build_analysis_row
+
+    path = os.path.join(GOLDEN_DIR, "row_AutoFit_raw.json")
+    with open(path, encoding="utf-8") as f:
+        gold = json.load(f)
+    case = _case(path)
+    synced, _ = load_one_file(read_input(case["input_file"]))
+    results = run_one_file_pipeline(synced, build_options(case["options"]))
+    results = dataclasses.replace(results, alpha_combined_raw=None, period_t_resp=None, frequency_f_resp=None)
+    meta = RowMeta(**{snake(k): v for k, v in gold["meta"].items()})
+    row = build_analysis_row(results, meta, None)
+    for key in ("alpha_combined_raw", "period_t_resp", "frequency_f_resp"):
+        assert key in row and row[key] is None
+
+
+def test_js_truthy():
+    from ctwa.analysis.jsmath import js_truthy
+
+    assert not any(js_truthy(x) for x in (0, 0.0, -0.0, math.nan, None, ""))
+    assert all(js_truthy(x) for x in (1, -2.5, math.inf, "a", True))

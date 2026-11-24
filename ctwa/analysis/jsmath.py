@@ -23,6 +23,15 @@ def js_trim(s: str) -> str:
     return s.strip(JS_WHITESPACE)
 
 
+def js_truthy(x) -> bool:
+    """JS truthiness of a number, string, bool or null: false for 0, -0, NaN, "", None."""
+    if x is None:
+        return False
+    if isinstance(x, float) and x != x:
+        return False
+    return bool(x)
+
+
 def js_div(a: float, b: float) -> float:
     """JS division: x/0 gives +-Infinity or NaN instead of raising."""
     try:

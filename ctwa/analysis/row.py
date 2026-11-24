@@ -12,7 +12,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from ctwa.analysis.jsmath import js_ceil, js_div, js_max, js_min, js_to_fixed, js_trim
+from ctwa.analysis.jsmath import js_ceil, js_div, js_max, js_min, js_to_fixed, js_trim, js_truthy
 from ctwa.analysis.smoothing import smooth_to_shared_sine
 
 __all__ = ["RowMeta", "build_analysis_plot", "build_analysis_row", "find_duplicate", "clean_for_json"]
@@ -231,13 +231,6 @@ def build_analysis_row(results, meta: RowMeta, plot: Optional[Dict[str, Any]]) -
         "alpha_combined_cal": results.alpha_combined_cal if cal else None,
         "alpha_phase_cal": results.alpha_phase_cal if cal else None,
     }
-    # An optional result the mode did not report is undefined in the webapp, which
-    # the insert drops: leave the key out rather than writing null.
-    for key in ("period_t_resp", "frequency_f_resp", "alpha_combined_raw"):
-        if row[key] is None:
-            del row[key]
-    if cal and row["alpha_combined_cal"] is None:
-        del row["alpha_combined_cal"]
     if meta.source_file_name is not None:
         row["c80_filename"] = meta.source_file_name
     # What the table has no column for: the lag's uncertainty and how the two clocks were aligned.
@@ -246,11 +239,11 @@ def build_analysis_row(results, meta: RowMeta, plot: Optional[Dict[str, Any]]) -
         extra["lag_se_s"] = results.lag_se
         if results.lag_se_source is not None:  # undefined is dropped by JSON.stringify
             extra["lag_se_source"] = results.lag_se_source
-    if results.lag_cycles:
+    if js_truthy(results.lag_cycles):
         extra["lag_cycles"] = results.lag_cycles
-    if meta.input_mode == "two" and meta.day_offset:
+    if meta.input_mode == "two" and js_truthy(meta.day_offset):
         extra["day_offset"] = meta.day_offset
-    if meta.input_mode == "two" and meta.clock_ahead:
+    if meta.input_mode == "two" and js_truthy(meta.clock_ahead):
         extra["clock_ahead_s"] = meta.clock_ahead
     if extra:
         row["extra_data"] = _dumps(extra)
