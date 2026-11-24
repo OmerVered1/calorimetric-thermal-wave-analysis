@@ -96,7 +96,7 @@ class UploadManager(QObject):
         self._set_count(len(self.queue.pending()))
         return rid
 
-    def shutdown(self, timeout_ms: int = 5000) -> None:
+    def shutdown(self, timeout_ms: int = 500) -> None:
         self._closed = True
         self._timer.stop()
         self._pool.waitForDone(timeout_ms)

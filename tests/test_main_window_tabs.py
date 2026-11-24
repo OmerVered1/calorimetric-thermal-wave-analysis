@@ -95,7 +95,7 @@ def test_changing_the_auto_save_folder_updates_the_runs_tab(window, tmp_path, mo
 def test_save_panel_sits_in_the_analysis_tab_and_gets_results(window):
     assert window.analysis_tab.isAncestorOf(window.save_panel)
     assert window.save_panel.parent() is not None
-    window.analysis_tab.result_ready.emit(("run", "opts", "results"))
+    window.analysis_tab.result_ready.emit(("run", "opts", "results", None))
     assert window.save_panel._results == "results"
 
 
@@ -142,3 +142,76 @@ def test_closing_shuts_the_background_workers_down(app, tmp_path):
     assert w.save_panel._closed
     assert w.analysis_tab.worker._executor is None
     w.close()   # a second close must not raise
+
+
+def test_the_real_cloud_services_build_offline_without_keyring(monkeypatch, tmp_path):
+    """The factory the app really uses: a client and a queue in a scratch folder, no network,
+    and the keyring is only needed when a token is asked for."""
+    from ctwa import app as appmod
+    from ctwa.cloud import queue as cloud_queue
+    monkeypatch.setitem(sys.modules, "keyring", None)   # importing it would raise
+    monkeypatch.setattr(cloud_queue, "default_queue_folder", lambda: str(tmp_path / "q"))
+    client, queue = appmod._real_make_cloud_services()
+    assert (tmp_path / "q").is_dir()
+    assert queue.pending() == []
+    assert client is not None and "keyring" in sys.modules and sys.modules["keyring"] is None
+
+
+def test_the_window_opens_when_the_cloud_services_cannot_start(app, tmp_path, monkeypatch):
+    from ctwa import app as appmod
+
+    def broken():
+        raise RuntimeError("no keyring here\nsecond line")
+    monkeypatch.setattr(appmod, "_make_cloud_services", broken)
+    appmod.MainWindow._check_license_agreement = lambda self: True
+    w = appmod.MainWindow()
+    try:
+        assert w.upload_manager is None and w.save_panel is None and w.cloud_client is None
+        assert w.status.currentMessage() == "Cloud features off: no keyring here"
+        assert w.runs_tab.client is None
+        names = tab_names(w)
+        assert names[-2:] == ["Runs", "Analysis"]
+    finally:
+        w.close()   # closing without a manager or panel must not raise
+
+
+def test_closing_turns_the_outputs_off_before_stopping_the_helpers(app, tmp_path):
+    from ctwa import app as appmod
+    appmod.MainWindow._check_license_agreement = lambda self: True
+    w = appmod.MainWindow()
+    w.connect_instrument("2602B", simulate=True, simulation_resistance=100.0)
+    order = []
+    real_off = w.smu.all_outputs_off
+    w.smu.all_outputs_off = lambda: (order.append("outputs_off"), real_off())[1]
+    real_um = w.upload_manager.shutdown
+    w.upload_manager.shutdown = lambda *a, **k: (order.append("upload_shutdown"), order.append(a), real_um(*a, **k))[2]
+    real_rt = w.runs_tab.shutdown
+    w.runs_tab.shutdown = lambda: (order.append("runs_shutdown"), real_rt())[1]
+    w.close()
+    assert order[0] == "outputs_off"
+    assert order.index("upload_shutdown") > 0 and order.index("runs_shutdown") > 0
+    assert order[order.index("upload_shutdown") + 1][0] <= 500   # a short wait, not 5 s
+
+
+def test_a_failing_recording_lock_cannot_drop_the_live_csv_writer(app, window, monkeypatch):
+    w = window
+
+    real = w.runs_tab.set_recording_path
+
+    def boom(p):
+        if p is not None:
+            raise RuntimeError("runs tab broke")
+        real(p)
+    monkeypatch.setattr(w.runs_tab, "set_recording_path", boom)
+    w.source_settings.mode.setCurrentText("Linear Sweep")
+    w.sweep_list.start_val.setValue(0.0)
+    w.sweep_list.stop_val.setValue(1.0)
+    w.sweep_list.num_points.setValue(5)
+    w.timing_settings.delay.setValue(0.0)
+    w.timing_settings.step_size.setValue(0.2)
+    w.timing_settings.auto_delay_check.setChecked(True)
+    w.start_sweep()
+    assert pump(app, 5, until=lambda: w._live_csv_path is not None)
+    assert w._live_csv_writer is not None
+    w.stop_sweep()
+    pump(app, 1)

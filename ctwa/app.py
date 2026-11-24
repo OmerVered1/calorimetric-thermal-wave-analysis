@@ -3212,13 +3212,23 @@ class MainWindow(QMainWindow):
         from ctwa.ui.analysis_tab import AnalysisTab
         from ctwa.ui.save_panel import SavePanel
         from ctwa.ui.upload_manager import UploadManager
-        self.cloud_client, upload_queue = _make_cloud_services()
-        self.upload_manager = UploadManager(self.cloud_client, upload_queue, parent=self)
+        # A broken keyring / queue folder must not keep the instrument program from opening:
+        # without the cloud the tabs still analyze, they just cannot save or list saved results.
+        self.cloud_client = self.upload_manager = self.save_panel = None
+        self._cloud_off_reason = ""
+        try:
+            self.cloud_client, upload_queue = _make_cloud_services()
+            self.upload_manager = UploadManager(self.cloud_client, upload_queue, parent=self)
+        except Exception as e:
+            self.cloud_client = self.upload_manager = None
+            self._cloud_off_reason = (str(e).splitlines() or [type(e).__name__])[0] or type(e).__name__
+            print(f"Cloud features off: {self._cloud_off_reason}")
         self.runs_tab = RunsTab(self.auto_save_path, client=self.cloud_client,
                                 settings=self.settings)
         self.analysis_tab = AnalysisTab()
-        self.save_panel = SavePanel(self.upload_manager, settings=self.settings)
-        self.analysis_tab.set_save_panel(self.save_panel)
+        if self.upload_manager is not None:
+            self.save_panel = SavePanel(self.upload_manager, settings=self.settings)
+            self.analysis_tab.set_save_panel(self.save_panel)
         self.runs_tab.open_run.connect(self._open_run_in_analysis)
         tabs.addTab(self.runs_tab, "Runs")
         tabs.addTab(self.analysis_tab, "Analysis")
@@ -3253,9 +3263,12 @@ class MainWindow(QMainWindow):
         self.login_button.hide()
         self.login_button.clicked.connect(self._webapp_login)
         self.status.addPermanentWidget(self.login_button)
-        self.upload_manager.count_changed.connect(self._on_upload_count)
-        self.upload_manager.needs_login.connect(self._on_needs_login)
-        self.upload_manager.start()
+        if self.upload_manager is not None:
+            self.upload_manager.count_changed.connect(self._on_upload_count)
+            self.upload_manager.needs_login.connect(self._on_needs_login)
+            self.upload_manager.start()
+        else:
+            self.status.showMessage(f"Cloud features off: {self._cloud_off_reason}")
         self.runs_tab.refresh()
 
         self.sweep_start_time = 0
@@ -4050,12 +4063,17 @@ class MainWindow(QMainWindow):
             self._live_csv_file = open(self._live_csv_path, 'w', newline='', encoding='cp1252', errors='replace')
             self._live_csv_writer = csv.writer(self._live_csv_file)
             self.status.showMessage(f"Saving to: {filename}")
-            self.runs_tab.set_recording_path(self._live_csv_path)
         except Exception as e:
             print(f"Live CSV open error: {e}")
             self.status.showMessage(f"CSV open failed: {e}")
             self._live_csv_file = None
             self._live_csv_writer = None
+        if self._live_csv_writer:
+            # outside the open's try: a failure here must never drop the live CSV writer
+            try:
+                self.runs_tab.set_recording_path(self._live_csv_path)
+            except Exception as e:
+                print(f"Runs tab recording lock failed: {e}")
 
         if self._live_csv_writer:
             # Metadata rows — best-effort. _build_csv_metadata_rows already
@@ -4612,9 +4630,18 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Export Error", str(e))
 
     def closeEvent(self, event):
-        # background helpers first: no process left behind, no signals into dead objects
-        self.save_panel.shutdown()
-        self.upload_manager.shutdown()
+        # the instruments first: whatever else is slow to stop, the outputs go off now
+        if self.smu:
+            try:
+                self.smu.all_outputs_off()
+            except:
+                pass
+        # then the background helpers: no process left behind, no signals into dead objects
+        if self.save_panel is not None:
+            self.save_panel.shutdown()
+        if self.upload_manager is not None:
+            self.upload_manager.shutdown(500)   # a row still uploading stays in the queue
+        self.runs_tab.shutdown()
         self.analysis_tab.worker.shutdown()
         self.multimeter_panel.stop_live()
         if self.calorimeter_reader is not None:
@@ -4623,10 +4650,6 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         if self.smu:
-            try:
-                self.smu.all_outputs_off()
-            except:
-                pass
             self.smu.disconnect()
         event.accept()
 
