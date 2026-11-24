@@ -97,7 +97,7 @@ def test_autofit_shows_alpha_phase_raw_from_golden(tab):
     expected = js_to_precision(case["results"]["alphaPhaseRaw"] * 1e6, 4)
     assert tab.results_panel.text("alpha_phase_raw") == expected
     assert len(got) == 1
-    run, opts, res = got[0]
+    run, opts, res, plot = got[0]
     assert run is tab.run
     assert (opts.sel_min, opts.sel_max) == (case["options"]["selMin"], case["options"]["selMax"])
     assert opts.params.analysis_mode == "AutoFit"
@@ -355,3 +355,170 @@ def test_screenshot(tab):
     tab.show()
     analyze_and_wait(tab)
     tab.grab().save(shot)
+
+
+# ---- final fix wave ----
+
+def _trip_gui_maths(monkeypatch):
+    """The maths belongs in the analysis process. Make every heavy function raise when it is
+    called in THIS (GUI) process; the spawned child imports its own, untouched copies."""
+    import importlib
+
+    def boom(*a, **k):
+        raise AssertionError("analysis maths ran in the GUI process")
+    for mod, names in (
+            ("ctwa.analysis.sine_fit", ("sine_lag", "remove_period_mean")),
+            ("ctwa.analysis.smoothing", ("smooth_to_shared_sine",)),
+            ("ctwa.analysis.row", ("build_analysis_plot", "smooth_to_shared_sine")),
+            ("ctwa.analysis.pipeline", ("run_one_file_pipeline", "load_one_file")),
+            ("ctwa.analysis.modes", ("run_auto_fit_analysis",)),
+            ("ctwa.analysis.runner", ("sine_lag", "remove_period_mean", "smooth_to_shared_sine",
+                                      "build_analysis_plot", "run_one_file_pipeline", "load_one_file",
+                                      "run_auto_fit_analysis", "parse_combined_file")),
+            ("ctwa.ui.analysis_tab", ("sine_lag", "remove_period_mean")),
+            ("ctwa.ui.save_panel", ("build_analysis_plot", "smooth_to_shared_sine")),
+            ("ctwa.ui.run_index", ("parse_combined_file", "compute_mean_temperature"))):
+        m = importlib.import_module(mod)
+        for n in names:
+            if hasattr(m, n):
+                monkeypatch.setattr(m, n, boom)
+
+
+def test_manual_flow_and_save_never_run_the_maths_in_the_gui_process(tab, monkeypatch):
+    from types import SimpleNamespace
+    from ctwa.ui.save_panel import SavePanel
+    _trip_gui_maths(monkeypatch)
+    inserts = []
+
+    class Client:
+        def select(self, table, query):
+            return []
+
+        def insert(self, table, row):
+            inserts.append(row)
+            return dict(row, id=1)
+    panel = SavePanel(SimpleNamespace(client=Client(), login_succeeded=lambda: None,
+                                      request_flush=lambda: None, enqueue=lambda r: None))
+    tab.set_save_panel(panel)
+    tab.region.setRegion((10700, 12000))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    tab.settings.set_mode("Manual")
+    tab.settings.smooth_check.setChecked(True)
+    tab.settings.calib_check.setChecked(False)
+    settle(tab)
+    placed = [m.value() for m in tab.markers]
+    assert placed == sorted(placed[:2]) + sorted(placed[2:]) and placed[0] != placed[1]
+    tab.markers[0].setValue(placed[0] + 3.0)               # a drop: snaps from the worker's series
+    tab.markers[0].sigPositionChangeFinished.emit(tab.markers[0])
+    settle(tab)
+    tab.region.setRegion((10600, 11900))                   # a region change: placed again
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    settle(tab)
+    analyze_and_wait(tab)
+    assert tab.results_panel.message() == "", tab.results_panel.message()
+    assert panel._plot is not None            # built in the process, carried by result_ready
+    panel.sample_edit.setText("Alumina")
+    panel.save_btn.click()
+    assert wait_until(lambda: len(inserts) == 1)
+    assert "graph_image" in inserts[0]
+    panel.shutdown()
+
+
+def test_manual_markers_placed_by_the_worker_match_the_webapp_placement(tab):
+    """The same times the GUI used to compute itself, now computed in the process."""
+    import math
+    from ctwa.analysis.sine_fit import sine_lag
+    from ctwa.analysis import runner
+    tab.region.setRegion((10700, 12000))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    lo, hi = tab.region.getRegion()
+    s = tab.run.synced
+    ts = [t for t in s.t_src if lo <= t <= hi]
+    vs = [v for t, v in zip(s.t_src, s.v_src) if lo <= t <= hi]
+    tc = [t for t in s.t_cal if lo <= t <= hi]
+    vc = [v for t, v in zip(s.t_cal, s.v_cal) if lo <= t <= hi]
+    T = runner.region_period(tab.run.path, lo, hi)
+    fit = sine_lag(ts, vs, tc, vc, T)
+    info = runner.region_info(tab.run.path, lo, hi, False)
+    assert info.period == T
+    first, last, r1, r2 = info.placement
+    assert r1 == pytest.approx(first + fit.lag) and r2 == pytest.approx(last + fit.lag)
+    w = 2 * math.pi / T
+    assert (first * w - fit.phase_src) / (2 * math.pi) == pytest.approx(round((first * w - fit.phase_src) / (2 * math.pi)))
+
+
+class _PanelSpy:
+    """A SavePanel stand-in that records what the tab tells it."""
+
+    def __init__(self):
+        self.events = []
+
+    def clear_result(self):
+        self.events.append("cleared")
+
+    def set_result(self, payload):
+        self.events.append("result")
+
+
+def test_result_cleared_on_open_analyze_and_failure(tab, run_file):
+    spy = _PanelSpy()
+    tab.result_ready.connect(spy.set_result)
+    tab.result_cleared.connect(spy.clear_result)
+    analyze_and_wait(tab)
+    assert spy.events == ["cleared", "result"]            # Analyze start clears, the result arrives
+    tab.worker.failed.emit("analysis", "boom")
+    assert spy.events[-1] == "cleared"                    # a failure clears
+    n = len(spy.events)
+    tab.open_run(run_file)
+    assert spy.events[n:] == ["cleared"]                  # opening a run clears
+    assert wait_until(lambda: tab.run is not None)
+
+
+def test_save_is_disabled_after_open_run_analyze_start_and_failure(tab, run_file):
+    from types import SimpleNamespace
+    from ctwa.ui.save_panel import SavePanel
+    panel = SavePanel(SimpleNamespace(client=None, login_succeeded=lambda: None))
+    tab.set_save_panel(panel)
+    analyze_and_wait(tab)
+    assert panel.save_btn.isEnabled()
+    tab.open_run(run_file)                      # run B (here: the file again) while A's result stands
+    assert not panel.save_btn.isEnabled()
+    assert wait_until(lambda: tab.run is not None)
+    analyze_and_wait(tab)
+    assert panel.save_btn.isEnabled()
+    tab.analyze_btn.click()                     # a new Analyze starts: the old result is gone
+    assert not panel.save_btn.isEnabled()
+    assert wait_until(lambda: not tab.is_running())
+    assert panel.save_btn.isEnabled()
+    tab.worker.failed.emit("analysis", "boom")  # a failed analysis
+    assert not panel.save_btn.isEnabled()
+    panel.shutdown()
+
+
+def test_opening_a_file_that_is_not_a_capture_says_so(qapp, tmp_path):
+    bad = tmp_path / "garbage.csv"
+    bad.write_bytes(b"this is\nnot a run\n")
+    w = AnalysisTab()
+    try:
+        w.open_run(str(bad))
+        assert w.title.text().endswith("Loading...")
+        assert wait_until(lambda: not w._loading)
+        assert w.results_panel.message() == "This file isn't a CTWA/C80 one-file capture."
+        assert w.title.text() == "garbage.csv"
+        assert not w.analyze_btn.isEnabled()
+    finally:
+        w.worker.shutdown()
+
+
+def test_a_crash_while_loading_says_to_open_the_run_again(qapp, run_file):
+    w = AnalysisTab()
+    try:
+        w.open_run(run_file)
+        w.worker.failed.emit("crash", "boom")
+        assert w.results_panel.message() == \
+            "The analysis process stopped unexpectedly; open the run again."
+        assert w.title.text() == os.path.basename(run_file)
+    finally:
+        w.worker.shutdown()

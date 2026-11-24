@@ -23,8 +23,8 @@ __all__ = ["AnalysisWorker"]
 
 class AnalysisWorker(QObject):
     loaded = Signal(object)    # LoadedRun
-    finished = Signal(object)  # AnalysisResults
-    region_ready = Signal(object)  # runner.region_info's (period, smoothed) for the last request
+    finished = Signal(object)  # (AnalysisResults, plot dict or None), both built in the process
+    region_ready = Signal(object)  # runner.RegionInfo for the last request
     region_failed = Signal(str, str)  # a region_info request failed (same kinds as `failed`)
     failed = Signal(str, str)  # kind ("pipeline" | "analysis" | "crash"), message
 

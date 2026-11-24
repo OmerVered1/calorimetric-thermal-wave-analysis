@@ -5,7 +5,6 @@ GUI thread only draws. Results are shown here and announced through
 `result_ready`; saving is somebody else's job."""
 from __future__ import annotations
 
-import math
 import os
 from typing import List, Optional
 
@@ -17,10 +16,10 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QSizePo
                                QVBoxLayout, QWidget)
 
 from ctwa import theme
-from ctwa.analysis.runner import LoadedRun
+from ctwa.analysis.runner import LoadedRun, RegionInfo
 from ctwa.analysis.jsmath import js_round
-from ctwa.analysis.sine_fit import refine_peak, remove_period_mean, sine_lag
-from ctwa.analysis.types import AnalysisResults, PipelineOptions
+from ctwa.analysis.sine_fit import refine_peak
+from ctwa.analysis.types import PipelineOptions
 from ctwa.ui.analysis_results import ResultsPanel
 from ctwa.ui.analysis_settings import SettingsPanel
 from ctwa.ui.analysis_worker import AnalysisWorker
@@ -33,7 +32,8 @@ def _round2(x: float) -> float:
 
 
 class AnalysisTab(QWidget):
-    result_ready = Signal(object)  # (LoadedRun, PipelineOptions, AnalysisResults)
+    result_ready = Signal(object)  # (LoadedRun, PipelineOptions, AnalysisResults, plot or None)
+    result_cleared = Signal()      # the result announced last no longer stands (new run / Analyze / failure)
     run_loaded = Signal(object)    # LoadedRun, once the plot shows it
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -46,7 +46,7 @@ class AnalysisTab(QWidget):
         self._options: Optional[PipelineOptions] = None
         self._placed_for = None  # (sel_min, sel_max) the markers were last placed for
         self._has_results = False
-        self._info = {}        # (path, sel_min, sel_max, smooth) -> (period, smoothed series)
+        self._info = {}        # (path, sel_min, sel_max, smooth, wave) -> runner.RegionInfo
         self._pending = {}     # marker index -> dropped time, waiting for the smoothed series
         self._pending_key = None
         self._place_pending = False
@@ -147,6 +147,7 @@ class AnalysisTab(QWidget):
         """Put the save panel under the results and feed it each finished analysis."""
         self._right.addWidget(panel)
         self.result_ready.connect(panel.set_result)
+        self.result_cleared.connect(panel.clear_result)
 
     # ---- opening ----
     def open_run(self, path: str) -> None:
@@ -160,6 +161,7 @@ class AnalysisTab(QWidget):
         self._pending = {}
         self._pending_key = None
         self._place_pending = False
+        self.result_cleared.emit()
         self.src_curve.clear()
         self.resp_curve.clear()
         self.region.setBounds((None, None))
@@ -198,12 +200,6 @@ class AnalysisTab(QWidget):
         lo, hi = self.region.getRegion()
         return lo, hi
 
-    def _slice(self, t, v):
-        lo, hi = self._region()
-        t = np.asarray(t)
-        m = (t >= lo) & (t <= hi)
-        return t[m].tolist(), np.asarray(v)[m].tolist()
-
     def _smooth_wanted(self) -> bool:
         return self.settings.smooth_check.isChecked() and self.settings.wave() == "sine"
 
@@ -211,23 +207,15 @@ class AnalysisTab(QWidget):
         lo, hi = self._region()
         return (self.run.path, lo, hi, self._smooth_wanted(), self.settings.wave())
 
-    def _snap(self, which: str, x: float, T, sm) -> float:
-        """x moved onto the peak it points at (page.tsx toPeak): the smoothed series when
-        smoothing is on (sm), else the raw one with its slow baseline taken off when the
-        region is three periods or more. Where no peak is found the time stays, rounded."""
-        if not T:
+    def _snap(self, which: str, x: float, info: RegionInfo) -> float:
+        """x moved onto the peak it points at (page.tsx toPeak), on the series the worker
+        prepared (smoothed, or raw with its slow baseline taken off). Where no peak is
+        found the time stays, rounded."""
+        if not info.period or info.snap is None:
             return _round2(x)
-        if sm is not None:
-            t, v = (sm[0], sm[1]) if which == "src" else (sm[2], sm[3])
-        else:
-            s = self.run.synced
-            t, v = self._slice(*((s.t_src, s.v_src) if which == "src" else (s.t_cal, s.v_cal)))
-            lo, hi = self._region()
-            if (hi - lo) / T >= 3:
-                ft, fv = remove_period_mean(t, v, T)
-                if len(ft) > 10:
-                    t, v = ft, fv
-        peak = refine_peak(t, v, x, T) if len(t) else None
+        ts, vs, tc, vc = info.snap
+        t, v = (ts, vs) if which == "src" else (tc, vc)
+        peak = refine_peak(t, v, x, info.period) if len(t) else None
         return _round2(peak[0] if peak else x)
 
     def _request_region(self, key) -> None:
@@ -250,9 +238,9 @@ class AnalysisTab(QWidget):
             self._request_region(key)
             self._pending.update(items)
             return
-        T, sm = self._info[key]
+        info = self._info[key]
         for i, x in items.items():
-            self.markers[i].setValue(self._snap("src" if i < 2 else "resp", x, T, sm))
+            self.markers[i].setValue(self._snap("src" if i < 2 else "resp", x, info))
 
     def _on_region_ready(self, info) -> None:
         key, self._pending_key = self._pending_key, None
@@ -263,7 +251,7 @@ class AnalysisTab(QWidget):
         place, self._place_pending = self._place_pending, False
         if key == self._info_key():
             if place:
-                self._place_with(info[0])
+                self._place_with(info)
             self._snap_markers(items)
         self._update_controls()
 
@@ -279,32 +267,12 @@ class AnalysisTab(QWidget):
             self._request_region(key)
             self._place_pending = True
             return
-        self._place_with(self._info[key][0])
+        self._place_with(self._info[key])
 
-    def _place_with(self, T) -> None:
-        if not T:
+    def _place_with(self, info: RegionInfo) -> None:
+        if info.placement is None:
             return
-        s = self.run.synced
-        ts, vs = self._slice(s.t_src, s.v_src)
-        tc, vc = self._slice(s.t_cal, s.v_cal)
-        fit = sine_lag(ts, vs, tc, vc, T)
-        if fit is None:
-            return
-        w = 2 * math.pi / T
-        lo_t, hi_t = max(ts[0], tc[0]) + T / 4, min(ts[-1], tc[-1]) - T / 4
-        peaks = []
-        k = math.ceil((lo_t * w - fit.phase_src) / (2 * math.pi))
-        while True:
-            at = (fit.phase_src + 2 * math.pi * k) / w
-            if at + fit.lag > hi_t:
-                break
-            peaks.append(at)
-            k += 1
-        if not peaks:
-            return
-        first = peaks[0]
-        last = peaks[-1] if len(peaks) > 1 else first + T
-        self._snap_markers({0: first, 1: last, 2: first + fit.lag, 3: last + fit.lag})
+        self._snap_markers(dict(enumerate(info.placement)))
 
     def _ensure_markers_placed(self) -> None:
         if self.run is not None and self.settings.manual() and self._placed_for != self._region():
@@ -339,6 +307,7 @@ class AnalysisTab(QWidget):
         self._place_pending = False
         self._running = True
         self._has_results = False
+        self.result_cleared.emit()
         self.results_panel.show_busy()
         self._update_controls()
         self.worker.analyze(self.run.path, self._options)
@@ -351,21 +320,26 @@ class AnalysisTab(QWidget):
         self.results_panel.clear()
         self._update_controls()
 
-    def _on_finished(self, res: AnalysisResults) -> None:
+    def _on_finished(self, outcome) -> None:
         if not self._running or self.run is None:
             return
+        res, plot = outcome   # the worker built the plot too: no maths here
         self._running = False
         self._has_results = True
         self.results_panel.show_results(res)
         self._update_controls()
-        self.result_ready.emit((self.run, self._options, res))
+        self.result_ready.emit((self.run, self._options, res, plot))
 
     def _on_failed(self, kind: str, message: str) -> None:
         """A load or an analysis failed."""
+        was_loading = self._loading
         self._running = False
         self._loading = False
         self._has_results = False
-        self.results_panel.show_error(kind, message)
+        self.result_cleared.emit()
+        if was_loading and self._path:
+            self.title.setText(os.path.basename(self._path))
+        self.results_panel.show_error(kind, message, during_load=was_loading)
         self._update_controls()
 
     def _on_region_failed(self, _kind: str, _message: str) -> None:

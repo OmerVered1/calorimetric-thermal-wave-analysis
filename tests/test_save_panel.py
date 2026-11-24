@@ -44,7 +44,8 @@ def run_and_results(tmp_path_factory):
         src_time_unit="Seconds", src_pwr_unit="mW", use_calibration=False, system_lag=0.0,
         analysis_mode="AutoFit")
     opts = PipelineOptions(wave_type="sine", smooth_to_sine=False, sel_min=lo, sel_max=hi, params=params)
-    return run, opts, run_one_file_pipeline(run.synced, opts)
+    results = run_one_file_pipeline(run.synced, opts)
+    return run, opts, results, build_analysis_plot(run.synced, results, opts)
 
 
 class FakeClient:
@@ -117,7 +118,7 @@ def save_and_wait(panel):
 
 def test_prefill_from_header(env, run_and_results):
     panel, _, _ = env(FakeClient())
-    run, opts, _ = run_and_results
+    run, opts, _, _ = run_and_results
     assert panel.date_edit.text() == "17/11/2026"
     assert panel.time_edit.text() == "09:10"
     assert panel.source_device_edit.text() == "Keithley 2602B"
@@ -170,7 +171,7 @@ def test_sample_and_gas_remembered_per_experiment(env, run_and_results):
 
 
 def test_save_inserts_exactly_the_built_row(env, run_and_results):
-    run, opts, results = run_and_results
+    run, opts, results, plot = run_and_results
     client = FakeClient()
     panel, mgr, _ = env(client)
     panel.sample_edit.setText("Alumina ")
@@ -183,7 +184,7 @@ def test_save_inserts_exactly_the_built_row(env, run_and_results):
                    power_response_device="Drop Calorimeter", wave_type="sine", analysis_mode="AutoFit",
                    r1=6.72, r2=14.86, use_calibration=False, system_lag=0.0, input_mode="one",
                    source_file_name="al2o3_ctwa.csv")
-    expected = build_analysis_row(results, meta, build_analysis_plot(run.synced, results, opts))
+    expected = build_analysis_row(results, meta, plot)
     assert client.inserts[0] == expected
     assert client.inserts[0]["model_name"] == "Alumina"
     assert client.selects[0][1]["test_date"] == "eq.17/11/2026"
@@ -199,8 +200,11 @@ def test_save_button_gating(env, run_and_results):
     panel.save_btn.click()
     assert not panel.save_btn.isEnabled()  # in flight
     panel.save_btn.click()  # double click does nothing
-    assert wait(lambda: panel.save_btn.isEnabled())
+    assert wait(lambda: not panel._busy)
     assert len(panel._manager.client.inserts) == 1
+    assert not panel.save_btn.isEnabled()  # stored: Save waits for a NEW result
+    panel.set_result(run_and_results)
+    assert panel.save_btn.isEnabled()
 
 
 def test_duplicate_cancel_sends_nothing(env, monkeypatch):
@@ -433,7 +437,7 @@ def test_double_click_save_makes_one_insert(env):
     panel.sample_edit.setText("A")
     panel.save_btn.click()
     panel.save_btn.click()
-    assert wait(lambda: panel.save_btn.isEnabled())
+    assert wait(lambda: not panel._busy and client.inserts)
     assert len(client.inserts) == 1
 
 
@@ -451,7 +455,7 @@ def test_new_result_during_save_keeps_save_disabled_and_remembers_original(env, 
 
     client = Gated()
     panel, _, settings = env(client)
-    run, opts, res = run_and_results
+    run, opts, res, plot = run_and_results
     panel.sample_edit.setText("Alumina")
     panel.gas_combo.setCurrentText("Air")
     got = []
@@ -461,12 +465,13 @@ def test_new_result_during_save_keeps_save_disabled_and_remembers_original(env, 
     from types import SimpleNamespace
     other = SimpleNamespace(path=run.path, synced=run.synced, parsed=run.parsed,
                             header=dict(run.header, experiment="Other run"))
-    panel.set_result((other, opts, res))
+    res2 = SimpleNamespace(**res.__dict__)   # a new analysis' results: another object
+    panel.set_result((other, opts, res2, plot))
     assert not panel.save_btn.isEnabled()
     panel.save_btn.click()
     client.gate.set()
     assert wait(lambda: got)
-    assert wait(lambda: panel.save_btn.isEnabled())
+    assert wait(lambda: panel.save_btn.isEnabled())  # the NEW result is armed, the old one is not
     assert len(client.inserts) == 1
     exp = run.header["experiment"]
     from urllib.parse import quote
@@ -608,3 +613,80 @@ def test_replace_then_login_cancelled_is_not_queued(env, monkeypatch):
                 and panel.save_btn.isEnabled())
     assert mgr.count() == 0 and got == []
     assert panel.sample_edit.text() == "Alumina"
+
+
+# ---- final fix wave: Save never stays armed with a stale result ----
+
+def test_clear_result_disables_save_and_keeps_typed_values(env):
+    panel, _, _ = env(FakeClient())
+    panel.sample_edit.setText("Alumina")
+    assert panel.save_btn.isEnabled()
+    panel.clear_result()
+    assert not panel.save_btn.isEnabled()
+    assert panel._results is None and panel._plot is None
+    assert panel.sample_edit.text() == "Alumina"
+    panel.save_btn.click()  # nothing to save: no job, nothing sent
+    assert panel._manager.client.inserts == [] and not panel._busy
+
+
+def test_second_save_without_a_new_result_is_impossible(env, run_and_results):
+    client = FakeClient()
+    panel, mgr, _ = env(client)
+    panel.sample_edit.setText("A")
+    save_and_wait(panel)
+    assert not panel.save_btn.isEnabled()
+    panel.save_btn.click()
+    assert len(client.inserts) == 1
+    panel.set_result(run_and_results)  # a new result re-arms it
+    assert panel.save_btn.isEnabled()
+
+
+def test_queued_save_also_disarms_save(env, run_and_results):
+    client = FakeClient(select_exc=Offline("down"), insert_script=[Offline("down")])
+    panel, mgr, _ = env(client)
+    panel.sample_edit.setText("A")
+    save_and_wait(panel)
+    assert mgr.count() == 1
+    assert not panel.save_btn.isEnabled()
+    panel.save_btn.click()
+    assert mgr.count() == 1  # no second queued row
+
+
+def test_new_result_arriving_during_a_save_stays_armed_after_it(env, run_and_results):
+    client = FakeClient()
+    panel, mgr, _ = env(client)
+    panel.sample_edit.setText("A")
+    panel.save_btn.click()
+    run, opts, res, plot = run_and_results
+    other = object.__new__(type(res))
+    other.__dict__.update(res.__dict__)
+    panel.set_result((run, opts, other, plot))
+    assert wait(lambda: not panel._busy)
+    assert panel._results is other and panel.save_btn.isEnabled()
+
+
+def test_date_and_time_are_saved_zero_padded(env):
+    client = FakeClient()
+    panel, _, _ = env(client)
+    panel.sample_edit.setText("A")
+    panel.date_edit.setText("1/2/2026")
+    panel.time_edit.setText("9:5")
+    save_and_wait(panel)
+    assert client.selects[0][1]["test_date"] == "eq.01/02/2026"
+    assert client.inserts[0]["test_date"] == "01/02/2026"
+    assert client.inserts[0]["test_time"] == "09:05"
+
+
+def test_enqueue_failure_shows_the_error_and_keeps_the_form(env):
+    client = FakeClient(select_exc=Offline("down"), insert_script=[Offline("down")])
+    panel, mgr, _ = env(client)
+
+    def boom(row):
+        raise OSError("disk full")
+    mgr.enqueue = boom
+    panel.sample_edit.setText("Keep me")
+    panel.save_btn.click()
+    assert wait(lambda: "disk full" in panel.status_label.text())
+    assert not panel._busy
+    assert panel.sample_edit.text() == "Keep me" and panel.sample_edit.isEnabled()
+    assert panel.save_btn.isEnabled()  # the result is still armed for another try

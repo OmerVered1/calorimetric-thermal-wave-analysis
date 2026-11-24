@@ -1,7 +1,11 @@
 """Save the analysis of the open run to the shared results table (same row as the webapp's).
 
 The panel sits under the results of the Analysis tab. `set_result((LoadedRun, PipelineOptions,
-AnalysisResults))` pre-fills the form and enables Save; everything stays editable.
+AnalysisResults, plot))` pre-fills the form and enables Save; everything stays editable. The
+plot (the graph saved with the row) is built in the analysis process: nothing here does maths.
+`clear_result()` (a new run, a new Analyze or a failure) takes the result away and disables
+Save; after a save or a queued save Save also stays disabled until a NEW result arrives, so one
+result can never be saved twice.
 
 Save mirrors the webapp's handleSave: same-date candidates -> find_duplicate -> insert, with
 the duplicate dialog (Cancel / Save as new / Replace it). Every network call (candidate
@@ -26,7 +30,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout, QLa
                                QMessageBox, QPushButton, QVBoxLayout, QWidget)
 
 from ctwa.analysis.jsmath import js_to_precision
-from ctwa.analysis.row import RowMeta, build_analysis_plot, build_analysis_row, find_duplicate
+from ctwa.analysis.row import RowMeta, build_analysis_row, find_duplicate
 from ctwa.cloud.client import NotLoggedIn, Offline, ServerError
 from ctwa.ui.login_dialog import LoginDialog
 from ctwa.ui.upload_manager import UploadManager
@@ -152,7 +156,7 @@ class SavePanel(QWidget):
         self._closed = False
         self._signals = _Signals(self)
         self._signals.finished.connect(self._on_finished, Qt.QueuedConnection)
-        self._run = self._opts = self._results = None
+        self._run = self._opts = self._results = self._plot = None
         self._busy = False
         self._job: Dict[str, Any] = {}  # snapshot taken at click time
 
@@ -199,9 +203,17 @@ class SavePanel(QWidget):
         # quoted: a "/" in the name must not nest QSettings groups
         return "save/last/%s/%s" % (urllib.parse.quote(str(exp), safe=""), field) if exp else None
 
-    def set_result(self, payload: Tuple[Any, Any, Any]) -> None:
+    def clear_result(self) -> None:
+        """Slot for AnalysisTab.result_cleared: no result to save any more. What was typed
+        (sample, gas, ...) stays; a save already in flight carries its own snapshot."""
+        self._run = self._opts = self._results = self._plot = None
+        if not self._busy:
+            self.status_label.setText("")
+        self._refresh_enabled()
+
+    def set_result(self, payload: Tuple[Any, Any, Any, Any]) -> None:
         """Slot for AnalysisTab.result_ready."""
-        self._run, self._opts, self._results = payload
+        self._run, self._opts, self._results, self._plot = payload
         h = self._run.header
         started = h.get("started")
         self.date_edit.setText(started.strftime("%d/%m/%Y") if isinstance(started, datetime) else "")
@@ -239,8 +251,10 @@ class SavePanel(QWidget):
             self.status_label.setText("Enter the sample name.")
             return None
         try:
-            datetime.strptime(date, "%d/%m/%Y")
-            datetime.strptime(time_, "%H:%M")
+            # saved as DD/MM/YYYY and HH:MM whatever was typed ("1/2/2026", "9:5"): the
+            # duplicate check and the Runs tab compare these texts
+            date = datetime.strptime(date, "%d/%m/%Y").strftime("%d/%m/%Y")
+            time_ = datetime.strptime(time_, "%H:%M").strftime("%H:%M")
         except ValueError:
             self.status_label.setText("Date must be DD/MM/YYYY and time HH:MM.")
             return None
@@ -271,12 +285,13 @@ class SavePanel(QWidget):
         meta = self._validated_meta()
         if meta is None:
             return
-        run, opts, results = self._run, self._opts, self._results
+        run, results, plot = self._run, self._results, self._plot
 
-        def build_row() -> dict:  # in the worker: the plot is the slow part
-            return build_analysis_row(results, meta, build_analysis_plot(run.synced, results, opts))
+        def build_row() -> dict:  # in the pool thread: no maths, the plot came from the analysis process
+            return build_analysis_row(results, meta, plot)
 
-        self._job = {"build_row": build_row, "sample": meta.model_name, "gas": meta.gas_atmosphere,
+        self._job = {"build_row": build_row, "results": results,
+                     "sample": meta.model_name, "gas": meta.gas_atmosphere,
                      "sample_key": self._experiment_key(run, "sample"),
                      "gas_key": self._experiment_key(run, "gas")}
         self._start("save")
@@ -324,11 +339,20 @@ class SavePanel(QWidget):
             self.status_label.setText("Save failed: %s" % out.get("message", "unknown error"))
 
     def _queue(self, row: dict) -> None:
-        self._manager.enqueue(row)
+        try:
+            self._manager.enqueue(row)
+        except (OSError, ValueError) as e:  # disk full / folder gone: the form stays for another try
+            self._set_busy(False)
+            self.status_label.setText("Couldn't keep the result for later: %s" % e)
+            return
         self._remember_values()
         self._finish(QUEUED_MESSAGE, None)
 
     def _finish(self, message: str, row_id: Any) -> None:
+        # this result is stored (or queued): it cannot be saved again. A newer result that
+        # arrived while the save ran stays armed.
+        if self._results is self._job.get("results"):
+            self._run = self._opts = self._results = self._plot = None
         self._set_busy(False)
         self.status_label.setText(message)
         self.saved.emit(row_id)

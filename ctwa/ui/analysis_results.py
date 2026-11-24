@@ -19,6 +19,8 @@ PIPELINE_MESSAGES = {
     "smoothFailed": "Could not fit a sine to the selected region — widen it or check the signal.",
 }
 CRASH_MESSAGE = "The analysis process stopped unexpectedly; press Analyze to try again."
+LOAD_CRASH_MESSAGE = "The analysis process stopped unexpectedly; open the run again."
+NOT_CAPTURE_MESSAGE = "This file isn't a CTWA/C80 one-file capture."
 EDGE_WARNING = ("The lag is right at the edge of a period. If the response really lags by about a "
                 "full period more, or the two clocks are off, this value is wrong: check it "
                 "against the chart.")
@@ -111,12 +113,14 @@ class ResultsPanel(QFrame):
         for v in self._values.values():
             v.setText(DASH)
 
-    def show_error(self, kind: str, message: str) -> None:
+    def show_error(self, kind: str, message: str, during_load: bool = False) -> None:
         self.clear()
         if kind == "pipeline":
-            text = PIPELINE_MESSAGES.get(message, message)
+            # a parse failure while opening means the file is not a one-file capture
+            text = (NOT_CAPTURE_MESSAGE if during_load and message == "parseFailed"
+                    else PIPELINE_MESSAGES.get(message, message))
         elif kind == "crash":
-            text = CRASH_MESSAGE
+            text = LOAD_CRASH_MESSAGE if during_load else CRASH_MESSAGE
         else:
             text = message
         theme.set_role(self._message, "danger")

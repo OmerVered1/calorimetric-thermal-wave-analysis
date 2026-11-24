@@ -166,7 +166,7 @@ def test_worker_region_info_emits_region_ready(worker, tmp_path):
     QTimer.singleShot(30000, loop.quit)
     loop.exec()
     t.stop()
-    period, sm = got[0]
+    period, sm = got[0].period, got[0].snap
     assert period == pytest.approx(80.24, abs=0.01) and len(sm) == 4
 
 
@@ -222,6 +222,7 @@ def test_worker_analyze_matches_golden(worker, tmp_path):
     worker.analyze(_unzip("al2o3_ctwa", tmp_path), opts)
     kind, res = c.wait()
     assert kind == "finished"
+    res = res[0]   # (results, plot)
     assert math.isclose(res.alpha_phase_raw, case["results"]["alphaPhaseRaw"], rel_tol=1e-9)
 
 
@@ -260,6 +261,7 @@ def test_worker_cancel_drops_result_and_next_works(worker, tmp_path):
     worker.analyze(p, opts)
     kind, res = c.wait()
     assert kind == "finished"
+    res = res[0]   # (results, plot)
     assert math.isclose(res.alpha_phase_raw, case["results"]["alphaPhaseRaw"], rel_tol=1e-9)
     assert c.events == []
 
@@ -287,6 +289,7 @@ def test_worker_crash_then_next_analyze_succeeds(worker, tmp_path):
     worker.analyze(p, opts)
     kind, res = c.wait(60)
     assert kind == "finished"
+    res = res[0]   # (results, plot)
     assert math.isclose(res.alpha_phase_raw, case["results"]["alphaPhaseRaw"], rel_tol=1e-9)
 
 
@@ -383,6 +386,7 @@ def test_second_analyze_supersedes_slow_first(worker, tmp_path):
     worker.analyze(p, opts)
     kind, res = c.wait(60)
     assert kind == "finished"
+    res = res[0]   # (results, plot)
     assert math.isclose(res.alpha_phase_raw, case["results"]["alphaPhaseRaw"], rel_tol=1e-9)
     # a fresh process computed it (the old one was killed, not waited for)
     assert {pr.pid for pr in worker._executor._processes.values()} != first
