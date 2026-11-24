@@ -3229,6 +3229,14 @@ class MainWindow(QMainWindow):
         if self.upload_manager is not None:
             self.save_panel = SavePanel(self.upload_manager, settings=self.settings)
             self.analysis_tab.set_save_panel(self.save_panel)
+        # --- Results foundation (Plan 2.5) ---
+        # One shared loader of the saved results for the Results, Calibration and Statistics tabs
+        # (None while the cloud is off). A successful save refreshes it.
+        from ctwa.ui.results_loader import ResultsLoader
+        self.results_loader = ResultsLoader(self.cloud_client, parent=self) if self.cloud_client is not None else None
+        # --- end Results foundation ---
+        if self.save_panel is not None and self.results_loader is not None:
+            self.save_panel.saved.connect(lambda row_id: self.results_loader.refresh() if row_id is not None else None)
         self.runs_tab.open_run.connect(self._open_run_in_analysis)
         tabs.addTab(self.runs_tab, "Runs")
         tabs.addTab(self.analysis_tab, "Analysis")

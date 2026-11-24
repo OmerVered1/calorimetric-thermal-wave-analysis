@@ -23,7 +23,7 @@ def _no_real_cloud(tmp_path_factory, monkeypatch):
     class OfflineClient:
         def select(self, *a, **k):
             raise Offline("tests are offline")
-        insert = update = select
+        insert = update = delete = select
 
     folder = str(tmp_path_factory.mktemp("queue"))
     monkeypatch.setattr(ctwa.app, "_real_make_cloud_services", ctwa.app._make_cloud_services, raising=False)
