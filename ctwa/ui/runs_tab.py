@@ -163,6 +163,7 @@ class _Signals(QObject):
     mean = Signal(int, str, object)   # generation, path, mean or None
     saved = Signal(int, object)       # generation, {path: SavedInfo}
     cloud_error = Signal(int, str)
+    scan_failed = Signal(int, str)
     done = Signal(int)
 
 
@@ -183,8 +184,9 @@ class _ScanWorker(QRunnable):
                     known, mean = cache.lookup(r)
                     if known:
                         means[r.path] = mean
-        except Exception:
-            runs, truncated, means = [], False, {}
+        except Exception as e:
+            self.signals.scan_failed.emit(self.gen, f"Could not scan the folders: {e}")
+            return
         self.signals.scanned.emit(self.gen, runs, truncated, means)
 
 
@@ -247,6 +249,7 @@ class RunsTab(QWidget):
         self._signals.mean.connect(self._on_mean, Qt.QueuedConnection)
         self._signals.saved.connect(self._on_saved, Qt.QueuedConnection)
         self._signals.cloud_error.connect(self._on_cloud_error, Qt.QueuedConnection)
+        self._signals.scan_failed.connect(self._on_scan_failed, Qt.QueuedConnection)
 
         self.model = RunsModel(self)
         self.table = QTableView()
@@ -371,6 +374,10 @@ class RunsTab(QWidget):
             self._pool.start(_CloudWorker(gen, cap, self.client, self._signals))
         else:
             self.model.set_saved({})
+
+    def _on_scan_failed(self, gen: int, reason: str) -> None:
+        if gen == self._gen:
+            self.status.setText(reason)
 
     def _update_status(self, n: int) -> None:
         msg = f"{n} run file{'s' if n != 1 else ''}"

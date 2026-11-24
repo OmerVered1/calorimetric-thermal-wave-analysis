@@ -12,6 +12,24 @@ def _runs_save_to_a_scratch_folder(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(ctwa.app, "DEFAULT_SAVE_DIR", str(tmp_path_factory.mktemp("runs")))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_cloud(tmp_path_factory, monkeypatch):
+    """A MainWindow never talks to the internet, reads the OS keyring or uses the
+    user's upload queue in tests: it gets an offline client and a scratch queue."""
+    import ctwa.app
+    from ctwa.cloud.client import Offline
+    from ctwa.cloud.queue import UploadQueue
+
+    class OfflineClient:
+        def select(self, *a, **k):
+            raise Offline("tests are offline")
+        insert = update = select
+
+    folder = str(tmp_path_factory.mktemp("queue"))
+    monkeypatch.setattr(ctwa.app, "_make_cloud_services",
+                        lambda: (OfflineClient(), UploadQueue(folder)))
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: takes seconds, not milliseconds (speed checks)")

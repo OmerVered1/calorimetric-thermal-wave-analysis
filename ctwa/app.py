@@ -2793,6 +2793,17 @@ class WaveToolDialog(QDialog):
 # (about 1280 x 670 usable).
 MIN_WINDOW_W, MIN_WINDOW_H = 1100, 640
 
+
+def _make_cloud_services():
+    """The webapp client (login token in the OS keyring) and the offline upload queue.
+    A function of its own so tests can swap in an offline client and a scratch queue."""
+    from ctwa.cloud import config
+    from ctwa.cloud.client import CloudClient, TokenStore
+    from ctwa.cloud.queue import UploadQueue, default_queue_folder
+    client = CloudClient(config.WEBAPP_URL, config.SUPABASE_URL, config.SUPABASE_ANON_KEY,
+                         TokenStore())
+    return client, UploadQueue(default_queue_folder())
+
 # Side panels keep their width as the window grows; the workspace takes the rest.
 SIDEBAR_MIN_W, SIDEBAR_MAX_W = theme.scaled(210), theme.scaled(280)
 
@@ -2960,6 +2971,11 @@ class MainWindow(QMainWindow):
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+
+        file_menu.addSeparator()
+        login_action = QAction("Webapp login\u2026", self)
+        login_action.triggered.connect(self._webapp_login)
+        file_menu.addAction(login_action)
 
         tools_menu = menubar.addMenu("Tools")
         wave_tool_action = QAction("Design waveform\u2026", self)
@@ -3188,6 +3204,24 @@ class MainWindow(QMainWindow):
         from realtime_tab import RealTimeTab
         self.realtime_tab = RealTimeTab(self)
         tabs.addTab(self.realtime_tab, "Real Time")
+        self.tabs = tabs
+
+        # Tabs 4 and 5: recorded runs and their analysis, with the save panel and
+        # the offline upload queue (one client, one queue, one manager, shared).
+        from ctwa.ui.runs_tab import RunsTab
+        from ctwa.ui.analysis_tab import AnalysisTab
+        from ctwa.ui.save_panel import SavePanel
+        from ctwa.ui.upload_manager import UploadManager
+        self.cloud_client, upload_queue = _make_cloud_services()
+        self.upload_manager = UploadManager(self.cloud_client, upload_queue, parent=self)
+        self.runs_tab = RunsTab(self.auto_save_path, client=self.cloud_client,
+                                settings=self.settings)
+        self.analysis_tab = AnalysisTab()
+        self.save_panel = SavePanel(self.upload_manager, settings=self.settings)
+        self.analysis_tab.set_save_panel(self.save_panel)
+        self.runs_tab.open_run.connect(self._open_run_in_analysis)
+        tabs.addTab(self.runs_tab, "Runs")
+        tabs.addTab(self.analysis_tab, "Analysis")
 
         # The experiment's point-by-point table, under the Real Time plot
         self.table = DataTableWidget()
@@ -3210,6 +3244,19 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         self.status.addPermanentWidget(self.progress)
         self.status.showMessage("Ready")
+
+        self.upload_label = QLabel("")
+        theme.set_role(self.upload_label, "faint")
+        self.upload_label.hide()
+        self.status.addPermanentWidget(self.upload_label)
+        self.login_button = QPushButton("Log in\u2026")
+        self.login_button.hide()
+        self.login_button.clicked.connect(self._webapp_login)
+        self.status.addPermanentWidget(self.login_button)
+        self.upload_manager.count_changed.connect(self._on_upload_count)
+        self.upload_manager.needs_login.connect(self._on_needs_login)
+        self.upload_manager.start()
+        self.runs_tab.refresh()
 
         self.sweep_start_time = 0
         self.total_sweep_points = 0
@@ -3575,7 +3622,28 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Select Auto-Save Folder", self.auto_save_path)
         if folder:
             self.auto_save_path = folder
+            self.runs_tab.set_auto_save_dir(folder)
             self.status.showMessage(f"Auto-save folder: {folder}")
+
+    def _open_run_in_analysis(self, path):
+        self.tabs.setCurrentWidget(self.analysis_tab)
+        self.analysis_tab.open_run(path)
+
+    def _on_upload_count(self, n):
+        self.upload_label.setText(f"{n} waiting to upload")
+        self.upload_label.setVisible(n > 0)
+
+    def _on_needs_login(self):
+        self.status.showMessage("Saved results are waiting: log in to upload them", 15000)
+        self.login_button.show()
+
+    def _webapp_login(self):
+        from ctwa.ui.login_dialog import LoginDialog
+        if LoginDialog(self.cloud_client, self).exec() == QDialog.Accepted:
+            self.login_button.hide()
+            self.upload_manager.login_succeeded()
+            self.upload_manager.request_flush()
+            self.runs_tab.refresh()
 
     def _open_auto_save_folder(self):
         if not os.path.exists(self.auto_save_path):
@@ -3982,6 +4050,7 @@ class MainWindow(QMainWindow):
             self._live_csv_file = open(self._live_csv_path, 'w', newline='', encoding='cp1252', errors='replace')
             self._live_csv_writer = csv.writer(self._live_csv_file)
             self.status.showMessage(f"Saving to: {filename}")
+            self.runs_tab.set_recording_path(self._live_csv_path)
         except Exception as e:
             print(f"Live CSV open error: {e}")
             self.status.showMessage(f"CSV open failed: {e}")
@@ -4358,6 +4427,8 @@ class MainWindow(QMainWindow):
             self._live_csv_path = None
         elif self.auto_save_enabled and self.measurement_data:
             self._auto_save_csv()
+        self.runs_tab.set_recording_path(None)   # also when the CSV header failed
+        self.runs_tab.refresh()
 
     # ---- Start / Pause / Stop ------------------------------------------------
 
@@ -4541,6 +4612,10 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Export Error", str(e))
 
     def closeEvent(self, event):
+        # background helpers first: no process left behind, no signals into dead objects
+        self.save_panel.shutdown()
+        self.upload_manager.shutdown()
+        self.analysis_tab.worker.shutdown()
         self.multimeter_panel.stop_live()
         if self.calorimeter_reader is not None:
             try:

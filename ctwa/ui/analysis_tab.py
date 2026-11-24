@@ -72,7 +72,9 @@ class AnalysisTab(QWidget):
         left.addLayout(buttons)
         bottom.addLayout(left, stretch=1)
         self.results_panel = ResultsPanel()
-        bottom.addWidget(self.results_panel, stretch=1)
+        self._right = QVBoxLayout()   # the results column; set_save_panel adds below
+        self._right.addWidget(self.results_panel, stretch=1)
+        bottom.addLayout(self._right, stretch=1)
 
         self.analyze_btn.clicked.connect(self._on_analyze)
         self.cancel_btn.clicked.connect(self._on_cancel)
@@ -140,6 +142,11 @@ class AnalysisTab(QWidget):
         vb = self.plot.getPlotItem().vb
         self._vb2.setGeometry(vb.sceneBoundingRect())
         self._vb2.linkedViewChanged(vb, self._vb2.XAxis)
+
+    def set_save_panel(self, panel: QWidget) -> None:
+        """Put the save panel under the results and feed it each finished analysis."""
+        self._right.addWidget(panel)
+        self.result_ready.connect(panel.set_result)
 
     # ---- opening ----
     def open_run(self, path: str) -> None:

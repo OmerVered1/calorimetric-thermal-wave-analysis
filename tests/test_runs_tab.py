@@ -448,3 +448,16 @@ def test_paging_stops_on_exact_page_boundary(tmp_path, monkeypatch):
     c = PagingClient(rows)
     out = run_index.query_saved_rows(c, runs)
     assert out[runs[0].path].count == 4 and out[runs[0].path].sample == "m4"
+
+
+def test_scan_failure_shows_its_reason_not_zero_runs(env, monkeypatch):
+    make, auto, settings, tmp = env
+
+    def boom(folders):
+        raise OSError("the folder vanished")
+    monkeypatch.setattr(run_index, "scan_limited", boom)
+    tab = make()
+    tab.refresh()
+    settle(tab)
+    assert "the folder vanished" in tab.status.text()
+    assert "0 run files" not in tab.status.text()

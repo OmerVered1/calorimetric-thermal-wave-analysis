@@ -1,0 +1,144 @@
+"""The Runs and Analysis tabs, the save panel and the upload queue in the main window."""
+
+import gzip
+import logging
+import os
+import shutil
+import sys
+import time
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+RUNS_DIR = os.path.join(HERE, "data", "runs")
+
+
+@pytest.fixture(scope="module")
+def app():
+    logging.disable(logging.CRITICAL)
+    for n in ("warning", "critical", "information"):
+        setattr(QMessageBox, n, staticmethod(lambda *a, **k: None))
+    return QApplication.instance() or QApplication([])
+
+
+def pump(app, seconds, until=None):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        app.processEvents()
+        if until is not None and until():
+            return True
+        time.sleep(0.01)
+    return until() if until is not None else True
+
+
+@pytest.fixture
+def window(app, tmp_path):
+    from ctwa import app as appmod
+    appmod.MainWindow._check_license_agreement = lambda self: True
+    w = appmod.MainWindow()
+    w.auto_save_enabled = False
+    w.auto_save_path = str(tmp_path)
+    w.connect_instrument("2602B", simulate=True, simulation_resistance=100.0)
+    yield w
+    w.stop_sweep()
+    pump(app, 0.3)
+    w.close()
+
+
+def tab_names(w):
+    return [w.tabs.tabText(i) for i in range(w.tabs.count())]
+
+
+def test_runs_and_analysis_tabs_follow_real_time(window):
+    names = tab_names(window)
+    assert names[-3:] == ["Real Time", "Runs", "Analysis"]
+
+
+def test_opening_a_run_switches_to_analysis_and_loads_it(app, window, tmp_path):
+    out = tmp_path / "al2o3_ctwa.csv"
+    with gzip.open(os.path.join(RUNS_DIR, "al2o3_ctwa.csv.gz"), "rb") as s, open(out, "wb") as d:
+        shutil.copyfileobj(s, d)
+    window.runs_tab.open_run.emit(str(out))
+    assert window.tabs.currentWidget() is window.analysis_tab
+    assert pump(app, 30, until=lambda: window.analysis_tab.run is not None)
+
+
+def test_a_running_sweep_marks_its_csv_as_recording(app, window):
+    w = window
+    w.source_settings.mode.setCurrentText("Linear Sweep")
+    w.sweep_list.start_val.setValue(0.0)
+    w.sweep_list.stop_val.setValue(1.0)
+    w.sweep_list.num_points.setValue(10)
+    w.timing_settings.delay.setValue(0.0)
+    w.timing_settings.step_size.setValue(0.2)
+    w.timing_settings.auto_delay_check.setChecked(True)
+    w.start_sweep()
+    assert pump(app, 5, until=lambda: w._live_csv_path is not None)
+    assert os.path.normcase(os.path.abspath(w._live_csv_path)) == w.runs_tab.model.recording
+    w.stop_sweep()
+    assert pump(app, 5, until=lambda: w.runs_tab.model.recording is None)
+
+
+def test_changing_the_auto_save_folder_updates_the_runs_tab(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    new = tmp_path / "elsewhere"
+    new.mkdir()
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(new)))
+    window._set_auto_save_path()
+    assert window.runs_tab.auto_save_dir == str(new)
+
+
+def test_save_panel_sits_in_the_analysis_tab_and_gets_results(window):
+    assert window.analysis_tab.isAncestorOf(window.save_panel)
+    assert window.save_panel.parent() is not None
+    window.analysis_tab.result_ready.emit(("run", "opts", "results"))
+    assert window.save_panel._results == "results"
+
+
+def test_queue_count_shows_in_the_status_bar(window):
+    lab = window.upload_label
+    window.upload_manager.count_changed.emit(3)
+    assert lab.text() == "3 waiting to upload" and not lab.isHidden()
+    window.upload_manager.count_changed.emit(0)
+    assert lab.isHidden()
+
+
+def test_needs_login_shows_a_message_without_a_dialog(window, monkeypatch):
+    from ctwa.ui import login_dialog
+    opened = []
+    monkeypatch.setattr(login_dialog.LoginDialog, "exec", lambda self: opened.append(1) or 0)
+    window.upload_manager.needs_login.emit()
+    assert not opened
+    assert window.login_button.text() == "Log in\u2026"
+
+
+def test_webapp_login_menu_entry_exists_and_success_notifies_the_manager(window, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+    from ctwa.ui import login_dialog
+    texts = [a.text() for m in window.menuBar().actions() if m.menu()
+             for a in m.menu().actions()]
+    assert any(t.startswith("Webapp login") for t in texts)
+    called = []
+    window.upload_manager.login_succeeded = lambda: called.append(1)
+    monkeypatch.setattr(login_dialog.LoginDialog, "exec", lambda self: QDialog.Accepted)
+    window._webapp_login()
+    assert called
+
+
+def test_keyring_is_not_imported_by_creating_the_window(window):
+    assert "keyring" not in sys.modules
+
+
+def test_closing_shuts_the_background_workers_down(app, tmp_path):
+    from ctwa import app as appmod
+    appmod.MainWindow._check_license_agreement = lambda self: True
+    w = appmod.MainWindow()
+    w.close()
+    assert w.upload_manager._closed
+    assert w.save_panel._closed
+    assert w.analysis_tab.worker._executor is None
+    w.close()   # a second close must not raise
