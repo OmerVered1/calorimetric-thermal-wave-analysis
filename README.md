@@ -160,6 +160,26 @@ Setups configure **passive watching only**. Direct connect still uses the
 built-in command list, so the app can never transmit bytes typed into a dialog
 to an instrument that may be mid-run under Calisto.
 
+## Analysis maths
+
+`ctwa/analysis/` is a literal Python port of the Ångström webapp's analysis
+maths (`lib/fileParser.ts`, `peakDetection.ts`, `sineFit.ts`, `analysis.ts`,
+`squareAnalysis.ts`, `lagFit.ts`, `pipeline.ts`). The webapp is the reference:
+when the two disagree, the webapp is right and the Python is the bug.
+
+`tests/test_analysis_matches_webapp.py` compares the Python with golden JSON
+the webapp produced on real runs (`tests/golden/analysis/`, inputs in
+`tests/data/runs/`) to a relative 1e-9, for every analysis mode. cos and sin
+come from `ctwa/analysis/jstrig.py`, a port of V8's implementation, so results
+match to the last bit; the goldens were generated with node on Apple Silicon
+(arm64).
+
+When the webapp's maths changes, regenerate the goldens there with
+`npm run golden -- <inputs-dir> <out-dir>` (see its `ops/golden/README.md`),
+copy `ops/golden/out/` into `tests/golden/analysis/`, and run the tests. The
+CTWA app may not be released until that test passes. The slow speed tests are
+marked `slow`; run them with `pytest -m slow`.
+
 ## Author
 
 **Omer Vered**
