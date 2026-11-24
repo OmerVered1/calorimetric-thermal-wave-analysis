@@ -39,6 +39,7 @@ class WriteSummary:
 
 class WriteQueue(QObject):
     progress = Signal(int, int)   # ops finished (written or failed), total
+    busy_changed = Signal(bool)   # a run started / ended: views disable their write buttons
 
     def __init__(self, loader, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -68,6 +69,7 @@ class WriteQueue(QObject):
         if self._busy:
             return False
         self._busy = True
+        self.busy_changed.emit(True)
         self._ops = list(ops)
         self._index = 0
         self._done = 0
@@ -139,6 +141,7 @@ class WriteQueue(QObject):
             self._busy = False
             self._on_done = None
             self._ops = []
+            self.busy_changed.emit(False)
 
     # ---- graphs ----
     def with_graphs(self, ids: List[int], callback: Callable[[Dict[int, Optional[str]]], None]) -> None:
