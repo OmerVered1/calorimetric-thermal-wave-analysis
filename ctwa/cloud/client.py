@@ -4,7 +4,9 @@ urllib only. Tokens and passwords are never logged or printed.
 """
 from __future__ import annotations
 
+import http.client
 import json
+import re
 import socket
 import urllib.error
 import urllib.parse
@@ -33,75 +35,123 @@ class ServerError(Exception):
 class TokenStore:
     """Default store: the OS keyring. Tests inject an in-memory subclass."""
 
-    @staticmethod
-    def _keyring():
+    _MISSING = ("The 'keyring' package (with a working OS keyring) is "
+                "required to store the login token (pip install keyring>=24)")
+
+    @classmethod
+    def _keyring(cls):
         try:
             import keyring  # lazy: not installed in every environment
         except ImportError:
-            raise RuntimeError(
-                "The 'keyring' package is required to store the login token "
-                "(pip install keyring>=24)") from None
-        if keyring is None:
-            raise RuntimeError("The 'keyring' package is required "
-                               "(pip install keyring>=24)")
+            raise RuntimeError(cls._MISSING) from None
         return keyring
 
-    def get(self) -> Optional[str]:
-        return self._keyring().get_password(KEYRING_SERVICE, KEYRING_USER)
-
-    def set(self, token: str) -> None:
-        self._keyring().set_password(KEYRING_SERVICE, KEYRING_USER, token)
-
-    def clear(self) -> None:
+    def _call(self, name: str, *args):
         kr = self._keyring()
         try:
-            kr.delete_password(KEYRING_SERVICE, KEYRING_USER)
+            return getattr(kr, name)(*args)
+        except Exception as e:
+            if type(e).__module__.startswith("keyring"):
+                raise RuntimeError(self._MISSING) from None
+            raise
+
+    def get(self) -> Optional[str]:
+        return self._call("get_password", KEYRING_SERVICE, KEYRING_USER)
+
+    def set(self, token: str) -> None:
+        self._call("set_password", KEYRING_SERVICE, KEYRING_USER, token)
+
+    def clear(self) -> None:
+        try:
+            self._call("delete_password", KEYRING_SERVICE, KEYRING_USER)
+        except RuntimeError:
+            raise
         except Exception:  # already absent
             pass
 
 
-def _error_message(body: bytes) -> str:
-    text = body.decode("utf-8", "replace")
+_MAX_MSG = 200
+
+
+def _clean(text: str) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:_MAX_MSG]
+
+
+def _error_message(body: bytes, status: int) -> str:
+    fallback = "HTTP %s" % status
     try:
-        data = json.loads(text)
+        data = json.loads(body.decode("utf-8", "replace"))
     except ValueError:
-        return text.strip()
+        return fallback
     if isinstance(data, dict):
         for key in ("error", "message"):
             if data.get(key):
-                return str(data[key])
-    return text.strip()
+                return _clean(str(data[key])) or fallback
+    return fallback
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _check_url(url: str) -> str:
+    url = url.rstrip("/")
+    ok = (url.startswith("https://")
+          or url.startswith("http://127.0.0.1")
+          or url.startswith("http://localhost"))
+    if not ok:
+        raise ValueError("Cloud URL must be https:// (got a non-HTTPS URL)")
+    return url
 
 
 class CloudClient:
     def __init__(self, webapp_url: str, supabase_url: str, anon_key: str,
                  tokens: TokenStore, timeout: float = 15):
-        self.webapp_url = webapp_url.rstrip("/")
-        self.supabase_url = supabase_url.rstrip("/")
+        self.webapp_url = _check_url(webapp_url)
+        self.supabase_url = _check_url(supabase_url)
         self.anon_key = anon_key
         self.tokens = tokens
         self.timeout = timeout
 
     # -- transport ---------------------------------------------------------
     def _request(self, method: str, url: str, headers: Dict[str, str],
-                 body: Any = None) -> Any:
+                 body: Any = None, unauth_is_server: bool = False) -> Any:
         data = None
         hdrs = dict(headers)
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             hdrs["Content-Type"] = "application/json"
-        req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            req = urllib.request.Request(url, data=data, headers=hdrs,
+                                         method=method)
+        except ValueError:
+            raise ServerError(0, "invalid URL") from None
+        try:
+            with _OPENER.open(req, timeout=self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
-            msg = _error_message(e.read())
+            try:
+                body = e.read()
+            except Exception:
+                body = b""
+            if 300 <= e.code < 400:
+                raise ServerError(e.code, "unexpected redirect") from None
             if e.code == 401:
-                raise NotLoggedIn(msg or "Not logged in") from None
-            raise ServerError(e.code, msg) from None
+                if unauth_is_server:
+                    raise ServerError(401, "Supabase rejected the public key") from None
+                msg = _error_message(body, 401)
+                raise NotLoggedIn(msg) from None
+            raise ServerError(e.code, _error_message(body, e.code)) from None
+        except ValueError:
+            raise ServerError(0, "invalid URL") from None
         except (urllib.error.URLError, socket.timeout, ConnectionError,
-                OSError) as e:
-            raise Offline(str(getattr(e, "reason", e))) from None
+                http.client.HTTPException, OSError) as e:
+            raise Offline(_clean(str(getattr(e, "reason", e)))) from None
         if not raw:
             return None
         try:
@@ -136,13 +186,17 @@ class CloudClient:
 
     # -- reads (public key) ------------------------------------------------
     def select(self, table: str, query: Dict[str, str]) -> List[dict]:
-        url = "%s/rest/v1/%s" % (self.supabase_url, urllib.parse.quote(table))
+        url = "%s/rest/v1/%s" % (self.supabase_url,
+                                 urllib.parse.quote(table, safe=""))
         if query:
-            url += "?" + urllib.parse.urlencode(query)
+            url += "?" + urllib.parse.urlencode(
+                query, quote_via=urllib.parse.quote)
         headers = {"apikey": self.anon_key,
                    "Authorization": "Bearer " + self.anon_key}
-        out = self._request("GET", url, headers)
-        return out if isinstance(out, list) else []
+        out = self._request("GET", url, headers, unauth_is_server=True)
+        if not isinstance(out, list):
+            raise ServerError(200, "unexpected response")
+        return out
 
     # -- writes (webapp /api/db) -------------------------------------------
     def _db(self, payload: dict) -> Any:
@@ -152,7 +206,7 @@ class CloudClient:
     @staticmethod
     def _first(out: Any) -> dict:
         data = out.get("data") if isinstance(out, dict) else None
-        return data[0] if data else {}
+        return data[0] if isinstance(data, list) and data else {}
 
     def insert(self, table: str, row: dict) -> dict:
         return self._first(self._db(
