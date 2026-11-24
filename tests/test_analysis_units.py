@@ -728,3 +728,50 @@ TS_DIFF5 = {
     "mean_peak_cal": 0,
     "mean_trough_cal": 0,
 }
+
+
+# --- JS number formatting; expected strings are node's own output -----------
+
+def test_js_number_formatting_matches_node():
+    from ctwa.analysis.jsmath import js_number_to_string, js_to_fixed, js_to_precision
+
+    # String(x)
+    for x, s in [(1e21, "1e+21"), (1e-7, "1e-7"), (-0.0, "0"), (0.1 + 0.2, "0.30000000000000004"),
+                 (1e-6, "0.000001"), (123456789012345680000.0, "123456789012345680000"),
+                 (5e-324, "5e-324"), (1.7976931348623157e308, "1.7976931348623157e+308"),
+                 (float("nan"), "NaN"), (float("-inf"), "-Infinity")]:
+        assert js_number_to_string(x) == s, x
+    # toFixed: exact binary value, ties to the larger n, sign kept when rounding to zero
+    for x, d, s in [(1.005, 2, "1.00"), (123.456, 1, "123.5"), (0.5, 0, "1"), (2.5, 0, "3"),
+                    (-1.5, 0, "-2"), (1.45, 1, "1.4"), (8.345, 2, "8.35"), (2.675, 2, "2.67"),
+                    (99.95, 1, "100.0"), (-0.0004, 0, "-0"), (-0.0004, 2, "-0.00"), (-0.0, 2, "0.00"),
+                    (1e21, 2, "1e+21"), (123456789012345680000.0, 1, "123456789012345683968.0"),
+                    (1e-7, 3, "0.000")]:
+        assert js_to_fixed(x, d) == s, (x, d)
+    # toPrecision
+    for x, p, s in [(1e21, 4, "1.000e+21"), (1e-7, 4, "1.000e-7"), (123.456, 1, "1e+2"),
+                    (123.456, 4, "123.5"), (-0.0, 4, "0.000"), (0.1 + 0.2, 6, "0.300000"),
+                    (1e-6, 4, "0.000001000"), (100.0, 4, "100.0"), (123456.0, 4, "1.235e+5"),
+                    (123456.0, 6, "123456"), (-0.0004, 6, "-0.000400000"), (2.5, 1, "3"),
+                    (5e-324, 4, "4.941e-324"), (1234567.891, 6, "1.23457e+6")]:
+        assert js_to_precision(x, p) == s, (x, p)
+
+
+def test_material_color_matches_webapp():
+    from ctwa.analysis.references import material_color, LITERATURE
+
+    for name, c in [("Stainless Steel", "#1F5BB0"), ("  AL ", "#3BA3D9"), ("Al₂O₃", "#E4572E"),
+                    ("Mystery", "#8E44AD"), ("Cu", "#C0392B"), ("Zinc", "#E9A23B"),
+                    ("תחמוצת", "#1F5BB0"), ("\U0001F600x", "#E4572E"),
+                    (" ", "#7F8C8D"), ("", "#7F8C8D"), (None, "#7F8C8D"),
+                    ("longer name with many chars 1234567890 longer name", "#D35D9B")]:
+        assert material_color(name) == c, name
+    assert LITERATURE["Stainless Steel"] == 4.0 and LITERATURE["Al"] == 64.0
+
+
+def test_serialize_direct_and_unknown_describe():
+    from ctwa.analysis.lag_fit import serialize_direct, describe_lag_model
+
+    assert serialize_direct(12.3456789) == "direct:lag=12.3457"
+    assert serialize_direct(0.000012345678) == "direct:lag=0.0000123457"
+    assert describe_lag_model("weird:x") == "weird"

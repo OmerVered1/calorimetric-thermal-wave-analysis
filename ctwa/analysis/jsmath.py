@@ -119,3 +119,87 @@ def array_min(a: Iterable[float]) -> float:
         if x < v:
             v = x
     return v
+
+
+# ---------------------------------------------------------------------------
+# Number -> string, exactly as JavaScript prints numbers.
+# ---------------------------------------------------------------------------
+
+def _nonfinite_text(x: float) -> str:
+    if x != x:
+        return "NaN"
+    return "Infinity" if x > 0 else "-Infinity"
+
+
+def js_number_to_string(x: float) -> str:
+    """String(x) / template-literal formatting of a number (shortest round-trip)."""
+    if x != x or x in (math.inf, -math.inf):
+        return _nonfinite_text(x)
+    if x == 0:
+        return "0"  # also for -0
+    sign = "-" if x < 0 else ""
+    # repr() gives the shortest round-trip digits, the same digits JS uses.
+    from decimal import Decimal
+    t = Decimal(repr(abs(float(x)))).as_tuple()
+    digits = "".join(map(str, t.digits)).rstrip("0")
+    # value = 0.DIGITS * 10**n, i.e. n is the decimal point position
+    n = len("".join(map(str, t.digits))) + t.exponent
+    k = len(digits)
+    if k <= n <= 21:
+        body = digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        body = digits[:n] + "." + digits[n:]
+    elif -6 < n <= 0:
+        body = "0." + "0" * (-n) + digits
+    else:
+        e = n - 1
+        exp = ("+" if e >= 0 else "-") + str(abs(e))
+        body = digits[0] + ("." + digits[1:] if k > 1 else "") + "e" + exp
+    return sign + body
+
+
+def js_to_fixed(x: float, digits: int) -> str:
+    """Number.prototype.toFixed: exact binary value, ties go to the larger n."""
+    from fractions import Fraction
+    if x != x or x in (math.inf, -math.inf):
+        return _nonfinite_text(x)
+    if abs(x) >= 1e21:
+        return js_number_to_string(x)
+    sign = "-" if x < 0 else ""  # -0 and 0 print without a sign
+    scaled = Fraction(abs(float(x))) * 10 ** digits
+    n = int(math.floor(scaled + Fraction(1, 2)))
+    text = str(n)
+    if digits:
+        text = text.rjust(digits + 1, "0")
+        text = text[:-digits] + "." + text[-digits:]
+    return sign + text
+
+
+def js_to_precision(x: float, precision: int) -> str:
+    """Number.prototype.toPrecision (precision given, 1..100)."""
+    from fractions import Fraction
+    if x != x or x in (math.inf, -math.inf):
+        return _nonfinite_text(x)
+    sign = "-" if x < 0 else ""
+    if x == 0:
+        return "0" + ("." + "0" * (precision - 1) if precision > 1 else "")
+    ax = Fraction(abs(float(x)))
+    e = int(math.floor(math.log10(abs(float(x)))))
+    for _ in range(3):  # settle the decade exactly (log10 can be off by one)
+        scale = Fraction(10) ** (e - precision + 1)
+        n = int(math.floor(ax / scale + Fraction(1, 2)))
+        if n >= 10 ** precision:
+            e += 1
+        elif n < 10 ** (precision - 1):
+            e -= 1
+        else:
+            break
+    digits = str(n)
+    if e < -6 or e >= precision:
+        body = digits[0] + ("." + digits[1:] if precision > 1 else "")
+        return sign + body + "e" + ("+" if e >= 0 else "-") + str(abs(e))
+    if e == precision - 1:
+        return sign + digits
+    if e >= 0:
+        return sign + digits[:e + 1] + "." + digits[e + 1:]
+    return sign + "0." + "0" * (-(e + 1)) + digits
