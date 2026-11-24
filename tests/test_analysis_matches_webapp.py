@@ -21,11 +21,6 @@ import time
 
 import pytest
 
-from ctwa.analysis.lag_fit import describe_lag_model, fit_lag_models, serialize_fit
-from ctwa.analysis.parser import parse_combined_file
-from ctwa.analysis.pipeline import load_one_file, run_one_file_pipeline
-from ctwa.analysis.types import AnalysisParams, LagPoint, PipelineError, PipelineOptions
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 GOLDEN_DIR = os.path.join(HERE, "golden", "analysis")
 RUNS_DIR = os.path.join(HERE, "data", "runs")
@@ -119,7 +114,9 @@ def check_value(case_id, field, expected, actual):
             f"[{case_id}] {field}: expected {expected!r}, got {actual!r}, relative difference {rel:.3e}")
 
 
-def build_options(options: dict) -> PipelineOptions:
+def build_options(options: dict):
+    from ctwa.analysis.types import AnalysisParams, PipelineOptions
+
     params = AnalysisParams(**{snake(k): v for k, v in options["params"].items()})
     kwargs = {snake(k): v for k, v in options.items() if k not in ("params", "clicks")}
     kwargs["params"] = params
@@ -130,6 +127,9 @@ def build_options(options: dict) -> PipelineOptions:
 
 @pytest.mark.parametrize("path", CASE_FILES, ids=_ids(CASE_FILES))
 def test_case_matches_webapp(path):
+    from ctwa.analysis.pipeline import load_one_file, run_one_file_pipeline
+    from ctwa.analysis.types import PipelineError
+
     case = _load_json(path)
     case_id = case["case_id"]
     synced, _parsed = load_one_file(read_input(case["input_file"]))
@@ -158,6 +158,8 @@ def test_case_matches_webapp(path):
 
 @pytest.mark.parametrize("path", PARSER_FILES, ids=_ids(PARSER_FILES))
 def test_parser_matches_webapp(path):
+    from ctwa.analysis.parser import parse_combined_file
+
     gold = _load_json(path)
     case_id = os.path.basename(path)[:-5]
     gold = restore_nonfinite(gold, gold.get("nonfinite"))
@@ -176,6 +178,9 @@ def test_parser_matches_webapp(path):
 
 @pytest.mark.parametrize("path", LAGFIT_FILES, ids=_ids(LAGFIT_FILES))
 def test_lagfit_matches_webapp(path):
+    from ctwa.analysis.lag_fit import fit_lag_models, serialize_fit, describe_lag_model
+    from ctwa.analysis.types import LagPoint
+
     case_id = os.path.basename(path)[:-5]
     entries = _load_json(path)
     points_raw = entries[0]["points"]
@@ -202,6 +207,8 @@ def test_lagfit_matches_webapp(path):
 
 
 def test_describe_lag_model_of_nothing():
+    from ctwa.analysis.lag_fit import describe_lag_model
+
     assert describe_lag_model(None) == "\u2014"
     assert describe_lag_model("") == "\u2014"
 
@@ -212,6 +219,8 @@ SPEED_CASES = [p for p in CASE_FILES if os.path.basename(p).startswith("al2o3_ct
 @pytest.mark.slow
 @pytest.mark.parametrize("path", SPEED_CASES, ids=_ids(SPEED_CASES))
 def test_pipeline_speed(path):
+    from ctwa.analysis.pipeline import load_one_file, run_one_file_pipeline
+
     """Every mode on al2o3_ctwa finishes in under 10 s (errors count: they ran the maths too)."""
     case = _load_json(path)
     synced, _parsed = load_one_file(read_input(case["input_file"]))
