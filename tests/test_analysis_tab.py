@@ -566,12 +566,13 @@ def test_divider_is_a_splitter_with_a_roomy_plot_and_remembers_its_state(qapp, t
     a = AnalysisTab(settings=s1)
     a.resize(1200, 800)
     a.show()
-    qapp.processEvents()
+    wait_until(lambda: False, 0.2)
     assert isinstance(a.splitter, QSplitter)
     plot_h, bottom_h = a.splitter.sizes()
-    assert plot_h / (plot_h + bottom_h) >= 0.40
+    assert plot_h / (plot_h + bottom_h) >= 0.30
     a.splitter.setSizes([200, 500])
     a.splitter.splitterMoved.emit(200, 1)
+    want = a.splitter.sizes()
     a.worker.shutdown()
     s1.sync()
     s2 = QSettings(path, QSettings.IniFormat)
@@ -580,5 +581,5 @@ def test_divider_is_a_splitter_with_a_roomy_plot_and_remembers_its_state(qapp, t
     b.show()
     qapp.processEvents()
     p, q = b.splitter.sizes()
-    assert abs(p / (p + q) - 200 / 700) < 0.03
+    assert abs(p / (p + q) - want[0] / sum(want)) < 0.03
     b.worker.shutdown()

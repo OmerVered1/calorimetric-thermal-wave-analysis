@@ -76,6 +76,7 @@ class ResultsPanel(QFrame):
         lay.addWidget(self._message)
         grid = QGridLayout()
         grid.setColumnStretch(0, 1)
+        grid.setVerticalSpacing(2)
         lay.addLayout(grid)
         self._values: Dict[str, QLabel] = {}
         for i, (key, label, unit) in enumerate(ROWS):

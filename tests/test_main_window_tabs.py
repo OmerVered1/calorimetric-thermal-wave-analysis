@@ -215,3 +215,18 @@ def test_a_failing_recording_lock_cannot_drop_the_live_csv_writer(app, window, m
     assert w._live_csv_writer is not None
     w.stop_sweep()
     pump(app, 1)
+
+
+def test_analysis_tab_shows_analyze_and_save_without_scrolling_at_1400x900(app, window):
+    window.resize(1400, 900)
+    window.show()
+    window.tabs.setCurrentWidget(window.analysis_tab)
+    pump(app, 0.5)
+    tab = window.analysis_tab
+    sizes = tab.splitter.sizes()
+    assert sizes[0] / sum(sizes) >= 0.30
+    view = tab.splitter.widget(1).viewport()
+    for btn in (tab.analyze_btn, window.save_panel.save_btn):
+        bottom = btn.mapTo(view, btn.rect().bottomLeft()).y()
+        top = btn.mapTo(view, btn.rect().topLeft()).y()
+        assert top >= 0 and bottom <= view.height()

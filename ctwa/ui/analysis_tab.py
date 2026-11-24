@@ -10,7 +10,7 @@ from typing import List, Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
                                QSizePolicy, QSplitter, QVBoxLayout, QWidget)
@@ -68,10 +68,9 @@ class AnalysisTab(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setWidget(bottom_area)
         self.splitter.addWidget(scroll)
-        self.splitter.setStretchFactor(0, 45)
-        self.splitter.setStretchFactor(1, 55)
-        self.splitter.setSizes([450, 550])
-        self._restore_splitter()
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)   # extra height goes to the plot
+        self._restored = self._restore_splitter()
         self.splitter.splitterMoved.connect(self._save_splitter)
         left = QVBoxLayout()
         self.settings = SettingsPanel()
@@ -102,15 +101,27 @@ class AnalysisTab(QWidget):
         self.settings.mode_changed.connect(lambda _m: self._on_settings_changed())
         self._update_controls()
 
-    def _restore_splitter(self) -> None:
+    def _restore_splitter(self) -> bool:
         if self._app_settings is None:
-            return
+            return False
         try:
             state = self._app_settings.value("analysis/splitter")
-            if state:
-                self.splitter.restoreState(state)
+            return bool(state) and self.splitter.restoreState(state)
         except Exception:
-            pass
+            return False
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._restored and not getattr(self, "_sized", False):
+            # first show without a saved divider: the lower half gets what it needs
+            # (Analyze and Save visible), the plot the rest
+            self._sized = True
+            QTimer.singleShot(0, self._size_divider)
+
+    def _size_divider(self) -> None:
+        need = self.splitter.widget(1).widget().sizeHint().height() + 4
+        total = self.splitter.height()
+        self.splitter.setSizes([max(total - need, 1), need])
 
     def _save_splitter(self, *_args) -> None:
         if self._app_settings is not None:
@@ -174,6 +185,13 @@ class AnalysisTab(QWidget):
 
     def set_save_panel(self, panel: QWidget) -> None:
         """Put the save panel under the results and feed it each finished analysis."""
+        lay = panel.layout()   # snug, so Save fits under the results at the default layout
+        if lay is not None:
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(4)
+            form = lay.itemAt(0).layout()
+            if form is not None and hasattr(form, "setVerticalSpacing"):
+                form.setVerticalSpacing(4)
         self._right.addWidget(panel)
         self.result_ready.connect(panel.set_result)
         self.result_cleared.connect(panel.clear_result)
