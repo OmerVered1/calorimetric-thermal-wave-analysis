@@ -164,3 +164,38 @@ def test_ref_line_and_label(qapp):
 def test_ref_line_on_log_axis_is_at_log_position(qapp):
     v = _view(qapp, _xy([_series("a", [1, 2], [1, 100])], ylog=True, ref_lines=[RefLine(10, "r", "#888888", "dash", 1)]))
     assert abs(v.ref_line_items()[0][0].value() - 1.0) < 1e-9
+
+
+# ---- log axis ticks: decades labelled, 2 and 5 as unlabelled subticks when dense
+
+def test_log_ticks_wide_axis_labels_one_two_five():
+    from ctwa.ui.statistics.geometry import log_ticks
+    import math
+    major, minor = log_ticks(math.log10(75), math.log10(2400), 800)
+    assert [t[1] for t in major] == ["100", "200", "500", "1000", "2000"]
+    assert all(t[1] == "" for t in minor) and minor
+
+
+def test_log_ticks_dense_axis_labels_decades_only():
+    from ctwa.ui.statistics.geometry import log_ticks
+    major, minor = log_ticks(-1, 3, 400)               # 4 decades in 400 px
+    assert [t[1] for t in major] == ["0.1", "1", "10", "100", "1000"]
+    assert sorted(round(10 ** t[0], 6) for t in minor if t[0] > -1) [:4] == [0.2, 0.5, 2, 5]
+    assert all(t[1] == "" for t in minor)
+
+
+def test_log_ticks_very_dense_thins_labels_and_drops_subticks():
+    from ctwa.ui.statistics.geometry import log_ticks
+    major, minor = log_ticks(-8, 4, 360)               # 12 decades in 360 px
+    labels = [t[1] for t in major if t[1]]
+    assert 3 <= len(labels) <= 7
+    assert minor == []
+    assert all(t[0] == round(t[0]) for t in major)
+
+
+def test_chart_view_installs_log_ticks_on_log_axes(qapp):
+    v = _view(qapp, _xy([_series("a", [75, 200, 2400], [1, 2, 3])], xlog=True))
+    levels = v.plot_item().getAxis("bottom")._tickLevels
+    assert levels is not None
+    labels = [t[1] for t in levels[0]]
+    assert "100" in labels and "1000" in labels and "10.0" not in labels

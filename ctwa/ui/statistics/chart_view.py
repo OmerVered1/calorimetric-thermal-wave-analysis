@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QGraphicsPolygonItem, 
 
 from ctwa import theme
 from ctwa.stats.specs import ChartSpec, RefLine, Series
-from ctwa.ui.statistics.geometry import (mask_for_log, points_in_polygon, qt_dash, slugify, to_view, view_value)
+from ctwa.ui.statistics.geometry import (log_ticks, mask_for_log, points_in_polygon, qt_dash, slugify, to_view, view_value)
 from ctwa.ui.statistics.legend_bar import LegendBar
 
 __all__ = ["ChartView", "mask_for_log", "points_in_polygon", "slugify"]
@@ -306,8 +306,32 @@ class ChartView(QWidget):
         self._apply_visibility()
         if spec.kind == "xy":
             self._plot.getViewBox().autoRange()
+        self._install_log_ticks(spec)
         self._home = None if spec.kind == "xy" else self._plot.getViewBox().viewRange()
         self._place_ref_labels()
+
+    def _install_log_ticks(self, spec: ChartSpec) -> None:
+        """Decade labels (and 1-2-5 when there is room) instead of pyqtgraph's label at every digit."""
+        vb = self._plot.getViewBox()
+        axes = []
+        if spec.xlog and spec.kind == "xy":
+            axes.append((("bottom", "top"), 0))
+        if spec.ylog:
+            axes.append((("left", "right"), 1))
+        if not axes:
+            return
+
+        def update(*_):
+            for names, dim in axes:
+                lo, hi = vb.viewRange()[dim]
+                px = vb.width() if dim == 0 else vb.height()
+                major, minor = log_ticks(lo, hi, px)
+                levels = [major, minor] if minor else [major]
+                for n in names:
+                    self._plot.getAxis(n).setTicks(levels)
+
+        self.add_range_hook(update)
+        update()
 
     def _draw_xy(self, spec: ChartSpec) -> None:
         try:
