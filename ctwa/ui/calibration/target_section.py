@@ -50,7 +50,7 @@ class TargetSection(StepCard):
                  on_message: Callable[[str, str], None], parent: Optional[QWidget] = None) -> None:
         super().__init__(TEXT["calibrateHeading"], parent)
         self._state, self._queue, self._on_message = state, queue, on_message
-        self._saving = False
+        self._mine = False
         self._target_key = None
         self._list_key = None
         self._fits_key = None
@@ -227,6 +227,7 @@ class TargetSection(StepCard):
         self.save_button.clicked.connect(self.save)
         state.changed.connect(self.refresh)
         queue.busy_changed.connect(lambda _b: self._sync_save())
+        queue.reserved_changed.connect(lambda _b: self._sync_save())
         self.refresh()
 
     @staticmethod
@@ -472,41 +473,54 @@ class TargetSection(StepCard):
     # ---- save ----
     @property
     def saving(self) -> bool:
-        return self._saving
+        """This section's save is in progress (graph wait, write, or waiting for the refreshed rows)."""
+        return self._mine and self._queue.reserved
 
     def _sync_save(self) -> None:
-        self.save_button.setEnabled(self._state.calibrated is not None and not self._saving
+        self.save_button.setEnabled(self._state.calibrated is not None and not self._queue.reserved
                                     and not self._queue.busy)
 
     def save(self) -> None:
         s = self._state
-        if self._saving or self._queue.busy:
+        if self._queue.busy or not self._queue.reserve():
             return
+        self._mine = True
         target, applied, cal = s.target, s.applied, s.calibrated
         if target is None or applied is None or cal is None:
+            self._abort()
             return
         # everything the row needs is read now: the state may change while the graph is fetched
         lag = applied.lag
         ref_ids = [x.ref["id"] for x in s.selected]
         model = calibration_model_string(s.source, s.fit, s.direct_lag)
-        self._saving = True
-        self._sync_save()
 
         def with_graph(graphs) -> None:
-            row = build_calibrated_row(target, lag, cal, graphs.get(target["id"]), ref_ids, model)
-            ok = self._queue.run([WriteOp("insert", None, row, "#%s" % target["id"])], self._saved)
-            if not ok:
-                self._finish("%s: %s" % (TEXT["saveFailed"], TEXT["timedOut"]), "error")
+            try:
+                row = build_calibrated_row(target, lag, cal, graphs.get(target["id"]), ref_ids, model)
+                started = self._queue.run([WriteOp("insert", None, row, "#%s" % target["id"])], self._saved)
+            except Exception as e:      # never leave the reservation held
+                self._abort("%s: %s" % (TEXT["saveFailed"], e))
+                return
+            if not started:
+                self._abort(TEXT["saveInProgress"])
 
-        self._queue.with_graphs([target["id"]], with_graph)
+        try:
+            self._queue.with_graphs([target["id"]], with_graph)
+        except Exception as e:
+            self._abort("%s: %s" % (TEXT["saveFailed"], e))
+
+    def _abort(self, text: str = "") -> None:
+        self._mine = False
+        self._queue.release()
+        if text:
+            self._on_message(text, "error")
 
     def _saved(self, summary) -> None:
-        if summary.failures or summary.aborted:
-            self._finish("%s: %s" % (TEXT["saveFailed"], failure_text(summary)), "error")
-        else:
-            self._finish(TEXT["saved"], "ok")
-
-    def _finish(self, text: str, kind: str) -> None:
-        self._saving = False
-        self._sync_save()
-        self._on_message(text, kind)
+        try:
+            if summary.failures or summary.aborted:
+                self._on_message("%s: %s" % (TEXT["saveFailed"], failure_text(summary)), "error")
+            else:
+                self._on_message(TEXT["saved"], "ok")
+        finally:
+            # the new copy shows up in the rows only after the loader's refresh: stay reserved until then
+            self._queue.release(after_refresh=summary.done > 0)

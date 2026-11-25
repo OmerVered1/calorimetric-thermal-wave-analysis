@@ -120,6 +120,7 @@ TEXT: Dict[str, str] = {
     "cellSaved": "saved",
     "cellFailed": "failed",
     "timedOut": "timed out",
+    "saveInProgress": "Another save is in progress",
     "writtenOf": "written {n} of {m}",
     "loginNeeded": "Not logged in",
     "markButton": "Mark as reference ({n})",

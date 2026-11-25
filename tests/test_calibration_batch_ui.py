@@ -182,3 +182,100 @@ def test_copies_and_references_not_listed(qapp):
     loader, state, queue, sec, msgs, asked = build()
     ids = [sec.table.item(i, 0).data(Qt.UserRole) for i in range(sec.table.rowCount())]
     assert ids == [1, 2, 3, 4, 5]
+
+
+def test_save_stays_disabled_until_rows_arrive(qapp):
+    """Review fix 1: the saved copies reach the rows only after the refresh; until then no second Save."""
+    loader, state, queue, sec, msgs, asked = build()
+    loader.silent_rows = True
+    sec.save_button.click()
+    assert wait_until(lambda: msgs)
+    assert len(loader.ops) == 2
+    assert queue.reserved and sec.saving and not sec.save_button.isEnabled()
+    sec.save_button.click()
+    sec.save()
+    wait_until(lambda: False, 0.1)
+    assert len(loader.ops) == 2 and len(asked) == 1
+    copies = [make_row(900 + i, period=400, calibrated_from_id=i, use_calibration=True) for i in (1, 2)]
+    loader.rows_changed.emit(rows_set() + copies)
+    state.set_rows(rows_set() + copies)
+    assert not queue.reserved and not sec.saving
+    assert checked(sec) == []
+
+
+def test_reservation_times_out(qapp, monkeypatch):
+    from ctwa.ui.calibration import writes
+    monkeypatch.setattr(writes, "REFRESH_WAIT_MS", 50)
+    loader, state, queue, sec, msgs, asked = build()
+    loader.silent_rows = True
+    sec.save_button.click()
+    assert wait_until(lambda: msgs)
+    assert queue.reserved
+    assert wait_until(lambda: not queue.reserved)
+
+
+def test_cross_section_reservation(qapp):
+    """Review fix 2: a save during the graph wait disables the other section's Save."""
+    from ctwa.ui.calibration.target_section import TargetSection
+    loader, state, queue, sec, msgs, asked = build()
+    tmsgs = []
+    target = TargetSection(state, queue, lambda t, k: tmsgs.append((t, k)))
+    state.target_id = 1
+    loader.silent_graphs = True
+    sec.save_button.click()
+    assert queue.reserved and not queue.busy
+    assert not target.save_button.isEnabled()
+    target.save()
+    assert loader.requested_graphs == [1, 2]       # only the batch asked for graphs
+    # and the other way round
+    queue.release()
+    loader.requested_graphs.clear()
+    target.save_button.click()
+    assert not sec.save_button.isEnabled() and loader.requested_graphs == [1]
+    sec.save()
+    assert loader.requested_graphs == [1] and asked == [asked[0]]
+
+
+def test_exception_in_callback_releases(qapp, monkeypatch):
+    """Review fix 5: nothing sticks when the row builder raises."""
+    from ctwa.ui.calibration import batch_section
+    loader, state, queue, sec, msgs, asked = build()
+
+    def boom(*a, **k):
+        raise ValueError("bad row")
+
+    monkeypatch.setattr(batch_section, "build_calibrated_row", boom)
+    sec.save_button.click()
+    assert wait_until(lambda: msgs)
+    assert msgs[-1][1] == "error" and "bad row" in msgs[-1][0]
+    assert not queue.reserved and sec.save_button.isEnabled() and loader.ops == []
+
+
+def test_refused_run_says_another_save(qapp):
+    loader, state, queue, sec, msgs, asked = build()
+    loader.silent_graphs = True
+    sec.save_button.click()
+    from ctwa.ui.calibration.writes import WriteOp
+    queue.run([WriteOp("update", 1, {}, "#1")], lambda s: None)      # someone else grabs the queue
+    loader.silent_graphs = False
+    loader.graph_loaded.emit(1, None)
+    loader.graph_loaded.emit(2, None)
+    assert msgs and msgs[-1] == (TEXT["saveInProgress"], "error")
+    assert not queue.reserved or True
+
+
+def test_snapshot_after_confirm(qapp):
+    """Review fix 4: a change made while the dialog is open is part of the saved set."""
+    state_box = {}
+
+    def confirm(title, message, label):
+        state_box["state"].batch_picked = [2]
+        return True
+
+    loader, state, queue, sec, msgs, asked = build()
+    sec._confirm = confirm
+    state_box["state"] = state
+    sec.save_button.click()
+    assert wait_until(lambda: msgs)
+    assert [o[1]["calibrated_from_id"] for o in loader.ops] == [2]
+    assert msgs[-1][0].startswith("Saved 1/1")

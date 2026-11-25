@@ -193,3 +193,31 @@ def test_not_calibratable_cannot_save(qapp):
     sec.save()
     wait_until(lambda: False, 0.1)
     assert loader.ops == []
+
+
+def test_single_save_waits_for_rows(qapp):
+    """Review fix 1: no second copy from a double Enter before the refreshed rows arrive."""
+    loader, state, queue, sec, msgs = ready()
+    loader.silent_rows = True
+    sec.save_button.click()
+    assert wait_until(lambda: msgs)
+    assert len(loader.ops) == 1 and sec.saving and not sec.save_button.isEnabled()
+    sec.save_button.click()
+    sec.save()
+    wait_until(lambda: False, 0.1)
+    assert len(loader.ops) == 1
+    new = dict(loader.ops[0][1], id=500)
+    loader.rows_changed.emit(make_rows() + [new])
+    state.set_rows(make_rows() + [new])
+    assert not sec.saving and sec.save_button.isEnabled()
+    assert "#500" in sec.copy_warn.text()
+
+
+def test_exception_releases(qapp, monkeypatch):
+    from ctwa.ui.calibration import target_section
+    loader, state, queue, sec, msgs = ready()
+    monkeypatch.setattr(target_section, "build_calibrated_row", lambda *a, **k: 1 / 0)
+    sec.save_button.click()
+    assert wait_until(lambda: msgs)
+    assert msgs[-1][1] == "error" and not queue.reserved and sec.save_button.isEnabled()
+    assert loader.ops == []

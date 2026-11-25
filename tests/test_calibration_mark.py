@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
 
+from ctwa.analysis.calibration_logic import num  # noqa: E402
 from ctwa.ui.calibration.mark_section import MarkSection  # noqa: E402
 from ctwa.ui.calibration.reference_table import ReferenceTable  # noqa: E402
 from ctwa.ui.calibration.state import CalibrationState  # noqa: E402
@@ -284,3 +285,21 @@ def test_typed_alpha_survives_rows_changed(env):
     table._after_edit()
     assert wait_until(lambda: table.alpha_edits[10] is not edit)
     assert table.alpha_edits[10].text() == "5.829"
+
+
+def test_committed_alpha_edit_does_not_block_refresh(env):
+    """Review fix 3: Enter keeps focus in the cell and "0.50" is the saved 0.5; the next rows update shows."""
+    from ctwa.analysis.calibration import true_lag_for_alpha
+    loader, state, queue, mark, table, msgs = env
+    edit = table.alpha_edits[10]
+    edit.hasFocus = lambda: True          # focus stays in the cell after Enter
+    edit.setText("0.50")
+    edit.editingFinished.emit()
+    assert wait_until(lambda: loader.ops and not queue.busy)
+    assert loader.ops[-1] == ("update", 10, {"reference_alpha_mm2s": 0.5})
+    rows = [dict(r, reference_alpha_mm2s=0.5) if r["id"] == 10 else r for r in make_rows()]
+    state.set_rows(rows)
+    assert wait_until(lambda: table.alpha_edits[10] is not edit)
+    row = next(r for r in rows if r["id"] == 10)
+    assert table.table.item(0, 5).text() == "%s s" % num(true_lag_for_alpha(row, 0.5))
+    assert table.alpha_edits[10].text() == "0.5"

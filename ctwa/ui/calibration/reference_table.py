@@ -31,6 +31,7 @@ class ReferenceTable(QWidget):
         super().__init__(parent)
         self._state, self._queue, self._on_message = state, queue, on_message
         self._pending: Dict[int, float] = {}
+        self._committed: set = set()
         self._status: Dict[int, str] = {}
         self._key = None
         self.alpha_edits: Dict[int, QLineEdit] = {}
@@ -85,6 +86,7 @@ class ReferenceTable(QWidget):
 
     def _rebuild(self, lags) -> None:
         self.alpha_edits, self.status_labels, self.unmark_buttons, self._row_of = {}, {}, {}, {}
+        self._committed = set()
         self.table.setRowCount(len(lags))
         right = Qt.AlignRight | Qt.AlignVCenter
         for r, x in enumerate(lags):
@@ -102,7 +104,8 @@ class ReferenceTable(QWidget):
             h = QHBoxLayout(cell)
             h.setContentsMargins(4, 0, 4, 0)
             h.setSpacing(4)
-            edit = QLineEdit(self._alpha_text(ref))
+            edit = QLineEdit(js_number_to_string(self._pending[i]) if i in self._pending else self._alpha_text(ref))
+            edit.textEdited.connect(lambda _t, i=i: self._committed.discard(i))
             edit.setFixedWidth(80)
             status = theme.set_role(QLabel(self._status.get(i, "")), "faint")
             h.addWidget(edit)
@@ -133,12 +136,27 @@ class ReferenceTable(QWidget):
         self._sync_busy()
 
     def _editing(self) -> bool:
-        """An alpha cell has focus or holds text that is not the saved value."""
+        """The user is typing in an alpha cell: it has focus, or holds a number that is not the saved
+        one. A cell whose edit was just committed is not being edited any more (focus stays in it
+        after Enter), and "0.50" equals a saved 0.5."""
         for i, e in self.alpha_edits.items():
             ref = self._ref(i)
-            if e.hasFocus() or (ref is not None and e.text() != self._alpha_text(ref)):
+            if ref is None or i in self._committed:
+                continue
+            if e.hasFocus() or self._dirty(e, ref):
                 return True
         return False
+
+    @staticmethod
+    def _dirty(edit: QLineEdit, ref: dict) -> bool:
+        saved = ref.get("reference_alpha_mm2s")
+        text = edit.text().strip()
+        if not text:
+            return saved is not None
+        v = parse_number(text)
+        if v != v:                       # text that is not a number
+            return True
+        return saved is None or v != saved
 
     def _after_edit(self) -> None:
         QTimer.singleShot(0, self.refresh)
@@ -189,6 +207,7 @@ class ReferenceTable(QWidget):
         ref = self._ref(i)
         if edit is None or ref is None or i in self._pending:
             return
+        self._committed.add(i)
         self._after_edit()
         v = parse_number(edit.text())
         old = ref.get("reference_alpha_mm2s")

@@ -38,6 +38,7 @@ class FakeLoader(QObject):
         self.hang_at: Set[int] = set()        # op indexes that never report back
         self.sync_fail_at: Dict[int, Tuple[str, str]] = {}   # op index -> failure emitted before apply_* returns
         self.graphs: Dict[int, Optional[str]] = {}
+        self.silent_rows = False              # refresh() never answers (rows arrive only when a test emits them)
         self.silent_graphs = False            # request_graph never answers
         self.requested_graphs: List[int] = []
         self.store = FakeStore()
@@ -52,6 +53,8 @@ class FakeLoader(QObject):
 
     def refresh(self) -> None:
         self.refreshes += 1
+        if self.silent_rows:
+            return
         QTimer.singleShot(0, lambda: self.rows_changed.emit(self.rows()))
         QTimer.singleShot(0, lambda: self.presets_changed.emit(self.presets()))
 

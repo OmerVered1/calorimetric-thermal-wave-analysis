@@ -42,7 +42,7 @@ class BatchSection(StepCard):
                  confirm: Callable[[str, str, str], bool], parent: Optional[QWidget] = None) -> None:
         super().__init__(_heading(), parent)
         self._state, self._queue, self._on_message, self._confirm = state, queue, on_message, confirm
-        self._saving = False
+        self._mine = False
         self._running = False
         self._table_key = None
         body = self.body
@@ -113,12 +113,14 @@ class BatchSection(StepCard):
         self.save_button.clicked.connect(self.save)
         state.changed.connect(self.refresh)
         queue.busy_changed.connect(lambda _b: self._sync_save())
+        queue.reserved_changed.connect(lambda _b: self._sync_save())
         queue.progress.connect(self._on_progress)
         self.refresh()
 
     @property
     def saving(self) -> bool:
-        return self._saving
+        """This section's save is in progress (graph wait, writes, or waiting for the refreshed rows)."""
+        return self._mine and self._queue.reserved
 
     def has_lag(self) -> bool:
         s = self._state
@@ -226,7 +228,7 @@ class BatchSection(StepCard):
     def _sync_save(self) -> None:
         n = len(self.picked_ids()) if self.has_lag() else 0
         self.save_button.setText("%s (%d)" % (TEXT["saveAll"], n))
-        self.save_button.setEnabled(n > 0 and not self._saving and not self._queue.busy)
+        self.save_button.setEnabled(n > 0 and not self._queue.reserved and not self._queue.busy)
 
     def _on_progress(self, done: int, total: int) -> None:
         if self._running and done < total:
@@ -235,48 +237,69 @@ class BatchSection(StepCard):
     # ---- save ----
     def save(self) -> None:
         s = self._state
-        if self._saving or self._queue.busy or not self.has_lag():
+        if self._queue.busy or not self.has_lag() or not self.picked_ids():
             return
-        rows = batch_ok(s.batch_rows, s.batch_picked)
-        if not rows:
+        if not self._queue.reserve():
             return
-        n = len(rows)
-        label = "%s (%d)" % (TEXT["saveAll"], n)
-        if not self._confirm(TEXT["confirmBatchTitle"].format(n=n, name=s.batch_material),
-                             TEXT["confirmBatchMessage"], label):
+        self._mine = True
+        rows0 = batch_ok(s.batch_rows, s.batch_picked)
+        n0 = len(rows0)
+        confirmed = self._confirm(TEXT["confirmBatchTitle"].format(n=n0, name=s.batch_material),
+                                  TEXT["confirmBatchMessage"], "%s (%d)" % (TEXT["saveAll"], n0))
+        if not confirmed:
+            self._abort()
             return
-        # everything the report and the rows need is read now: the state changes after every write
-        all_rows = list(s.batch_rows)
-        n_rows, n_cal = len(all_rows), len(batch_calibratable(all_rows))
-        saved_ids = {r.a["id"] for r in rows}
-        had_copies = sum(1 for r in all_rows if r.existing and r.a["id"] not in saved_ids)
-        ref_ids = [x.ref["id"] for x in s.selected]
-        model = calibration_model_string(s.source, s.fit, s.direct_lag)
-        self._saving = True
-        self._sync_save()
+        try:
+            # one snapshot, taken after the dialog returned: the rows, the report numbers, the
+            # reference ids and the model all describe the same state
+            rows = batch_ok(s.batch_rows, s.batch_picked)
+            all_rows = list(s.batch_rows)
+            n = len(rows)
+            n_rows, n_cal = len(all_rows), len(batch_calibratable(all_rows))
+            saved_ids = {r.a["id"] for r in rows}
+            # had_copies: rows that already had a copy AND are not saved now (the webapp's hadCopies)
+            had_copies = sum(1 for r in all_rows if r.existing and r.a["id"] not in saved_ids)
+            ref_ids = [x.ref["id"] for x in s.selected]
+            model = calibration_model_string(s.source, s.fit, s.direct_lag)
+            if n == 0:
+                self._abort()
+                return
 
-        def with_graphs(graphs) -> None:
-            ops = [WriteOp("insert", None, build_calibrated_row(r.a, r.lag, r.result, graphs.get(r.a["id"]),
-                                                                ref_ids, model), "#%s" % r.a["id"])
-                   for r in rows]
-            self._running = True
-            self.progress_label.setText("1 / %d" % n)
-            started = self._queue.run(ops, lambda summary: self._done(summary, n, n_rows, n_cal, had_copies))
-            if not started:
-                self._running = False
-                self._saving = False
-                self.progress_label.setText("")
-                self._sync_save()
-                self._on_message("%s: %s" % (TEXT["saveFailed"], TEXT["timedOut"]), "error")
+            def with_graphs(graphs) -> None:
+                try:
+                    ops = [WriteOp("insert", None, build_calibrated_row(
+                        r.a, r.lag, r.result, graphs.get(r.a["id"]), ref_ids, model), "#%s" % r.a["id"])
+                        for r in rows]
+                    self._running = True
+                    self.progress_label.setText("1 / %d" % n)
+                    started = self._queue.run(
+                        ops, lambda summary: self._done(summary, n, n_rows, n_cal, had_copies))
+                except Exception as e:
+                    self._abort("%s: %s" % (TEXT["saveFailed"], e))
+                    return
+                if not started:
+                    self._abort(TEXT["saveInProgress"])
 
-        self._queue.with_graphs([r.a["id"] for r in rows], with_graphs)
+            self._queue.with_graphs([r.a["id"] for r in rows], with_graphs)
+        except Exception as e:
+            self._abort("%s: %s" % (TEXT["saveFailed"], e))
+
+    def _abort(self, text: str = "") -> None:
+        self._running = False
+        self._mine = False
+        self.progress_label.setText("")
+        self._queue.release()
+        if text:
+            self._on_message(text, "error")
 
     def _done(self, summary, n: int, n_rows: int, n_cal: int, had_copies: int) -> None:
         self._running = False
-        self._saving = False
         self.progress_label.setText("")
-        text = batch_report(summary.done, n, n_rows, n_cal, had_copies, summary.failures)
-        if summary.aborted:
-            text += " · %s · %s" % (TEXT["loginNeeded"], TEXT["writtenOf"].format(n=summary.done, m=summary.total))
-        self._sync_save()
-        self._on_message(text, "ok" if not summary.failures and not summary.aborted else "warn")
+        try:
+            text = batch_report(summary.done, n, n_rows, n_cal, had_copies, summary.failures)
+            if summary.aborted:
+                text += " · %s · %s" % (TEXT["loginNeeded"], TEXT["writtenOf"].format(n=summary.done, m=summary.total))
+            self._on_message(text, "ok" if not summary.failures and not summary.aborted else "warn")
+        finally:
+            # stay reserved until the refreshed rows (with the new copies) have reached the tab
+            self._queue.release(after_refresh=summary.done > 0)

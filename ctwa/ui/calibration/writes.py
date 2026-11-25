@@ -16,6 +16,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from ctwa.ui.calibration.texts import TEXT
 
 WATCHDOG_MS = 60_000        # one op that never reports back is counted as failed after this
+REFRESH_WAIT_MS = 10_000    # a reservation waits this long for the rows refresh after a save
 GRAPH_TIMEOUT_MS = 20_000   # graph_image fetches are given this long, then missing means None
 
 KINDS = ("update", "insert", "delete", "preset_insert", "preset_delete")
@@ -41,6 +42,7 @@ class WriteSummary:
 class WriteQueue(QObject):
     progress = Signal(int, int)   # ops finished (written or failed), total
     busy_changed = Signal(bool)   # a run started / ended: views disable their write buttons
+    reserved_changed = Signal(bool)   # a save (graph wait .. refresh after the write) holds the reservation
 
     def __init__(self, loader, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -60,12 +62,50 @@ class WriteQueue(QObject):
         self._watchdog.timeout.connect(self._on_timeout)
         loader.write_done.connect(self._on_write_done)
         loader.write_failed.connect(self._on_write_failed)
+        self._reserved = False
+        self._rows_after_done = False
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.timeout.connect(self.release)
+        loader.rows_changed.connect(self._on_rows)
         self._graph_jobs: List[dict] = []
         loader.graph_loaded.connect(self._on_graph)
 
     @property
     def busy(self) -> bool:
         return self._busy
+
+    # ---- reservation ----
+    @property
+    def reserved(self) -> bool:
+        return self._reserved
+
+    def reserve(self) -> bool:
+        """Take the save reservation (Save / Save all, from the click until the saved rows are back).
+        False when another save holds it or a run is in progress."""
+        if self._reserved or self._busy:
+            return False
+        self._reserved = True
+        self.reserved_changed.emit(True)
+        return True
+
+    def release(self, after_refresh: bool = False) -> None:
+        """Give the reservation back. With after_refresh it is kept until the loader's next rows
+        arrive (the rows still lack the copies just written; nothing to wait for when rows already arrived
+        after the last written op), or REFRESH_WAIT_MS passed."""
+        if not self._reserved:
+            return
+        if after_refresh is True and not self._rows_after_done:
+            self._refresh_timer.start(REFRESH_WAIT_MS)
+            return
+        self._refresh_timer.stop()
+        self._reserved = False
+        self.reserved_changed.emit(False)
+
+    def _on_rows(self, _rows) -> None:
+        self._rows_after_done = True
+        if self._reserved and self._refresh_timer.isActive():
+            self.release()
 
     # ---- writes ----
     def run(self, ops: List[WriteOp], on_done: Callable[[WriteSummary], None]) -> bool:
@@ -133,6 +173,7 @@ class WriteQueue(QObject):
         if not self._busy or token != self._token:
             return
         self._ok.append(self._ops[self._index].label)
+        self._rows_after_done = False
         self._done += 1
         self._advance()
 
