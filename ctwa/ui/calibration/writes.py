@@ -247,4 +247,5 @@ class WriteQueue(QObject):
             return
         self._graph_jobs.remove(job)
         job["timer"].stop()
-        job["callback"]({i: job["got"].get(i) for i in sorted(job["wanted"])})
+        # "" (the row has no stored graph) and None (fetch failed / timed out) both mean: no graph
+        job["callback"]({i: (job["got"].get(i) or None) for i in sorted(job["wanted"])})

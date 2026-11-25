@@ -124,7 +124,7 @@ class ResultsLoader(QObject):
             return
         self._graphs_pending.add(id)
         self._graph_pool.start(_Job(
-            self._signals, "graph", lambda: self._store.fetch_graph_images([id]).get(id), {"id": id}))
+            self._signals, "graph", lambda: self._store.fetch_graph_images([id]).get(id) or "", {"id": id}))
 
     # ---- writes ----
     def _write(self, op: str, fn, row_id: Optional[int] = None) -> int:

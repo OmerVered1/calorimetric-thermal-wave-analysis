@@ -196,3 +196,13 @@ def test_summary_lists_written_labels(env):
     loader.fail_at = {1: ("server", "boom")}
     s = run(q, updates(3))
     assert s.succeeded == ["#10", "#12"]
+
+
+def test_with_graphs_empty_string_means_no_graph(env):
+    loader, q = env
+    loader.silent_graphs = True
+    out = []
+    q.with_graphs([1, 2], out.append)
+    loader.graph_loaded.emit(1, "")       # row exists, no stored graph
+    loader.graph_loaded.emit(2, "G")
+    assert out == [{1: None, 2: "G"}]

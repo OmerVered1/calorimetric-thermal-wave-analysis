@@ -908,7 +908,7 @@ def test_loader_request_graph(make_loader):
     loader.request_graph(404)
     assert not c.threads
     assert _pump(lambda: len(got) == 2)
-    assert sorted(got, key=lambda x: x[0]) == [(7, "img7"), (404, None)]
+    assert sorted(got, key=lambda x: x[0]) == [(7, "img7"), (404, "")]   # "" = row has no stored graph
     assert all(t is not threading.main_thread() for t in c.threads)
     n = len(c.calls)
     loader.request_graph(7)          # cached: answered again without a request
@@ -924,7 +924,7 @@ def test_loader_failed_graph_fetch_resolves_the_waiter_with_none(make_loader):
     loader.failed.connect(lambda k, m: failed.append((k, m)))
     loader.request_graph(7)
     assert _pump(lambda: got and failed)
-    assert got == [(7, None)] and failed[0][0] == "offline"
+    assert got == [(7, None)] and failed[0][0] == "offline"      # None = the fetch FAILED
     c.errors = {}
     loader.request_graph(7)          # the failure was not cached: a retry fetches for real
     assert _pump(lambda: len(got) == 2)

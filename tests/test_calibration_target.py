@@ -266,3 +266,10 @@ def test_typing_in_the_target_combo_survives_a_refresh(qapp, monkeypatch):
     state.set_rows(make_rows() + [make_row(301, model="New")])      # the list changes while the user types
     assert sec.target_combo.currentText() == "Stain"
     assert state.target_id == 99
+
+
+def test_calibrated_copy_of_source_without_graph_inserts_null(qapp):
+    loader, state, queue, sec, msgs = ready()
+    loader.graphs = {99: ""}
+    assert run_save(sec, loader)
+    assert loader.ops[0][1]["graph_image"] is None
