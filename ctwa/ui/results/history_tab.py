@@ -2,7 +2,8 @@
 run's numbers, stored plot and full details (app/history/page.tsx)."""
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from functools import cmp_to_key
 from typing import Any, Callable, Dict, List, Optional
 
@@ -50,8 +51,12 @@ def _safe(v: Any, digits: int) -> str:
 def _created(v: Any) -> str:
     if not v:
         return DASH
+    txt = re.sub(r"\.(\d+)", lambda m: "." + (m.group(1) + "000000")[:6], str(v).replace("Z", "+00:00"), count=1)
     try:
-        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        d = datetime.fromisoformat(txt)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)       # stored times are UTC
+        d = d.astimezone()                            # shown in the local time zone
     except ValueError:
         return str(v)
     return "%d/%d/%d, %d:%02d:%02d %s" % (d.month, d.day, d.year, (d.hour % 12) or 12, d.minute, d.second,
@@ -225,6 +230,11 @@ class HistoryTab(QWidget):
         self.undo_bar = UndoBar()
         self.undo_bar.undone.connect(self._on_undone)
         self.undo_bar.expired.connect(self._send)
+        self.banner_label = QLabel()                 # a failed refresh while rows are on screen
+        theme.set_role(self.banner_label, "danger")
+        self.banner_label.setWordWrap(True)
+        self.banner_label.hide()
+        self._bottom.addWidget(self.banner_label)
         self._bottom.addWidget(self.error_label)
         self._bottom.addWidget(self.undo_bar)
         page_lay.addLayout(self._bottom)
@@ -398,6 +408,7 @@ class HistoryTab(QWidget):
         self._prune_pending()
         self._loaded = True
         self._failed_text = ""
+        self.banner_label.hide()
         self._after_rows(prev)
 
     def _prune_pending(self) -> None:
@@ -437,6 +448,8 @@ class HistoryTab(QWidget):
         # a read error: only a message; whatever is on screen stays (it never settles a delete)
         self._loaded = True
         self._failed_text = "Can't reach the database: %s" % msg
+        self.banner_label.setText(self._failed_text)
+        self.banner_label.setVisible(bool(self._rows))
         self._refresh_view()
 
     def _on_graph(self, id: int, raw) -> None:
@@ -444,6 +457,9 @@ class HistoryTab(QWidget):
             return          # a slow graph of a row that is no longer selected
         row = self._by_id.get(id)
         if row is None:
+            return
+        if raw is None:                              # the fetch failed (loader contract)
+            self.figure.show_graph_failed(row)
             return
         self.figure.show_graph(raw, row)
 
