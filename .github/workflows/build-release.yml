@@ -120,6 +120,9 @@ jobs:
       - name: Attach binaries to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # a tag with a suffix (v2.0.0-rc1) is a test build: marked pre-release, so the
+          # in-app update check (releases/latest) never offers it
+          prerelease: ${{ contains(github.ref_name, '-') }}
           name: Calorimetric Thermal Wave Analysis Program ${{ github.ref_name }}
           body: |
             ## Calorimetric Thermal Wave Analysis Program ${{ github.ref_name }}
