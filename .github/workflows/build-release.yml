@@ -19,7 +19,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements.txt -c constraints.txt
 
       - name: Build macOS app from spec
         run: |
@@ -48,7 +48,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements.txt -c constraints.txt
 
       - name: Build Windows exe from spec
         run: |

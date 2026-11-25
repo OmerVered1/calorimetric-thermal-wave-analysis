@@ -1,0 +1,7 @@
+# The library versions the program was tested with. The release build installs with
+#   pip install -r requirements.txt -c constraints.txt
+# so a newer upstream release cannot change what ships. Raise a pin only after a test run.
+PySide6==6.10.3
+pyqtgraph==0.13.7
+numpy==2.0.2
+keyring==25.7.0     # installs on Python 3.11 (the CI build's Python)

@@ -85,6 +85,8 @@ a = Analysis(
         'ctwa.ui.runs_tab',
         'ctwa.ui.save_panel',
         'ctwa.ui.upload_manager',
+        'ctwa.ui.results_loader',
+        'ctwa.ui.mean_worker',
         # Statistics tab (Plan 5)
         'ctwa.stats',
         'ctwa.stats.model',
@@ -103,8 +105,13 @@ a = Analysis(
         'ctwa.ui.statistics.controls',
         'ctwa.ui.statistics.summary_table',
         'ctwa.ui.statistics.tab',
+        'ctwa.ui.statistics.geometry',
         'pyqtgraph.exporters',
         # Results tab (Plan 3)
+        'ctwa.results',
+        'ctwa.results.columns',
+        'ctwa.results.helpers',
+        'ctwa.results.store',
         'ctwa.ui.results',
         'ctwa.ui.results.fmt',
         'ctwa.ui.results.summary_logic',
@@ -215,6 +222,6 @@ if sys.platform == 'darwin':
         bundle_identifier='com.omervered.ctwa',
         info_plist={
             'NSHighResolutionCapable': True,
-            'CFBundleShortVersionString': '1.0.2',  # bump per release
+            'CFBundleShortVersionString': '2.0.0',  # bump per release
         },
     )

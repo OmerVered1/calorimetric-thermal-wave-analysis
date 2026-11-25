@@ -64,6 +64,31 @@ only when that model is connected.
 The Real Time tab and the calorimeter panel were 2602B/2611A-only in
 keithley-smu-control; the 2450 and 6430 have them here for the first time.
 
+## 2.0.0
+
+Five new tabs, after Real Time, take a recorded run from the file to the shared
+results:
+
+- **Runs** lists the recorded CSV files in the auto-save folder (and any folders
+  you add), with each run's mean temperature and whether it is already saved
+- **Analysis** analyzes a run with the same maths as the webapp (see
+  [Analysis maths](#analysis-maths)) and shows the fit and the alpha values
+- **Calibration** fits the calorimeter's calibration from marked runs and keeps
+  reference materials and presets
+- **Results** browses, edits, compares and deletes (with Undo) the saved
+  analyses
+- **Statistics** charts the saved results: distributions, scatter and heat maps,
+  with filters and export
+
+Saving writes to the shared results database, through **File → Webapp login…**.
+The token is kept in the OS keyring. When the program is offline or logged out,
+a saved analysis waits in an offline queue on this computer and is uploaded, in
+order, as soon as the connection and login are back. Without the cloud
+features the tabs still analyze; they just cannot save or list saved results.
+
+Releases are built with the library versions in `constraints.txt`
+(`pip install -r requirements.txt -c constraints.txt`).
+
 ## Quick Start
 
 ```bash
