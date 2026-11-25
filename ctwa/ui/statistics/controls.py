@@ -233,6 +233,8 @@ class ChartControls(QWidget):
             lay.addWidget(w)
 
         for cb in (self.y_combo, self.chart_combo, self.x_combo, self.color_combo, self.group_combo):
+            cb.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            cb.setMinimumContentsLength(10)
             cb.currentIndexChanged.connect(self._on_edit)
         for chip in (self.log_x_chip, self.log_y_chip, self.mean_chip):
             chip.clicked.connect(self._on_edit)

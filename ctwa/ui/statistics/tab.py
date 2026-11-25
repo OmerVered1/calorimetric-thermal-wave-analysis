@@ -10,7 +10,7 @@ from dataclasses import replace
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from PySide6.QtCore import QPoint, QSettings, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
+from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
                                QSplitter, QVBoxLayout, QWidget)
 
 from ctwa import theme
@@ -87,6 +87,34 @@ def _label(text: str = "", role: Optional[str] = None, wrap: bool = False) -> QL
     if role:
         theme.set_role(lab, role)
     return lab
+
+
+class _ChartGrid(QWidget):
+    """Charts side by side while each keeps at least CHART_MIN_PX, wrapping onto new rows below that."""
+    CHART_MIN_PX = 520
+
+    def __init__(self, charts: Sequence[ChartView]):
+        super().__init__()
+        self._charts = list(charts)
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(10)
+        self._cols = 0
+        self.setMinimumWidth(self.CHART_MIN_PX // 2)
+        self._place(len(self._charts))
+
+    def _place(self, cols: int) -> None:
+        if cols == self._cols:
+            return
+        self._cols = cols
+        for i, c in enumerate(self._charts):
+            self._grid.addWidget(c, i // cols, i % cols)
+        for k in range(len(self._charts)):
+            self._grid.setColumnStretch(k, 1 if k < cols else 0)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._place(max(1, min(len(self._charts), self.width() // self.CHART_MIN_PX)))
 
 
 class StatisticsTab(QWidget):
@@ -242,6 +270,7 @@ class StatisticsTab(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setWidget(content)
 
         for k in ORDER:
@@ -297,13 +326,7 @@ class StatisticsTab(QWidget):
 
     @staticmethod
     def _row(charts: Sequence[ChartView]) -> QWidget:
-        w = QWidget()
-        h = QHBoxLayout(w)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(10)
-        for c in charts:
-            h.addWidget(c, 1)
-        return w
+        return _ChartGrid(charts)
 
     def _wire(self) -> None:
         self.controls.changed.connect(self._on_controls)
