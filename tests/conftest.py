@@ -43,6 +43,38 @@ def _no_app_data_writes(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(run_index, "default_cache_path", lambda: cache)
 
 
+@pytest.fixture(autouse=True)
+def _scratch_qsettings(tmp_path_factory, monkeypatch):
+    """QSettings(org, app) would land in the user's real preferences (~/Library/Preferences on a Mac,
+    the registry on Windows); on Apple platforms the two-string constructor ignores setDefaultFormat.
+    So every ctwa module that builds a QSettings gets one that always uses an ini file in a scratch
+    folder, and the default format and paths are redirected there as well."""
+    import sys
+    from PySide6.QtCore import QSettings
+    import ctwa.app, ctwa.connect_panel, ctwa.ui.save_panel, ctwa.ui.runs_tab  # noqa: F401
+
+    folder = str(tmp_path_factory.mktemp("settings"))
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    for scope in (QSettings.UserScope, QSettings.SystemScope):
+        QSettings.setPath(QSettings.IniFormat, scope, folder)
+
+    class ScratchSettings(QSettings):
+        def __init__(self, *args, **kwargs):
+            if args and all(isinstance(a, str) for a in args) and len(args) <= 2:
+                QSettings.__init__(self, QSettings.IniFormat, QSettings.UserScope, *args, **kwargs)
+            elif not args:
+                QSettings.__init__(self, QSettings.IniFormat, QSettings.UserScope,
+                                   "ScratchOrg", "ScratchApp", **kwargs)
+            else:
+                QSettings.__init__(self, *args, **kwargs)
+
+    for name, mod in list(sys.modules.items()):
+        if name.split(".")[0] == "ctwa" and getattr(mod, "QSettings", None) is QSettings:
+            monkeypatch.setattr(mod, "QSettings", ScratchSettings)
+    yield
+    QSettings.setDefaultFormat(QSettings.NativeFormat)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: takes seconds, not milliseconds (speed checks)")
