@@ -295,13 +295,9 @@ class ChartView(QWidget):
         elif spec.kind in ("box", "violin", "bar"):
             if spec.categories:
                 self.set_categories(spec.categories)
-            try:
-                from ctwa.ui.statistics import dist_items
-            except ImportError:                      # Task 8 stage: renderers arrive with Task 9
-                dist_items = None
-            if dist_items is not None:
-                fn = {"box": dist_items.draw_box, "violin": dist_items.draw_violin, "bar": dist_items.draw_bar}[spec.kind]
-                self._adopt(fn(self._plot, spec))
+            from ctwa.ui.statistics import dist_items
+            fn = {"box": dist_items.draw_box, "violin": dist_items.draw_violin, "bar": dist_items.draw_bar}[spec.kind]
+            self._adopt(fn(self._plot, spec))
         elif spec.kind == "heatmap":
             from ctwa.ui.statistics.heatmap import draw_heatmap
             draw_heatmap(self, spec)
