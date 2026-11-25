@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import List, Optional
 
-from PySide6.QtCore import QSettings, QTimer, Signal
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal
 from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from ctwa import theme
@@ -16,6 +16,7 @@ __all__ = ["ResultsTab"]
 
 LOGIN_WINDOW_S = 5.0
 STATUS_MS = 6000
+UNAVAILABLE = "Results are not available."
 
 
 class ResultsTab(QWidget):
@@ -26,6 +27,16 @@ class ResultsTab(QWidget):
         self._loader = loader
         self._refreshed = False
         self._last_login = None
+        self.summary = self.history = self.compare = self.tabs = None
+        self._status_timer = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        if loader is None:                      # the cloud is off: nothing to list
+            self.status_label = QLabel(UNAVAILABLE)
+            self.status_label.setAlignment(Qt.AlignCenter)
+            theme.set_role(self.status_label, "muted")
+            lay.addWidget(self.status_label, 1)
+            return
         self.summary = SummaryTab(loader, settings)
         self.history = HistoryTab(loader)
         self.compare = CompareTab(loader)
@@ -39,8 +50,6 @@ class ResultsTab(QWidget):
         self._status_timer.setSingleShot(True)
         self._status_timer.setInterval(STATUS_MS)
         self._status_timer.timeout.connect(lambda: self.status_label.setText(""))
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.tabs, 1)
         lay.addWidget(self.status_label)
         self.summary.compare_requested.connect(self.show_compare)
@@ -51,24 +60,35 @@ class ResultsTab(QWidget):
 
     # ---- public ----
     def current_page(self) -> str:
-        return self.tabs.tabText(self.tabs.currentIndex())
+        return self.tabs.tabText(self.tabs.currentIndex()) if self.tabs is not None else ""
 
     def show_compare(self, ids: List[int]) -> None:
+        if self.tabs is None:
+            return
         self.compare.set_ids(list(ids))
         self.tabs.setCurrentWidget(self.compare)
 
     def show_history(self, id: int) -> None:
+        if self.tabs is None:
+            return
         self.history.select_id(id)
         self.tabs.setCurrentWidget(self.history)
 
     def show_summary(self, ids=None, query: Optional[str] = None) -> None:
+        if self.tabs is None:
+            return
         self.summary.set_id_filter(set(ids) if ids is not None else None)
         if query is not None:
             self.summary.set_search(query)
         self.tabs.setCurrentWidget(self.summary)
 
+    def has_pending(self) -> bool:
+        """True while a delete waits out its Undo window."""
+        return self.history is not None and bool(self.history.pending_ids())
+
     def flush_pending(self) -> None:
-        self.history.flush_pending()
+        if self.history is not None:
+            self.history.flush_pending()
 
     def status_text(self) -> str:
         return self.status_label.text()
@@ -87,6 +107,6 @@ class ResultsTab(QWidget):
 
     def showEvent(self, e) -> None:
         super().showEvent(e)
-        if not self._refreshed:
+        if not self._refreshed and self._loader is not None:
             self._refreshed = True
             self._loader.refresh()

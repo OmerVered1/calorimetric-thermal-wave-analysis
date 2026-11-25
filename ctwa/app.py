@@ -3240,6 +3240,13 @@ class MainWindow(QMainWindow):
         self.runs_tab.open_run.connect(self._open_run_in_analysis)
         tabs.addTab(self.runs_tab, "Runs")
         tabs.addTab(self.analysis_tab, "Analysis")
+        # --- Results tab (Plan 3) ---
+        from ctwa.ui.results.results_tab import ResultsTab
+        self.results_tab = ResultsTab(self.results_loader, settings=self.settings)
+        tabs.addTab(self.results_tab, "Results")
+        self.results_tab.login_needed.connect(self._webapp_login)
+        QApplication.instance().aboutToQuit.connect(self.results_tab.flush_pending)
+        # --- end Results tab ---
 
         # The experiment's point-by-point table, under the Real Time plot
         self.table = DataTableWidget()
@@ -4649,8 +4656,16 @@ class MainWindow(QMainWindow):
             self.save_panel.shutdown()
         if self.upload_manager is not None:
             self.upload_manager.shutdown(500)   # a row still uploading stays in the queue
+        # --- Results tab (Plan 3) ---
+        # a delete still in its Undo window is sent first (a closed loader fails writes at once),
+        # and the loader then gets up to 3 s to finish it; 500 ms when nothing was pending
+        tab = getattr(self, "results_tab", None)
+        waiting = tab is not None and tab.has_pending()
+        if tab is not None:
+            tab.flush_pending()
+        # --- end Results tab ---
         if getattr(self, "results_loader", None) is not None:
-            self.results_loader.shutdown()
+            self.results_loader.shutdown(3000 if waiting else 500)
         self.runs_tab.shutdown()
         self.analysis_tab.worker.shutdown()
         self.multimeter_panel.stop_live()
