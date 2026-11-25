@@ -6,12 +6,13 @@ import json
 from typing import Any, Dict, List, Optional, Set
 
 from PySide6.QtCore import QModelIndex, QSettings, Qt, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QMessageBox, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame,
                                QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QPushButton, QStackedLayout,
                                QTableView, QToolButton, QVBoxLayout, QWidget)
 
 from ctwa import theme
 from ctwa.ui.results.fmt import next_sort
+from ctwa.ui.results.summary_edit import EditSession, SummaryDelegate, initial_values
 from ctwa.ui.results.summary_logic import (ALWAYS_SHOWN, PRESETS, SUMMARY_COLS, csv_bytes, filter_rows,
                                            hidden_for_preset, preset_of, summary_stats)
 from ctwa.ui.results.summary_model import ID_ROLE, SummaryModel, SummaryProxy
@@ -23,6 +24,7 @@ DENSITY_KEY = "results/summary/density"
 FROZEN = 3                     # check, ID, Model
 MAX_COMPARE = 4
 COL0_W = 36
+COL0_EDIT_W = 150               # check box, Edit / Save + Cancel
 _KEYS = [c.key for c in SUMMARY_COLS]
 _PRESET_LABELS = (("key", "Key results"), ("cal", "Calibration"), ("all", "Everything"))
 _HINT = "Double-click a cell to edit · Enter saves · Esc cancels"
@@ -147,12 +149,15 @@ class SummaryTable(QTableView):
 class SummaryTab(QWidget):
     compare_requested = Signal(list)
     message = Signal(str)
+    login_needed = Signal()
 
     def __init__(self, loader, settings: Optional[QSettings] = None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._loader = loader
         self._settings = settings if settings is not None else _MemSettings()
         self._loaded = False
+        self._session: Optional[EditSession] = None
+        self._reopening = False
         self._failed_text = ""
         self._id_filter: Optional[Set[int]] = None
         self._sort: tuple = (None, None)
@@ -164,6 +169,17 @@ class SummaryTab(QWidget):
         self.proxy = SummaryProxy(self)
         self.proxy.setSourceModel(self.model)
         self._build()
+        self._delegate = SummaryDelegate(lambda: self._session, self.model.row_by_id, self.commit_edit,
+                                         self.cancel_edit, self)
+        self._delegate.key_handler = self._on_edit_key
+        self._delegate.edit_requested.connect(lambda i, k: self.begin_edit(i, k or None))
+        for v in (self.table, self.table.frozen):
+            v.setItemDelegate(self._delegate)
+            v.doubleClicked.connect(self._cell_double_clicked)
+        self.table.set_col0_width(COL0_EDIT_W)
+        for sig in (self.proxy.layoutChanged, self.proxy.modelReset, self.proxy.rowsInserted,
+                    self.proxy.rowsRemoved):
+            sig.connect(self._reopen_editors)
         self.model.selection_changed.connect(self._selection_changed)
         self.proxy.layoutChanged.connect(self._shown_changed)
         self.proxy.modelReset.connect(self._shown_changed)
@@ -171,6 +187,8 @@ class SummaryTab(QWidget):
         self.proxy.rowsRemoved.connect(self._shown_changed)
         loader.rows_changed.connect(self._on_rows)
         loader.failed.connect(self._on_failed)
+        loader.write_done.connect(self._on_write_done)
+        loader.write_failed.connect(self._on_write_failed)
         self._apply_hidden()
         self._apply_density()
         rows = loader.rows()
@@ -417,6 +435,7 @@ class SummaryTab(QWidget):
 
     def _on_rows(self, rows: List[dict]) -> None:
         self.model.set_rows(rows)
+        self._after_rows()
         self._loaded = True
         self._failed_text = ""
         self.banner.hide()
@@ -438,6 +457,9 @@ class SummaryTab(QWidget):
         combo.blockSignals(False)
 
     def _on_failed(self, kind: str, msg: str) -> None:
+        if self._session is not None and self._session.saving:
+            self._save_failed(kind, msg)
+            return
         self._loaded = True
         self._failed_text = "Can't reach the database: %s" % msg
         self.banner_label.setText(self._failed_text)
@@ -556,3 +578,192 @@ class SummaryTab(QWidget):
 
     def _download_selected(self) -> None:
         self._download(True, "angstrom_results_selected.csv")
+
+
+    # ---- inline editing (Task 8) ----
+    def editing_id(self) -> Optional[int]:
+        return self._session.row_id if self._session is not None else None
+
+    def editor_widget(self, key: str):
+        return self._delegate.editors.get(key)
+
+    def edit_button_rect(self, row_id: int):
+        """(view, rect in that view's viewport) of the row's Edit button, or None."""
+        ids = self.proxy.shown_ids()
+        if row_id not in ids:
+            return None
+        ix = self.proxy.index(ids.index(row_id), 0)
+        view = self.table.frozen
+        return view, self._delegate.button_rect(view.visualRect(ix))
+
+    def cell_rect(self, row_id: int, key: str):
+        ids = self.proxy.shown_ids()
+        if row_id not in ids or key not in _KEYS:
+            return None
+        col = _KEYS.index(key) + 1
+        view = self.table.view_for_column(col)
+        return view, view.visualRect(self.proxy.index(ids.index(row_id), col))
+
+    def _confirm_discard(self, row_id: int) -> bool:
+        return QMessageBox.question(self, "Edit", "Discard changes to #%d?" % row_id,
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+
+    def begin_edit(self, row_id: int, focus_key: Optional[str] = None) -> None:
+        stored = self.model.row_by_id(row_id)
+        if stored is None:
+            return
+        s = self._session
+        if s is not None:
+            if s.saving:
+                return
+            if s.row_id == row_id:
+                s.focus_key = focus_key or s.focus_key
+                self._open_editors()
+                self._focus_editor(focus_key)
+                return
+            cur = self.model.row_by_id(s.row_id)
+            if cur is not None and s.changes(cur) and not self._confirm_discard(s.row_id):
+                return
+            self._end_edit()
+        self._session = EditSession(row_id, initial_values(stored), focus_key)
+        self._open_editors()
+        self._focus_editor(focus_key)
+
+    def commit_edit(self) -> Dict[str, Any]:
+        s = self._session
+        if s is None or s.saving:
+            return {}
+        stored = self.model.row_by_id(s.row_id)
+        if stored is None:
+            self._end_edit()
+            return {}
+        changes = s.changes(stored)
+        if not changes:
+            self._end_edit()
+            return {}
+        s.saving, s.sent = True, dict(changes)
+        self._delegate.set_saving(True)
+        s.token = self._loader.apply_update(s.row_id, changes)
+        return changes
+
+    def cancel_edit(self) -> None:
+        if self._session is not None and not self._session.saving:
+            self._end_edit()
+
+    def _on_edit_key(self, which: str) -> None:
+        (self.commit_edit if which == "enter" else self.cancel_edit)()
+
+    def _cell_double_clicked(self, ix: QModelIndex) -> None:
+        if ix.column() < 1:
+            return
+        col = SUMMARY_COLS[ix.column() - 1]
+        rid = ix.data(ID_ROLE)
+        if col.editable and rid is not None and not (self._session is not None and self._session.saving):
+            self.begin_edit(int(rid), col.key)
+
+    # editors follow the session's row by id
+    def _editor_cols(self) -> List[int]:
+        return [0] + [i for i, c in enumerate(SUMMARY_COLS, start=1)
+                      if c.editable and not self.table.isColumnHidden(i)]
+
+    def _session_proxy_row(self) -> int:
+        s = self._session
+        if s is None:
+            return -1
+        r = self.model.row_of(s.row_id)
+        if r < 0:
+            return -1
+        ix = self.proxy.mapFromSource(self.model.index(r, 0))
+        return ix.row() if ix.isValid() else -1
+
+    def _open_editors(self) -> None:
+        row = self._session_proxy_row()
+        if row < 0:
+            return
+        for col in self._editor_cols():
+            ix = self.proxy.index(row, col)
+            view = self.table.view_for_column(col)
+            if view.indexWidget(ix) is None:
+                view.openPersistentEditor(ix)
+        self._delegate.set_saving(bool(self._session.saving))
+
+    def _close_editors(self) -> None:
+        row = self._session_proxy_row()
+        if row >= 0:
+            for col in self._editor_cols():
+                ix = self.proxy.index(row, col)
+                view = self.table.view_for_column(col)
+                if view.indexWidget(ix) is not None:
+                    view.closePersistentEditor(ix)
+        self._delegate.forget_editors()
+
+    def _reopen_editors(self, *_a) -> None:
+        if self._session is None or self._reopening:
+            return
+        self._reopening = True
+        try:
+            had_focus = self._focused_key()
+            self._open_editors()
+            if had_focus is not None and self._delegate.editors.get(had_focus) is not None:
+                self._focus_editor(had_focus)
+        finally:
+            self._reopening = False
+
+    def _focused_key(self) -> Optional[str]:
+        w = QApplication.focusWidget()
+        for k, e in self._delegate.editors.items():
+            if w is e or (w is not None and e.isAncestorOf(w)):
+                return k
+        return None
+
+    def _focus_editor(self, key: Optional[str]) -> None:
+        w = self._delegate.editors.get(key) if key else None
+        if w is not None:
+            w.setFocus()
+            if isinstance(w, QLineEdit):
+                w.selectAll()
+
+    def _end_edit(self) -> None:
+        self._close_editors()
+        self._session = None
+
+    def _after_rows(self) -> None:
+        s = self._session
+        if s is None:
+            return
+        row = self.model.row_by_id(s.row_id)
+        if row is None:
+            self._end_edit()
+            self.message.emit("#%d was removed elsewhere" % s.row_id)
+            return
+        if s.saving and all(row.get(k) == v for k, v in s.sent.items()):
+            self._save_ok()
+            return
+        self._reopen_editors()
+
+    def _save_ok(self) -> None:
+        s = self._session
+        if s is None:
+            return
+        self._end_edit()
+        self.message.emit("Saved #%d" % s.row_id)
+
+    def _save_failed(self, kind: str, msg: str) -> None:
+        s = self._session
+        if s is None or not s.saving:
+            return
+        s.saving = False
+        self._delegate.set_saving(False)
+        self.message.emit("Could not save #%d: %s" % (s.row_id, msg))
+        if kind == "login":
+            self.login_needed.emit()
+
+    def _on_write_done(self, op: str, token: int, _result) -> None:
+        s = self._session
+        if s is not None and s.saving and op == "update" and token == s.token:
+            self._save_ok()
+
+    def _on_write_failed(self, op: str, token: int, kind: str, msg: str) -> None:
+        s = self._session
+        if s is not None and s.saving and op == "update" and token == s.token:
+            self._save_failed(kind, msg)
