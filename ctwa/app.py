@@ -3256,6 +3256,14 @@ class MainWindow(QMainWindow):
             lambda i: self.calibration_tab.on_shown()
             if self.calibration_tab is not None and tabs.widget(i) is self.calibration_tab else None)
         # --- end Calibration tab ---
+        # --- Statistics tab (Plan 5) ---
+        from ctwa.ui.statistics.tab import StatisticsTab
+        self.statistics_tab = StatisticsTab(getattr(self, "results_loader", None), self.settings)
+        tabs.addTab(self.statistics_tab, "Statistics")
+        _show_history = getattr(getattr(self, "results_tab", None), "show_history", None)
+        if callable(_show_history):          # Plan 3 merged and exposing show_history(int id)
+            self.statistics_tab.open_analysis.connect(_show_history)
+        # --- end Statistics tab ---
 
         # The experiment's point-by-point table, under the Real Time plot
         self.table = DataTableWidget()
