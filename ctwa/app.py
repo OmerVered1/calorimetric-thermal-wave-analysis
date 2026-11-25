@@ -3240,6 +3240,22 @@ class MainWindow(QMainWindow):
         self.runs_tab.open_run.connect(self._open_run_in_analysis)
         tabs.addTab(self.runs_tab, "Runs")
         tabs.addTab(self.analysis_tab, "Analysis")
+        # --- Calibration tab (Plan 4) ---
+        from ctwa.ui.calibration.calibration_tab import CalibrationTab
+        if self.results_loader is not None:
+            self.calibration_tab = CalibrationTab(self.results_loader)
+            tabs.addTab(self.calibration_tab, "Calibration")
+        else:
+            # No cloud: keep the tab, with the message instead of the page.
+            self.calibration_tab = None
+            _cal_off = QLabel("Results are not available.")
+            _cal_off.setAlignment(Qt.AlignCenter)
+            theme.set_role(_cal_off, "muted")
+            tabs.addTab(_cal_off, "Calibration")
+        tabs.currentChanged.connect(
+            lambda i: self.calibration_tab.on_shown()
+            if self.calibration_tab is not None and tabs.widget(i) is self.calibration_tab else None)
+        # --- end Calibration tab ---
 
         # The experiment's point-by-point table, under the Real Time plot
         self.table = DataTableWidget()

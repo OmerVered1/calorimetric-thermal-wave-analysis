@@ -55,7 +55,8 @@ def tab_names(w):
 
 def test_runs_and_analysis_tabs_follow_real_time(window):
     names = tab_names(window)
-    assert names[-3:] == ["Real Time", "Runs", "Analysis"]
+    i = names.index("Real Time")
+    assert names[i:i + 4] == ["Real Time", "Runs", "Analysis", "Calibration"]
 
 
 def test_opening_a_run_switches_to_analysis_and_loads_it(app, window, tmp_path):
@@ -170,7 +171,8 @@ def test_the_window_opens_when_the_cloud_services_cannot_start(app, tmp_path, mo
         assert w.status.currentMessage() == "Cloud features off: no keyring here"
         assert w.runs_tab.client is None
         names = tab_names(w)
-        assert names[-2:] == ["Runs", "Analysis"]
+        i = names.index("Runs")
+        assert names[i:i + 3] == ["Runs", "Analysis", "Calibration"]
     finally:
         w.close()   # closing without a manager or panel must not raise
 
