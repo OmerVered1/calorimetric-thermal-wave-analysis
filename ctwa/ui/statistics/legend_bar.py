@@ -52,6 +52,9 @@ class _Flow(QLayout):
         return size + QSize(m.left() + m.right(), m.top() + m.bottom())
 
     def _layout(self, rect, apply):
+        m = self.contentsMargins()
+        top = rect.y()
+        rect = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
         x, y, row_h = rect.x(), rect.y(), 0
         for it in self._items:
             sz = it.sizeHint()
@@ -61,7 +64,7 @@ class _Flow(QLayout):
                 it.setGeometry(QRect(QPoint(x, y), sz))
             x += sz.width() + self._h
             row_h = max(row_h, sz.height())
-        return y + row_h - rect.y()
+        return y + row_h - top + m.bottom()
 
 
 class _Entry(QWidget):
@@ -119,6 +122,12 @@ class LegendBar(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
 
     # ------------------------------------------------------------------ entries
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        h = self._flow.heightForWidth(self.width())
+        if h != self.minimumHeight():
+            self.setMinimumHeight(h)          # the plot above gives way, so a wrapped legend is never clipped
+
     def set_entries(self, entries: List[Tuple[str, str, Optional[str]]]) -> None:
         for w in self._widgets.values():
             self._flow.removeWidget(w)
