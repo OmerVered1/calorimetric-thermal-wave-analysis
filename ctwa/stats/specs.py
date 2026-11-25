@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ctwa.analysis.jsmath import js_number_to_string, js_round, js_to_fixed
 from ctwa.analysis.references import LITERATURE, LITERATURE_COLORS
-from ctwa.stats.aggregate import (bin_by_period, corr_matrix, distinct_dr, linear_fit, log_grid, mean, pair_segments,
+from ctwa.stats.aggregate import (CORR_LABELS, bin_by_period, corr_matrix, distinct_dr, linear_fit, log_grid, mean, pair_segments,
                                   std_pop, theory_curve)
 from ctwa.stats.model import (Y_BY_KEY, color_for, extract_x, extract_y, fmt_g, get_period, group_value, round10,
                               run_label_text)
@@ -247,3 +247,192 @@ def build_builder_spec(rows: Sequence[Dict[str, Any]], view: ViewState,
         kind=view.chart_type, title="%s by %s" % (meta.label, view.group_by), xlabel=view.group_by, ylabel=meta.label,
         xlog=view.log_x, ylog=view.log_y, series=series, ref_lines=ref_lines,
         categories=[(g.name, "%s\nn = %d" % (g.name, len(g.values))) for g in groups], groups=groups, height=500)
+
+
+# ================================================================== section charts
+
+ALPHA_LABELS: Dict[str, str] = {"combined_raw": "α Combined (raw)", "phase_raw": "α Phase (raw)",
+                                "combined_cal": "α Combined (cal)", "phase_cal": "α Phase (cal)"}
+_PAIR_SYMBOL = {"phase_raw": ("o", False), "phase_cal": ("o", True), "combined_raw": ("d", False),
+                "combined_cal": ("d", True)}
+_SYMBOLS = ["o", "s", "d", "+", "x"]
+_DASHES = ["solid", "dash", "dot", "dashdot"]
+
+
+def _models(rows: Sequence[Dict[str, Any]]) -> List[Any]:
+    return _distinct([a.get("model_name") for a in rows])
+
+
+def _run_text(a: Dict[str, Any]) -> str:
+    return "%s · %s" % (run_label_text(a), _js_text(a.get("test_date")))
+
+
+def build_alpha_period_spec(rows: Sequence[Dict[str, Any]], view: ViewState) -> Optional[ChartSpec]:
+    active = [k for k in ALPHA_SERIES if k in view.alpha_series]
+    if not rows or not active:
+        return None
+    src = view.period_source
+    show_mean, show_pairs = view.show_mean, view.show_pairs
+    models = _models(rows)
+    series: List[Series] = []
+    for model in models:
+        subset = [a for a in rows if a.get("model_name") == model]
+        color = color_for(model)
+        for si, key in enumerate(active):
+            label = ALPHA_LABELS[key]
+            pts: List[Tuple[float, float, Dict[str, Any]]] = []
+            for a in subset:
+                v, p = extract_y(a, "alpha_" + key), get_period(a, src)
+                if v is not None and p is not None:
+                    pts.append((p, v, a))
+            if not pts:
+                continue
+            pts.sort(key=lambda t: t[0])             # by period, so the line runs left to right
+            name = "%s (%s)" % (model, label) if len(active) > 1 else str(model)
+            plain = not show_mean and not show_pairs
+            symbol, filled = _PAIR_SYMBOL[key] if show_pairs else (_SYMBOLS[si], True)
+            dash = _DASHES[si % len(_DASHES)]
+            series.append(Series(
+                name=name, color=color, x=[t[0] for t in pts], y=[t[1] for t in pts], ids=[t[2].get("id") for t in pts],
+                hover=["%s\nT = %s s\n%s = %s mm²/s" % (_run_text(t[2]), js_to_fixed(t[0], 0), label, fmt_g(t[1], 4))
+                       for t in pts],
+                mode="lines+markers" if plain else "markers", symbol=symbol, filled=filled, size=7, width=1,
+                dash=dash, opacity=0.4 if show_mean else 1.0, legend=not show_mean, legendgroup=str(model)))
+            if show_mean:
+                bins = bin_by_period([(t[0], t[1]) for t in pts])
+                series.append(Series(
+                    name="%s — mean ± std" % name, color=color, x=[b.x for b in bins], y=[b.y for b in bins],
+                    ids=[None] * len(bins),
+                    hover=["%s\nT ≈ %s s\n%s: mean %s ± %s mm²/s\nn = %d" % (
+                        model, js_to_fixed(b.x, 0), label, fmt_g(b.y, 4), fmt_g(b.sd, 3), b.n) for b in bins],
+                    mode="lines+markers", symbol="s", size=10, width=2, dash=dash,
+                    yerr=[b.sd if b.n >= 2 else 0 for b in bins], legendgroup=str(model)))
+        if show_pairs:
+            segs = pair_segments(rows, model, src, "phase_raw" in active and "phase_cal" in active,
+                                 "combined_raw" in active and "combined_cal" in active)
+            if segs:
+                xs: List[float] = []
+                ys: List[float] = []
+                for (x0, y0), (x1, y1) in segs:
+                    xs += [x0, x1, NAN]
+                    ys += [y0, y1, NAN]
+                series.append(Series(name=str(model), color=color, x=xs, y=ys, ids=[None] * len(xs),
+                                     hover=[""] * len(xs), mode="lines", width=1.5, opacity=0.55, legend=False,
+                                     legendgroup=str(model), segments=True))
+    legend_rows = math.ceil(len(models) / 3) * len(active)
+    return ChartSpec(
+        kind="xy", title="%s vs Period — by Model" % ", ".join(ALPHA_LABELS[k] for k in active), xlabel="Period (s)",
+        ylabel="α (mm²/s)", xlog=view.period_log, ylog=view.log_y, series=series, ref_lines=lit_ref_lines(view.lit_alpha),
+        height=max(460, 440 + legend_rows * 20))
+
+
+def _box_spec(rows: Sequence[Dict[str, Any]], title: str, ylabel: str, extract: Any, ylog: bool,
+              ref: Optional[RefLine]) -> ChartSpec:
+    groups: List[Group] = []
+    for m in _models(rows):
+        vals: List[float] = []
+        ids: List[Optional[int]] = []
+        for a in rows:
+            if a.get("model_name") == m:
+                v = extract(a)
+                if v is not None:
+                    vals.append(v)
+                    ids.append(a.get("id"))
+        groups.append(Group(str(m), color_for(m), vals, ids))
+    return ChartSpec(kind="box", title=title, xlabel="Model", ylabel=ylabel, ylog=ylog, groups=groups,
+                     categories=[(g.name, g.name) for g in groups], ref_lines=[ref] if ref else [], height=350)
+
+
+def _alpha_ratio(a: Dict[str, Any]) -> Optional[float]:
+    c, p = a.get("alpha_combined_raw"), a.get("alpha_phase_raw")
+    if c is not None and c > 0 and p is not None and p > 0:
+        return p / c
+    return None
+
+
+def build_heat_loss_specs(rows: Sequence[Dict[str, Any]], view: ViewState) -> List[ChartSpec]:
+    if not rows:
+        return []
+    return [
+        _box_spec(rows, "ln term by Model", "ln(A₁√r₁ / A₂√r₂)", lambda a: extract_y(a, "ln_term"), view.log_y, None),
+        _box_spec(rows, "A₁/A₂ Ratio by Model", "A₁/A₂", lambda a: extract_y(a, "a1_a2_ratio"), view.log_y, None),
+        _box_spec(rows, "α phase/α comb by Model", "α phase / α combined", _alpha_ratio, view.log_y,
+                  RefLine(1, "Ideal", "#888", "dash", 1)),
+    ]
+
+
+def build_phase_specs(rows: Sequence[Dict[str, Any]], view: ViewState) -> List[ChartSpec]:
+    if not rows:
+        return []
+    src = view.period_source
+
+    def make(title: str, key: str, ylabel: str) -> ChartSpec:
+        series: List[Series] = []
+        for m in _models(rows):
+            subset = sorted((a for a in rows if a.get("model_name") == m and get_period(a, src) is not None),
+                            key=lambda a: get_period(a, src))
+            xs = [get_period(a, src) for a in subset]
+            ys = [extract_y(a, key) for a in subset]
+            series.append(Series(
+                name=str(m), color=color_for(m), x=xs, y=[NAN if y is None else y for y in ys],
+                ids=[a.get("id") for a in subset],
+                hover=["%s\nT = %s s\n%s = %s" % (_run_text(a), js_to_fixed(x, 0), ylabel,
+                                                  "null" if y is None else fmt_g(y, 4))
+                       for a, x, y in zip(subset, xs, ys)],
+                mode="lines+markers", size=6, width=1))
+        return ChartSpec(kind="xy", title=title, xlabel="Period (s)", ylabel=ylabel, xlog=view.period_log,
+                         ylog=view.log_y, series=series, height=380)
+
+    return [make("Raw Phase φ vs Period", "raw_phase_phi", "φ (rad)"),
+            make("Raw Time Lag Δt vs Period", "raw_lag_dt", "Δt (s)")]
+
+
+def build_temp_specs(rows: Sequence[Dict[str, Any]], view: ViewState) -> List[ChartSpec]:
+    with_temp = [a for a in rows if a.get("temperature_c") is not None]
+    if len({a["temperature_c"] for a in with_temp}) < 2:
+        return []
+
+    def make(title: str, key: str) -> ChartSpec:
+        series: List[Series] = []
+        for m in _models(with_temp):
+            subset = sorted((a for a in with_temp if a.get("model_name") == m), key=lambda a: a["temperature_c"])
+            pts = [(a["temperature_c"], extract_y(a, key), a) for a in subset]
+            pts = [p for p in pts if p[1] is not None]
+            series.append(Series(
+                name=str(m), color=color_for(m), x=[p[0] for p in pts], y=[p[1] for p in pts], ids=[None] * len(pts),
+                hover=["%s\nT = %s °C\nα = %s mm²/s" % (_run_text(p[2]), fmt_g(p[0], 5), fmt_g(p[1], 4)) for p in pts],
+                mode="lines+markers", size=7, width=1))
+        return ChartSpec(kind="xy", title=title, xlabel="Temperature (°C)", ylabel="α (mm²/s)", series=series,
+                         ref_lines=lit_ref_lines(list(LITERATURE)), height=400)
+
+    return [make("α Combined (raw) vs Temperature", "alpha_combined_raw"),
+            make("α Phase (raw) vs Temperature", "alpha_phase_raw")]
+
+
+def build_corr_spec(rows: Sequence[Dict[str, Any]], view: ViewState) -> Optional[ChartSpec]:
+    if len(rows) < 3:
+        return None
+    matrix = corr_matrix(rows, view.period_source)
+    heat = HeatSpec(list(CORR_LABELS), matrix, [[js_to_fixed(v, 2) for v in line] for line in matrix])
+    return ChartSpec(kind="heatmap", title="Correlation Matrix (Pearson r)", heat=heat, height=560)
+
+
+# The page's CORR_TO_BUILDER: label -> (Y metric, X axis or None)
+_CORR_TO_BUILDER: Dict[str, Tuple[str, Optional[str]]] = {
+    "A₁": ("amplitude_a1", "A₁ (mW)"), "A₂": ("amplitude_a2", "A₂ (mW)"), "A₁/A₂": ("a1_a2_ratio", "A₁/A₂ ratio"),
+    "Period": ("period_t", "Period (s)"), "Δt": ("raw_lag_dt", "Raw Δt (s)"), "φ": ("raw_phase_phi", None),
+    "ln term": ("ln_term", "ln term"), "α comb raw": ("alpha_combined_raw", None),
+    "α phase raw": ("alpha_phase_raw", None), "T (°C)": ("temperature_c", "Temperature (°C)"),
+}
+
+
+def corr_pair_to_builder(row_label: str, col_label: str) -> Optional[Tuple[str, Optional[str]]]:
+    """(Y metric, X axis) a clicked correlation cell opens in the chart builder; None when it cannot be plotted."""
+    a, b = _CORR_TO_BUILDER.get(row_label), _CORR_TO_BUILDER.get(col_label)
+    if a is None or b is None or row_label == col_label:
+        return None
+    if b[1]:
+        return (a[0], b[1])
+    if a[1]:
+        return (b[0], a[1])
+    return None
