@@ -175,3 +175,16 @@ def test_bar_values():
     assert bar_values(dict(row, alpha_phase_cal=1.5e-5))[-1] == ("α phase (cal)", 15.0, "#f39c12")
     assert bar_values({}) == []
     assert bar_values({"alpha_combined_raw": 0, "alpha_phase_raw": -1e-6, "alpha_combined_cal": None}) == []
+
+
+def test_trace_mode_and_annotation_line_breaks():
+    d = json.loads(_fixture("fig_web.json"))
+    assert [t.mode for t in parse_graph(json.dumps(d)).traces] == ["lines", "lines"]
+    d["data"][0]["mode"] = "markers"
+    d["data"][1]["mode"] = "lines+markers"
+    d["layout"]["annotations"][0]["text"] = "<b>Src</b><br>Peak 1<br />x"
+    fig = parse_graph(json.dumps(d))
+    assert [t.mode for t in fig.traces] == ["markers", "lines+markers"]
+    assert fig.annotations[0].text == "Src\nPeak 1\nx"
+    d["data"][0].pop("mode")
+    assert parse_graph(json.dumps(d)).traces[0].mode == "lines"

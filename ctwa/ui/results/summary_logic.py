@@ -160,11 +160,15 @@ def filter_rows(rows: List[Dict[str, Any]], *, model: str = "All", mode: str = "
     return out
 
 
+def _is_num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
 def _avg(rows: List[Dict[str, Any]], key: str) -> str:
     vals = []
     for a in rows:
         v = a.get(key)
-        if v is not None and not isinstance(v, bool) and v > 0:
+        if _is_num(v) and v > 0:   # a stored non-number is skipped (JS would coerce it)
             vals.append(v)
     if not vals:
         return DASH

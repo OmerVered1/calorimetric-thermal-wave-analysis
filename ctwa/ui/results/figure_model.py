@@ -28,6 +28,7 @@ class Trace:
     width: float
     dash: str          # solid | dash | dot | dashdot
     yaxis: str         # "y" | "y2"
+    mode: str = "lines"   # Plotly mode: "lines", "markers", "lines+markers"
 
 
 @dataclass
@@ -86,6 +87,14 @@ def strip_tags(text: Any) -> str:
     if text is None:
         return ""
     return _TAG.sub("", str(text))
+
+
+_BR = re.compile(r"<br\s*/?>", re.I)
+
+
+def _annotation_text(v: Any) -> str:
+    """strip_tags, but <br> becomes a line break."""
+    return strip_tags(_BR.sub("\n", str(v))) if v is not None else ""
 
 
 def _num(v: Any) -> Optional[float]:
@@ -159,6 +168,13 @@ def _floats(v: Any) -> Optional[List[float]]:
     return out
 
 
+def _mode(v: Any) -> str:
+    if not isinstance(v, str):
+        return "lines"
+    lines, markers = "lines" in v, "markers" in v
+    return "lines+markers" if lines and markers else "markers" if markers else "lines"
+
+
 def _trace(tr: Any, skipped: List[str]) -> Optional[Trace]:
     if not isinstance(tr, dict):
         return None
@@ -176,7 +192,7 @@ def _trace(tr: Any, skipped: List[str]) -> Optional[Trace]:
     return Trace(name=str(tr.get("name") or ""), x=x, y=y,
                  color=color if isinstance(color, str) else "#1F5BB0",
                  width=2.0 if width is None else width, dash=_dash(line.get("dash")),
-                 yaxis="y2" if tr.get("yaxis") == "y2" else "y")
+                 yaxis="y2" if tr.get("yaxis") == "y2" else "y", mode=_mode(tr.get("mode")))
 
 
 def _shape(sh: Any) -> Optional[Shape]:
@@ -204,7 +220,7 @@ def _annotation(an: Any) -> Optional[Annotation]:
     color, size, family = font.get("color"), _num(font.get("size")), font.get("family")
     bg = an.get("bgcolor")
     xref, yref, xanchor = an.get("xref"), an.get("yref"), an.get("xanchor")
-    return Annotation(x=x, y=y, text=strip_tags(an.get("text")),
+    return Annotation(x=x, y=y, text=_annotation_text(an.get("text")),
                       xref=xref if isinstance(xref, str) else "x", yref=yref if isinstance(yref, str) else "y",
                       xanchor=xanchor if isinstance(xanchor, str) else "auto",
                       color=color if isinstance(color, str) else "#000000", size=12.0 if size is None else size,

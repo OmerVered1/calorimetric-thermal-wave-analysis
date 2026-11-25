@@ -251,3 +251,10 @@ def test_build_update():
     # a numeric field stored as None stays unchanged when left empty
     assert sl.build_update({"system_lag": None}, {"system_lag": ""}) == {}
     assert sl.build_update({"period_t_resp": None}, {"period_t_resp": "600.5"}) == {"period_t_resp": 600.5}
+
+
+def test_avg_skips_non_numeric_stored_values():
+    rows = [{"model_name": "A", "alpha_combined_raw": "abc"}, {"model_name": "A", "alpha_combined_raw": 8e-6},
+            {"model_name": "A", "alpha_combined_raw": [1]}, {"model_name": "A", "alpha_combined_raw": True}]
+    assert sl.summary_stats(rows)["avg_raw"] == "8.000 mm²/s"
+    assert sl.summary_stats(rows[:1])["avg_raw"] == "—"
