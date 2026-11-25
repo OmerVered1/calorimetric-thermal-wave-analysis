@@ -188,7 +188,7 @@ class ReferenceTable(QWidget):
         if lab is not None:
             lab.setText(text)
         if restore_ms:
-            QTimer.singleShot(restore_ms, lambda: self._clear_status(i, text))
+            QTimer.singleShot(restore_ms, self, lambda: self._clear_status(i, text))   # receiver = self: dies with it
 
     def _clear_status(self, i: int, text: str) -> None:
         if self._status.get(i) == text:

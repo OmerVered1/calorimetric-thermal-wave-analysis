@@ -113,8 +113,14 @@ class PresetsSection(QWidget):
     def _rebuild(self, presets: List[dict]) -> None:
         while self.chip_flow.count():
             item = self.chip_flow.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            w = item.widget()
+            if w is not None:
+                # Detach and delete now: a deleteLater() on a child that is still owned by this section can
+                # outlive the section when the cyclic GC frees it first, and the late DeferredDelete event
+                # then crashes whatever event loop runs next.
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
         self.chips, self.delete_buttons = [], []
         for p in presets:
             chip = theme.set_role(QFrame(), "card")
