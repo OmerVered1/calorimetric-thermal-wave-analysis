@@ -41,6 +41,7 @@ TEXT: Dict[str, str] = {
     "crossCheck": "cross-check",
     "saveCalibrated": "Save as calibrated analysis",
     "saved": "Calibrated analysis saved.",
+    "noPlotSaved": "{n} saved without a plot (the plot could not be fetched in time)",
     "saveFailed": "Save failed",
     "notCalibratable": "Not calibratable: the device lag is greater than or equal to this run’s measured lag, so the corrected lag is not positive. Pick a reference at a closer period, or this run is in the short-period regime where the method breaks down.",
     "errAlphaRequired": "Enter a known α greater than 0 for this reference run.",

@@ -162,6 +162,7 @@ def test_save_without_graph_still_inserts(qapp):
     loader.graphs = {}
     assert run_save(sec, loader)
     assert loader.ops[0][1]["graph_image"] is None
+    assert msgs[-1][1] == "warn" and "saved without a plot" in msgs[-1][0] and msgs[-1][0].startswith(TEXT["saved"])
 
 
 def test_save_failure_message(qapp):

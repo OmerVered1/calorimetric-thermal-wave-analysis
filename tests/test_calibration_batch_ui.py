@@ -110,12 +110,23 @@ def test_save_two_rows(qapp):
         r = by[i]
         assert op[1] == build_calibrated_row(r.a, r.lag, r.result, loader.graphs.get(i),
                                              [10, 11, 12, 13, 14], model)
-    assert msgs[-1][0] == "Saved 2/2 · 3 skipped (not calibratable) · 2 not calibratable · 1 already calibrated"
+    assert msgs[-1][0] == ("Saved 2/2 · 3 skipped (not calibratable) · 2 not calibratable · 1 already calibrated"
+                           " · 1 saved without a plot (the plot could not be fetched in time)")
+    assert msgs[-1][1] == "warn"
+
+
+def test_all_plots_present_no_plot_note(qapp):
+    loader, state, queue, sec, msgs, asked = build()
+    loader.graphs = {1: "G1", 2: "G2"}
+    sec.save_button.click()
+    assert wait_until(lambda: msgs)
+    assert "without a plot" not in msgs[-1][0] and msgs[-1][1] == "ok"
 
 
 def test_had_copies_counts_only_unsaved(qapp):
     """Review item (e): a row with copies that is saved (re-calibrated) is not counted."""
     loader, state, queue, sec, msgs, asked = build()
+    loader.graphs = {1: "G", 2: "G", 3: "G"}
     sec.recal_link.click()
     sec.save_button.click()
     assert wait_until(lambda: msgs)
@@ -125,6 +136,7 @@ def test_had_copies_counts_only_unsaved(qapp):
 def test_failure_on_first_still_writes_second(qapp):
     loader, state, queue, sec, msgs, asked = build()
     loader.fail_at = {0: ("server", "boom")}
+    loader.graphs = {1: "G", 2: "G"}
     sec.save_button.click()
     assert wait_until(lambda: msgs)
     assert len(loader.ops) == 2 and msgs[-1][0].endswith("· #1: boom") and msgs[-1][0].startswith("Saved 1/2")

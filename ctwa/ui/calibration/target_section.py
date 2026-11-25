@@ -495,6 +495,7 @@ class TargetSection(StepCard):
         model = calibration_model_string(s.source, s.fit, s.direct_lag)
 
         def with_graph(graphs) -> None:
+            self._no_plot = graphs.get(target["id"]) is None
             try:
                 row = build_calibrated_row(target, lag, cal, graphs.get(target["id"]), ref_ids, model)
                 started = self._queue.run([WriteOp("insert", None, row, "#%s" % target["id"])], self._saved)
@@ -519,6 +520,8 @@ class TargetSection(StepCard):
         try:
             if summary.failures or summary.aborted:
                 self._on_message("%s: %s" % (TEXT["saveFailed"], failure_text(summary)), "error")
+            elif getattr(self, "_no_plot", False):
+                self._on_message("%s · %s" % (TEXT["saved"], TEXT["noPlotSaved"].format(n=1)), "warn")
             else:
                 self._on_message(TEXT["saved"], "ok")
         finally:

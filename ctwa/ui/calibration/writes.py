@@ -213,7 +213,9 @@ class WriteQueue(QObject):
 
     # ---- graphs ----
     def with_graphs(self, ids: List[int], callback: Callable[[Dict[int, Optional[str]]], None]) -> None:
-        """callback({id: base64 or None}) once every graph is back, or after GRAPH_TIMEOUT_MS."""
+        """callback({id: base64 or None}) once every graph is back (a failed fetch counts as None at once), or
+        when GRAPH_TIMEOUT_MS passes without any graph arriving (the timeout restarts on each result, so
+        big batches are not cut off while the loader is still delivering)."""
         wanted = list(dict.fromkeys(int(i) for i in ids))
         job = {"wanted": set(wanted), "got": {}, "callback": callback, "timer": QTimer(self)}
         if not wanted:
@@ -232,6 +234,8 @@ class WriteQueue(QObject):
                 job["got"][id_] = image
                 if len(job["got"]) == len(job["wanted"]):
                     self._finish_graphs(job)
+                else:
+                    job["timer"].start(GRAPH_TIMEOUT_MS)   # inactivity timeout: progress restarts it
 
     def _finish_graphs(self, job: dict) -> None:
         if job not in self._graph_jobs:
