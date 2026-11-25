@@ -126,7 +126,7 @@ def test_all_plots_present_no_plot_note(qapp):
 def test_had_copies_counts_only_unsaved(qapp):
     """Review item (e): a row with copies that is saved (re-calibrated) is not counted."""
     loader, state, queue, sec, msgs, asked = build()
-    loader.graphs = {1: "G", 2: "G", 3: "G"}
+    loader.graphs = {i: "G" for i in range(1, 10)}
     sec.recal_link.click()
     sec.save_button.click()
     assert wait_until(lambda: msgs)
