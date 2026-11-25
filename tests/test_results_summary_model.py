@@ -144,3 +144,16 @@ def test_check_state_sets_selection(mp):
     m, _ = mp
     assert m.setData(m.index(0, 0), Qt.Checked, Qt.CheckStateRole)
     assert m.selected_ids() == {m.index(0, 0).data(Qt.UserRole + 1)}
+
+
+def test_select_all_and_clear_emit_selection_changed_once(qapp):
+    m = SummaryModel()
+    m.set_rows([row(i) for i in range(1, 8)])
+    n = []
+    m.selection_changed.connect(lambda: n.append(1))
+    m.set_all_shown(True)
+    assert len(m.selected_ids()) == 7 and len(n) == 1
+    m.set_all_shown(True)                       # nothing new: no signal
+    assert len(n) == 1
+    m.clear_selection()
+    assert not m.selected_ids() and len(n) == 2

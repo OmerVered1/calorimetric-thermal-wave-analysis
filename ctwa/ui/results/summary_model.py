@@ -93,10 +93,16 @@ class SummaryModel(QAbstractTableModel):
     def set_selected(self, id, on: bool) -> None:
         if id not in self._index or (id in self._selected) == bool(on):
             return
+        self._set_one(id, on)
+        self.selection_changed.emit()
+
+    def _set_one(self, id, on: bool) -> bool:
+        if id not in self._index or (id in self._selected) == bool(on):
+            return False
         (self._selected.add if on else self._selected.discard)(id)
         r = self._index[id]
         self.dataChanged.emit(self.index(r, 0), self.index(r, 0), [Qt.CheckStateRole])
-        self.selection_changed.emit()
+        return True
 
     def set_shown_provider(self, fn: Callable[[], List[int]]) -> None:
         self._shown_provider = fn
@@ -104,12 +110,12 @@ class SummaryModel(QAbstractTableModel):
     def set_all_shown(self, on: bool) -> None:
         """Select (or clear) the rows that pass the filters; others keep their state."""
         ids = self._shown_provider() if self._shown_provider else [i for i in self.ids() if i not in self._hidden]
-        for i in ids:
-            self.set_selected(i, on)
+        if any([self._set_one(i, on) for i in ids]):      # one signal for the whole batch
+            self.selection_changed.emit()
 
     def clear_selection(self) -> None:
-        for i in list(self._selected):
-            self.set_selected(i, False)
+        if any([self._set_one(i, False) for i in list(self._selected)]):
+            self.selection_changed.emit()
 
     def pending_hide(self, ids: Set[int]) -> None:
         self._hidden = set(ids)
