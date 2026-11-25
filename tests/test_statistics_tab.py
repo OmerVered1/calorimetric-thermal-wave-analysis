@@ -361,9 +361,12 @@ def test_600_rows_build_every_spec_within_budget(made):
 def test_rapid_changes_trigger_one_rebuild(made):
     tab = made()
     tab.flush()
+    assert tab._timer.interval() == 150
+    tab._timer.setInterval(60000)            # deterministic on a loaded machine: the timer cannot fire mid-burst
     n = tab.rebuild_count
     for _ in range(5):
         tab.controls.log_y_chip.click()
-    assert tab.rebuild_count == n                             # nothing built yet
-    QTest.qWait(400)
+    assert tab._timer.isActive() and tab.rebuild_count == n          # nothing built yet
+    tab.flush()
     assert tab.rebuild_count == n + 1
+    assert tab.view().log_y is True
