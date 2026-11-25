@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from functools import cmp_to_key
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QMessageBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QPushButton, QScrollArea, QSplitter, QStackedLayout, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -19,6 +19,7 @@ from ctwa.ui.results.figure_view import FigureView
 from ctwa.ui.results.fmt import (HISTORY_SEARCH_FIELDS, compare_cells, js_str, js_to_fixed, matches_fields,
                                  next_sort, run_label_text)
 from ctwa.ui.results.summary_logic import base_order
+from ctwa.ui.results.undo_bar import UndoBar
 
 __all__ = ["HistoryTab", "HISTORY_COLS"]
 
@@ -138,12 +139,35 @@ class _Table(QTableWidget):
         super().keyPressEvent(e)
 
 
-class HistoryTab(QWidget):
-    open_in_viewer = Signal(int)
+def _ask_delete(title: str, message: str) -> bool:
+    box = QMessageBox(QMessageBox.Warning, title, message)
+    delete = box.addButton("Delete", QMessageBox.DestructiveRole)
+    box.addButton("Cancel", QMessageBox.RejectRole)
+    box.exec()
+    return box.clickedButton() is delete
 
-    def __init__(self, loader, parent: Optional[QWidget] = None) -> None:
+
+class HistoryTab(QWidget):
+    """Delete flow (as the webapp's history page): confirm, hide the row at once, an Undo toast for
+    ``delay_ms``, then ``loader.apply_delete``. Closing the tab (or ``flush_pending()``, which the app calls
+    on quit) sends the pending deletes at once, as the webapp does when the page closes. A delete ends only
+    by its own token-matched write_done / write_failed; the loader's read-error ``failed`` never does."""
+    open_in_viewer = Signal(int)
+    message = Signal(str)
+    login_needed = Signal()
+
+    def __init__(self, loader, parent: Optional[QWidget] = None,
+                 confirm: Optional[Callable[[str, str], bool]] = None, delay_ms: int = 6000) -> None:
         super().__init__(parent)
         self._loader = loader
+        self._confirm = confirm or _ask_delete
+        self._delay_ms = delay_ms
+        self._confirming = False
+        self._sent: Dict[Any, Any] = {}              # id -> token (None while apply_delete is running)
+        self._inflight: Dict[Any, Any] = {}          # token -> id
+        self._done_seen: Dict[Any, int] = {}         # id -> refreshes that still listed it after write_done
+        self._calling: Optional[Any] = None
+        self._early: Optional[Any] = None
         self._rows: List[Dict[str, Any]] = []        # base order, with ln validity
         self._by_id: Dict[Any, Dict[str, Any]] = {}
         self._shown: List[Dict[str, Any]] = []       # what the table lists (search, sort, pending)
@@ -161,6 +185,8 @@ class HistoryTab(QWidget):
         loader.rows_changed.connect(self._on_rows)
         loader.failed.connect(self._on_failed)
         loader.graph_loaded.connect(self._on_graph)
+        loader.write_done.connect(self._on_write_done)
+        loader.write_failed.connect(self._on_write_failed)
         rows = loader.rows()
         if rows:
             self._on_rows(rows)
@@ -184,6 +210,15 @@ class HistoryTab(QWidget):
         split = QSplitter(Qt.Horizontal)
         page_lay.addWidget(split, 1)
         self._bottom = QVBoxLayout()
+        self.error_label = QLabel()
+        theme.set_role(self.error_label, "danger")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        self.undo_bar = UndoBar()
+        self.undo_bar.undone.connect(self._on_undone)
+        self.undo_bar.expired.connect(self._send)
+        self._bottom.addWidget(self.error_label)
+        self._bottom.addWidget(self.undo_bar)
         page_lay.addLayout(self._bottom)
         self._stack.addWidget(self._page)
 
@@ -245,6 +280,7 @@ class HistoryTab(QWidget):
         self.delete_button = QPushButton("Delete")
         theme.set_role(self.delete_button, "danger")
         self.delete_button.setToolTip("Delete Result")
+        self.delete_button.clicked.connect(self.delete_selected)
         btns.addWidget(self.open_button)
         btns.addWidget(self.delete_button)
         btns.addStretch(1)
@@ -350,10 +386,24 @@ class HistoryTab(QWidget):
         self._by_id = {}
         for r in self._rows:
             self._by_id.setdefault(r.get("id"), r)
-        self._pending &= set(self._by_id)
+        self._prune_pending()
         self._loaded = True
         self._failed_text = ""
         self._after_rows(prev)
+
+    def _prune_pending(self) -> None:
+        for id in list(self._pending):
+            if id not in self._by_id:                # gone (deleted, or removed elsewhere)
+                self._pending.discard(id)
+                self.undo_bar.discard(id)            # nothing left to undo or send
+                self._sent.pop(id, None)
+                self._done_seen.pop(id, None)
+            elif id in self._done_seen:              # deleted, yet a refresh still lists it
+                self._done_seen[id] += 1
+                if self._done_seen[id] >= 2:         # the second one is surely after the delete: show it
+                    self._pending.discard(id)
+                    self._sent.pop(id, None)
+                    del self._done_seen[id]
 
     def _after_rows(self, prev_shown_ids: List[Any]) -> None:
         sel = self._selected
@@ -361,11 +411,8 @@ class HistoryTab(QWidget):
         if sel is not None and sel not in self._by_id:
             sel = self._neighbour(sel, prev_shown_ids)
         if sel is None and self._rows:
-            sel = want if want in self._by_id else self._rows[0].get("id")
-            for r in self._rows:    # the first row of what is listed
-                if r.get("id") not in self._pending:
-                    sel = want if want in self._by_id else r.get("id")
-                    break
+            first = next((r.get("id") for r in self._rows if r.get("id") not in self._pending), None)
+            sel = want if want in self._by_id else first
         self._refresh_view(select=sel)
 
     def _neighbour(self, gone: Any, order: List[Any]) -> Optional[int]:
@@ -537,3 +584,92 @@ class HistoryTab(QWidget):
     def _open_clicked(self) -> None:
         if self._selected is not None:
             self.open_in_viewer.emit(self._selected)
+
+    # ---- delete ----
+    def pending_ids(self) -> List[int]:
+        return sorted(self._pending)
+
+    def error_text(self) -> str:
+        return self.error_label.text()
+
+    def _set_error(self, text: str) -> None:
+        self.error_label.setText(text)
+        self.error_label.setVisible(bool(text))
+
+    def delete_selected(self) -> None:
+        id = self._selected
+        row = self._by_id.get(id)
+        if row is None or id in self._pending or self._confirming:
+            return
+        self._confirming = True
+        self.delete_button.setEnabled(False)
+        try:
+            ok = self._confirm("Delete this analysis?", '"%s" (ID %s) will be removed from the database '
+                               'permanently.' % (js_str(row.get("model_name")), js_str(id)))
+        finally:
+            self._confirming = False
+            self.delete_button.setEnabled(True)
+        if not ok or id not in self._by_id or id in self._pending:    # the list may have changed meanwhile
+            return
+        ids = [r.get("id") for r in self._shown]
+        neighbour = None
+        if id in ids:
+            i = ids.index(id)
+            after, before = ids[i + 1:i + 2], (ids[i - 1:i] if i > 0 else [])
+            neighbour = (after or before or [None])[0]
+        self._set_error("")
+        self._pending.add(id)
+        self.undo_bar.add(id, self._delay_ms)
+        self._refresh_view(select=neighbour)
+
+    def flush_pending(self) -> None:
+        """Send every delete still waiting out its Undo window, now."""
+        self.undo_bar.flush()
+
+    def _on_undone(self, id: int) -> None:
+        self._pending.discard(id)
+        self._refresh_view(select=id if id in self._by_id else "keep")
+
+    def _send(self, id: int) -> None:
+        if id in self._sent:                         # never twice
+            return
+        self._sent[id] = None
+        self._calling, self._early = id, None
+        try:
+            token = self._loader.apply_delete(id)
+        finally:
+            self._calling = None
+        if self._early is not None:                  # failed before the token came back; already settled
+            self._early = None
+            return
+        self._sent[id] = token
+        self._inflight[token] = id
+
+    def _on_write_done(self, op: str, token: int, _result) -> None:
+        id = self._inflight.pop(token, None) if op == "delete" else None
+        if id is None:
+            return
+        self._sent.pop(id, None)
+        if id in self._by_id:
+            self._done_seen[id] = 0                  # stays hidden until a refresh no longer lists it
+
+    def _on_write_failed(self, op: str, token: int, kind: str, msg: str) -> None:
+        if op != "delete":
+            return
+        id = self._inflight.pop(token, None)
+        if id is None and self._calling is not None and self._sent.get(self._calling, 0) is None:
+            id, self._early = self._calling, self._calling     # the loader failed inside apply_delete
+        if id is None:
+            return
+        self._sent.pop(id, None)
+        self._pending.discard(id)
+        text = "Failed to delete: %s" % msg
+        self._set_error(text)
+        self.message.emit(text)
+        if kind == "login":
+            self.login_needed.emit()
+        self._refresh_view()
+
+    def closeEvent(self, e) -> None:
+        self.flush_pending()
+        super().closeEvent(e)
