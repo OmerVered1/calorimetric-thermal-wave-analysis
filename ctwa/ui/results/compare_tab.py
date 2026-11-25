@@ -25,6 +25,7 @@ __all__ = ["CompareTab"]
 PROMPT = "Select one or more analyses above to view and compare them."
 NO_WAVEFORM_ANY = "None of the selected analyses has a stored waveform to overlay."
 NO_WAVEFORM_NOTE = "No stored waveform (shown in table only): "
+GRAPH_FAILED_NOTE = "Could not load the graph: "
 
 
 def _dot_icon(color: str) -> QIcon:
@@ -55,10 +56,12 @@ class CompareTab(QWidget):
         self._by_id: Dict[Any, Dict[str, Any]] = {}
         self._graphs: Dict[int, Optional[str]] = {}
         self._requested: Set[int] = set()
+        self._failed: Set[int] = set()           # graph fetch failed (retried on the next request)
         self._no_waveform: List[str] = []
         self._build()
         loader.rows_changed.connect(self._on_rows)
         loader.graph_loaded.connect(self._on_graph)
+        loader.failed.connect(self._on_failed)
         rows = loader.rows()
         if rows:
             self._on_rows(rows)
@@ -77,6 +80,15 @@ class CompareTab(QWidget):
         self._scroll, self._body = scroll, body    # keep the Python wrappers alive
         root = QVBoxLayout(body)
         root.setSpacing(12)
+        self.banner = QFrame()
+        bl0 = QHBoxLayout(self.banner)
+        bl0.setContentsMargins(0, 0, 0, 0)
+        self.banner_label = QLabel()
+        self.banner_label.setWordWrap(True)
+        theme.set_role(self.banner_label, "danger")
+        bl0.addWidget(self.banner_label, 1)
+        self.banner.hide()
+        root.addWidget(self.banner)
         title = QLabel("Analyses Viewer")
         theme.set_role(title, "title")
         root.addWidget(title)
@@ -231,7 +243,8 @@ class CompareTab(QWidget):
         self._by_id = {}
         for r in ordered:
             self._by_id.setdefault(r.get("id"), r)
-        self._requested.clear()              # asked again below: a write may have changed a stored plot
+        self._requested.clear()              # asked again below (plots already held are kept)
+        self.banner.hide()
         self.picker.set_rows(ordered)
         self._request_missing()
         self._update_all()
@@ -243,20 +256,32 @@ class CompareTab(QWidget):
         for i in list(self._graphs):
             if i not in ids:
                 del self._graphs[i]
+        self._failed.intersection_update(ids)
         self._request_missing()
         self._update_all()
 
     def _request_missing(self) -> None:
         for i in self.picker.ids():
-            if i not in self._requested:
+            if i not in self._requested and i not in self._graphs:
                 self._requested.add(i)
                 self._loader.request_graph(i)
 
     def _on_graph(self, id: int, raw) -> None:
         if id not in self.picker.ids():
             return                           # the run was removed while its plot was on the way
-        self._graphs[id] = raw
+        if raw is None:                      # the fetch failed: note it, and ask again next time
+            self._failed.add(id)
+            self._requested.discard(id)
+        else:
+            self._failed.discard(id)
+            self._graphs[id] = raw
         self._update_overlay()
+
+    def _on_failed(self, kind: str, msg: str) -> None:
+        if not self._by_id:
+            return
+        self.banner_label.setText("Can't reach the database: %s" % msg)
+        self.banner.show()
 
     # ---- views ----
     def _update_all(self) -> None:
@@ -271,9 +296,13 @@ class CompareTab(QWidget):
     def _update_overlay(self, *_a) -> None:
         rows = self._rows()
         opts = self.options()
-        runs, boxes, missing, loading = [], [], [], False
+        runs, boxes, missing, loading, failed = [], [], [], False, []
         for i, row in enumerate(rows):
             boxes.append(box_text(row) if opts.guides else None)
+            if row.get("id") in self._failed:
+                runs.append(None)
+                failed.append(label_of(row))
+                continue
             if row.get("id") not in self._graphs:
                 runs.append(None)
                 loading = True
@@ -292,8 +321,10 @@ class CompareTab(QWidget):
         msg = "" if drawn else ("Loading…" if loading else NO_WAVEFORM_ANY if rows else "")
         self._overlay_msg.setText(msg)
         self._overlay_msg.setVisible(bool(msg))
-        self._footnote.setText(NO_WAVEFORM_NOTE + ", ".join(missing) if missing else "")
-        self._footnote.setVisible(bool(missing))
+        notes = ([NO_WAVEFORM_NOTE + ", ".join(missing)] if missing else []) + \
+                ([GRAPH_FAILED_NOTE + ", ".join(failed)] if failed else [])
+        self._footnote.setText("\n".join(notes))
+        self._footnote.setVisible(bool(notes))
 
     def _update_metric(self, *_a) -> None:
         rows = self._rows()
