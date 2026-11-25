@@ -181,6 +181,8 @@ class ResultsLoader(QObject):
                 self.graph_loaded.emit(out["id"], out["result"])
             else:
                 self.failed.emit(out["kind"], out["message"])
+                # not cached (a retry fetches again), but whoever waits for this plot is answered at once
+                self.graph_loaded.emit(out["id"], None)
         else:
             self._on_write(out)
 

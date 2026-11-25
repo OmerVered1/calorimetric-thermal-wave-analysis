@@ -916,6 +916,21 @@ def test_loader_request_graph(make_loader):
     assert got[-1] == (7, "img7") and len(c.calls) == n
 
 
+def test_loader_failed_graph_fetch_resolves_the_waiter_with_none(make_loader):
+    c = ThreadedFakeClient(errors={"select": Offline("down")})
+    loader = make_loader(c)
+    got, failed = [], []
+    loader.graph_loaded.connect(lambda i, img: got.append((i, img)))
+    loader.failed.connect(lambda k, m: failed.append((k, m)))
+    loader.request_graph(7)
+    assert _pump(lambda: got and failed)
+    assert got == [(7, None)] and failed[0][0] == "offline"
+    c.errors = {}
+    loader.request_graph(7)          # the failure was not cached: a retry fetches for real
+    assert _pump(lambda: len(got) == 2)
+    assert got[-1] == (7, "img7")
+
+
 def test_loader_update_forgets_the_cached_graph(make_loader):
     c = ThreadedFakeClient()
     loader = make_loader(c)
