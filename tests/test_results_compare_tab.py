@@ -180,7 +180,7 @@ def test_metric_chart(make):
     tab, _ = make()
     tab.set_ids([1, 2, 3])
     tab.select_metric("alpha_phase_raw")
-    m = tab.metric
+    m = tab.metric_chart
     assert m.dot_values() == [8.5, None, 9.0]
     assert m.text_labels() == ["8.500", "—", "9.000"]
     assert m.dot_labels() == [run_label_text(by_id(i)) for i in (1, 2, 3)]
@@ -241,3 +241,16 @@ def test_overlay_chart_alone(qapp):
     assert c.box_texts() == [run.box_text, "box two"]
     c.set_runs([], opts)
     assert c.curve_names() == [] and c.line_count() == 0 and c.box_texts() == []
+
+
+def test_painting_the_whole_tab_does_not_crash(make, qapp):
+    # a public attribute named like a QWidget/QPaintDevice method (metric, scroll) crashed the first paint
+    from PySide6.QtCore import Signal
+    from PySide6.QtWidgets import QWidget
+    tab, loader = make()
+    tab.set_ids([1, 2, 3])
+    for i in (1, 2, 3):
+        loader.graph_loaded.emit(i, FIXTURE)
+    qapp.processEvents()
+    tab.grab()
+    assert [n for n in vars(tab) if hasattr(QWidget, n) and not isinstance(getattr(QWidget, n), Signal)] == []      # no attribute hides a QWidget member

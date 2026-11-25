@@ -218,3 +218,10 @@ def test_select_id_before_rows_arrive(make):
     tab.select_id(2)
     loader.set_rows(ROWS)
     assert tab.selected_id() == 2
+
+
+def test_no_attribute_hides_a_qwidget_member(make):
+    from PySide6.QtCore import Signal
+    from PySide6.QtWidgets import QWidget
+    tab, _ = make()
+    assert [n for n in vars(tab) if hasattr(QWidget, n) and not isinstance(getattr(QWidget, n), Signal)] == []

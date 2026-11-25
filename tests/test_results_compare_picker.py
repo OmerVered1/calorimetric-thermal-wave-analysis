@@ -174,3 +174,9 @@ def test_title_and_texts(make):
     assert p.title_label.text() == "Select analyses to compare"
     assert p.counter_text() == "0 / 4"
     assert p.edit.placeholderText() == "Add a run: type a name, date, °C or #id"
+
+
+def test_no_attribute_hides_a_qwidget_member(make):
+    from PySide6.QtCore import Signal
+    from PySide6.QtWidgets import QWidget
+    assert [n for n in vars(make()) if hasattr(QWidget, n) and not isinstance(getattr(QWidget, n), Signal)] == []

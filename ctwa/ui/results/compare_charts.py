@@ -108,7 +108,7 @@ class OverlayChart(QWidget):
             for tr in run.traces:
                 item = pg.PlotDataItem(tr.x, tr.y, pen=_pen(tr.color, 2.0, tr.dash), name=tr.name)
                 self._pi.addItem(item)
-                theme.fast_curve(item)   # after addItem: it needs the ViewBox
+                item.setDownsampling(auto=True, method="peak")   # clip-to-view would skew the autorange
                 self._items.append(item)
                 self._curves.append((tr.name, tr.color, tr.dash, list(tr.x), list(tr.y)))
                 mark = "━━" if tr.dash == "solid" else "╌╌"
@@ -134,7 +134,7 @@ class OverlayChart(QWidget):
         self._lines.append((ln, curve))
         if ln.label:
             paper = ln.yref == "paper"
-            t = _text(ln.label, ln.color, (0.5, 1.0) if paper else (0, 0.5))
+            t = _text(ln.label, ln.color, (0.5, 1.0) if paper else (1.0, 0.5))   # inside the plot: the right edge is the data end
             self._vb.addItem(t, ignoreBounds=True)
             self._items.append(t)
             self._labels.append((ln.label, "paper" if paper else "data", ln.x1, 1.02 if paper else ln.y1, t))

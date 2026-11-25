@@ -325,9 +325,10 @@ class HistoryTab(QWidget):
         pl.addWidget(self.details)
         scroll.setWidget(self.panel)
         split.addWidget(scroll)
+        split.setSizes([680, 560])
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
-        self.scroll = scroll
+        self.scroll_area = scroll
 
     @staticmethod
     def _faint(text: str) -> QLabel:

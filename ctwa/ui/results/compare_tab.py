@@ -41,7 +41,7 @@ def _dot_icon(color: str) -> QIcon:
 
 
 def _toggle(text: str, on: bool) -> QPushButton:
-    b = QPushButton(text)
+    b = QPushButton(text.replace("&", "&&"))     # not a mnemonic
     b.setCheckable(True)
     b.setChecked(on)
     theme.set_role(b, "quiet")
@@ -74,6 +74,7 @@ class CompareTab(QWidget):
         outer.addWidget(scroll)
         body = QWidget()
         scroll.setWidget(body)
+        self._scroll, self._body = scroll, body    # keep the Python wrappers alive
         root = QVBoxLayout(body)
         root.setSpacing(12)
         title = QLabel("Analyses Viewer")
@@ -138,8 +139,8 @@ class CompareTab(QWidget):
         mrow.addWidget(self.metric_combo)
         mrow.addStretch(1)
         cl.addLayout(mrow)
-        self.metric = MetricChart()
-        cl.addWidget(self.metric)
+        self.metric_chart = MetricChart()
+        cl.addWidget(self.metric_chart)
 
         trow = QHBoxLayout()
         self.table_button = QPushButton("Comparison table")
@@ -297,7 +298,7 @@ class CompareTab(QWidget):
     def _update_metric(self, *_a) -> None:
         rows = self._rows()
         key = self.metric_combo.currentData()
-        self.metric.set_values([run_label_text(r) for r in rows], [metric_value(key, r) for r in rows],
+        self.metric_chart.set_values([run_label_text(r) for r in rows], [metric_value(key, r) for r in rows],
                                [run_colors(i)[0] for i in range(len(rows))], self.metric_combo.currentText())
 
     def _update_params(self, *_a) -> None:
