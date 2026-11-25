@@ -78,6 +78,8 @@ class ReferenceTable(QWidget):
         self.search.setVisible(bool(lags))
         if key == self._key:
             return
+        if self._editing():
+            return      # keep what the user is typing; _after_edit() catches up
         self._key = key
         self._rebuild(lags)
 
@@ -130,6 +132,17 @@ class ReferenceTable(QWidget):
         self._apply_search()
         self._sync_busy()
 
+    def _editing(self) -> bool:
+        """An alpha cell has focus or holds text that is not the saved value."""
+        for i, e in self.alpha_edits.items():
+            ref = self._ref(i)
+            if e.hasFocus() or (ref is not None and e.text() != self._alpha_text(ref)):
+                return True
+        return False
+
+    def _after_edit(self) -> None:
+        QTimer.singleShot(0, self.refresh)
+
     @staticmethod
     def _alpha_text(ref: dict) -> str:
         a = ref.get("reference_alpha_mm2s")
@@ -176,6 +189,7 @@ class ReferenceTable(QWidget):
         ref = self._ref(i)
         if edit is None or ref is None or i in self._pending:
             return
+        self._after_edit()
         v = parse_number(edit.text())
         old = ref.get("reference_alpha_mm2s")
         if not v > 0 or not math.isfinite(v) or v == old:

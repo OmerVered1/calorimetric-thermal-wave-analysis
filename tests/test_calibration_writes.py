@@ -150,3 +150,25 @@ def test_with_graphs_empty(env):
     out = []
     q.with_graphs([], out.append)
     assert out == [{}]
+
+
+def test_synchronous_failure_does_not_hang(env):
+    """Review item (c): write_failed emitted before apply_* returns its token."""
+    loader, q = env
+    loader.sync_fail_at = {1: ("server", "closed")}
+    s = run(q, updates(3))
+    assert s.done == 2 and s.failures == ["#11: closed"] and len(loader.ops) == 3
+
+
+def test_synchronous_login_failure_aborts(env):
+    loader, q = env
+    loader.sync_fail_at = {0: ("login", "no login")}
+    s = run(q, updates(3))
+    assert s.done == 0 and s.aborted == "no login" and len(loader.ops) == 1
+
+
+def test_summary_lists_written_labels(env):
+    loader, q = env
+    loader.fail_at = {1: ("server", "boom")}
+    s = run(q, updates(3))
+    assert s.succeeded == ["#10", "#12"]

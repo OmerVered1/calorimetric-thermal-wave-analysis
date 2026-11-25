@@ -248,3 +248,39 @@ def test_empty_and_search(qapp):
     _, _, _, _, table, _ = build()
     table.search.setText("#12")
     assert table.shown_ids() == [12]
+
+
+def test_failed_ids_stay_selected(env):
+    """Review item (d): only the ids that were written are cleared from the selection."""
+    loader, state, queue, mark, table, msgs = env
+    loader.fail_at = {1: ("server", "boom")}
+    mark.alpha.setText("5.829")
+    tick(mark, [99, 100, 103])
+    mark.mark_button.click()
+    assert wait_until(lambda: msgs and not queue.busy)
+    assert state.mark_ids == [100]
+
+
+def test_login_abort_keeps_unwritten_ids(env):
+    loader, state, queue, mark, table, msgs = env
+    loader.fail_at = {1: ("login", "no")}
+    mark.alpha.setText("5.829")
+    tick(mark, [99, 100, 103])
+    mark.mark_button.click()
+    assert wait_until(lambda: msgs and not queue.busy)
+    assert state.mark_ids == [100, 103]
+
+
+def test_typed_alpha_survives_rows_changed(env):
+    """Review item (b): a rows_changed while the user types in an alpha cell keeps the text."""
+    loader, state, queue, mark, table, msgs = env
+    edit = table.alpha_edits[10]
+    edit.setText("4.5")
+    rows = [dict(r, raw_lag_dt=r["raw_lag_dt"] + 1) if r["id"] == 11 else r for r in make_rows()]
+    state.set_rows(rows)
+    assert table.alpha_edits[10] is edit and edit.text() == "4.5"
+    # after the edit finishes the table catches up
+    edit.setText("5.829")
+    table._after_edit()
+    assert wait_until(lambda: table.alpha_edits[10] is not edit)
+    assert table.alpha_edits[10].text() == "5.829"

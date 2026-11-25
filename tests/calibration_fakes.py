@@ -36,6 +36,7 @@ class FakeLoader(QObject):
         self.refreshes = 0
         self.fail_at: Dict[int, Tuple[str, str]] = {}   # op index -> (kind, message)
         self.hang_at: Set[int] = set()        # op indexes that never report back
+        self.sync_fail_at: Dict[int, Tuple[str, str]] = {}   # op index -> failure emitted before apply_* returns
         self.graphs: Dict[int, Optional[str]] = {}
         self.silent_graphs = False            # request_graph never answers
         self.requested_graphs: List[int] = []
@@ -66,6 +67,10 @@ class FakeLoader(QObject):
         self._token += 1
         token = self._token
         if index in self.hang_at:
+            return token
+        if index in self.sync_fail_at:
+            kind, message = self.sync_fail_at[index]
+            self.write_failed.emit(op, token, kind, message)
             return token
         if index in self.fail_at:
             kind, message = self.fail_at[index]

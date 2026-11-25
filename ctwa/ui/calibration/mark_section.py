@@ -211,4 +211,5 @@ class MarkSection(QWidget):
         if summary.aborted:
             text += " · " + TEXT["writtenOf"].format(n=summary.done, m=summary.total)
         self._on_message(text, "ok" if not summary.failures and not summary.aborted else "warn")
-        self._state.mark_ids = []
+        # only the runs that were written leave the selection; failed and unsent ones stay ticked
+        self._state.mark_ids = [i for i in self._state.mark_ids if "#%s" % i not in summary.succeeded]

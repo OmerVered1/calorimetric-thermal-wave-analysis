@@ -35,6 +35,7 @@ class WriteSummary:
     total: int
     failures: List[str] = field(default_factory=list)
     aborted: Optional[str] = None
+    succeeded: List[str] = field(default_factory=list)   # labels of the ops that were written
 
 
 class WriteQueue(QObject):
@@ -50,6 +51,9 @@ class WriteQueue(QObject):
         self._token: Optional[int] = None
         self._done = 0
         self._failures: List[str] = []
+        self._ok: List[str] = []
+        self._starting = False
+        self._early: List[tuple] = []
         self._on_done: Optional[Callable[[WriteSummary], None]] = None
         self._watchdog = QTimer(self)
         self._watchdog.setSingleShot(True)
@@ -74,6 +78,7 @@ class WriteQueue(QObject):
         self._index = 0
         self._done = 0
         self._failures = []
+        self._ok = []
         self._on_done = on_done
         self._start_next()
         return True
@@ -84,6 +89,22 @@ class WriteQueue(QObject):
             return
         op = self._ops[self._index]
         loader = self._loader
+        self._starting, self._early = True, []
+        try:
+            token = self._call(loader, op)
+        finally:
+            self._starting = False
+        self._token = token
+        self._watchdog.start(WATCHDOG_MS)
+        # the loader may have reported this op before it returned the token (a closed path)
+        early, self._early = self._early, []
+        for which, args in early:
+            if self._token != args[1]:
+                continue
+            (self._on_write_done if which == "done" else self._on_write_failed)(*args)
+
+    @staticmethod
+    def _call(loader, op: WriteOp) -> int:
         if op.kind == "update":
             token = loader.apply_update(op.id, op.data)
         elif op.kind == "insert":
@@ -96,8 +117,7 @@ class WriteQueue(QObject):
             token = loader.apply_preset_delete(op.id)
         else:
             raise ValueError("unknown write kind %r" % op.kind)
-        self._token = token
-        self._watchdog.start(WATCHDOG_MS)
+        return token
 
     def _advance(self) -> None:
         self._watchdog.stop()
@@ -107,12 +127,19 @@ class WriteQueue(QObject):
         self._start_next()
 
     def _on_write_done(self, op: str, token: int, result) -> None:
+        if self._starting:
+            self._early.append(("done", (op, token, result)))
+            return
         if not self._busy or token != self._token:
             return
+        self._ok.append(self._ops[self._index].label)
         self._done += 1
         self._advance()
 
     def _on_write_failed(self, op: str, token: int, kind: str, message: str) -> None:
+        if self._starting:
+            self._early.append(("failed", (op, token, kind, message)))
+            return
         if not self._busy or token != self._token:
             return
         self._failures.append("%s: %s" % (self._ops[self._index].label, message))
@@ -132,7 +159,7 @@ class WriteQueue(QObject):
         self._advance()
 
     def _finish(self, aborted: Optional[str]) -> None:
-        summary = WriteSummary(self._done, len(self._ops), list(self._failures), aborted)
+        summary = WriteSummary(self._done, len(self._ops), list(self._failures), aborted, list(self._ok))
         cb = self._on_done
         try:
             if cb is not None:
