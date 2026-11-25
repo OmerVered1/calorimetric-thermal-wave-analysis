@@ -148,30 +148,40 @@ def test_2450_sweep_settings_match_the_old_window():
     ]
 
 
-def test_2602b_output_off_and_auto_zero_go_to_the_chosen_channel():
+@pytest.mark.parametrize("model", ["2602B", "2611A"])
+def test_tsp_models_never_send_output_off_or_auto_zero(model):
+    """Like the 2602B and 2611A programs this app replaced (Nov 2026: High-Z
+    with Auto zero Off/Once froze a sweep at Start on the lab 2602B)."""
+    s = SMU.create(model, simulate=True); s.connect()
+    sent = recorder(s)
+    with pytest.raises(NotSupported):
+        s.set_output_off_mode("High-Z")
+    with pytest.raises(NotSupported):
+        s.set_auto_zero("ONCE")
+    assert sent == []
+
+
+def test_output_state_read_does_not_wait_for_a_busy_instrument():
+    """The window reads the output state while a sweep holds the instrument;
+    a reply that takes the full VISA timeout must not freeze the window."""
+    import threading
+    import time
     s = SMU.create("2602B", simulate=True); s.connect()
-    sent = recorder(s)
-    s.set_output_off_mode("High-Z", channel="b")
-    s.set_auto_zero("once", channel="b")
-    s.set_output_off_mode("Normal")
-    s.set_auto_zero("ON")
-    assert sent == [
-        "smub.source.offmode = smub.OUTPUT_HIGH_Z",
-        "smub.measure.autozero = smub.AUTOZERO_ONCE",
-        "smua.source.offmode = smua.OUTPUT_NORMAL",
-        "smua.measure.autozero = smua.AUTOZERO_AUTO",
-    ]
+    held = threading.Event(); release = threading.Event()
 
+    def busy():
+        with s._lock:          # a sweep's instrument call, stuck waiting on a reply
+            held.set()
+            release.wait(5)
 
-def test_2611a_output_off_and_auto_zero():
-    s = SMU.create("2611A", simulate=True); s.connect()
-    sent = recorder(s)
-    s.set_output_off_mode("Zero")
-    s.set_auto_zero("OFF")
-    assert sent == [
-        "smua.source.offmode = smua.OUTPUT_ZERO",
-        "smua.measure.autozero = smua.AUTOZERO_OFF",
-    ]
+    t = threading.Thread(target=busy); t.start()
+    try:
+        assert held.wait(2)
+        t0 = time.monotonic()
+        assert s.output_enabled("a") is False
+        assert time.monotonic() - t0 < 0.5
+    finally:
+        release.set(); t.join()
 
 
 @pytest.mark.parametrize("model,expected", [

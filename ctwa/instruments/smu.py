@@ -357,7 +357,16 @@ def _serialised(fn):
 
 # Wrap every public method that reaches the driver. Properties, static helpers
 # and the constructor are left alone.
+#
+# output_enabled only reads the state every driver remembers; it never talks
+# to the instrument. It stays unlocked so the window (Output buttons, Live R)
+# never waits behind a sweep's instrument call: a reply that takes the full
+# VISA timeout used to freeze the whole window ("Not responding").
+_UNLOCKED = {"output_enabled"}
+
 for _name, _attr in list(vars(SMU).items()):
     if _name.startswith("_") or not callable(_attr) or isinstance(_attr, (staticmethod, classmethod)):
+        continue
+    if _name in _UNLOCKED:
         continue
     setattr(SMU, _name, _serialised(_attr))

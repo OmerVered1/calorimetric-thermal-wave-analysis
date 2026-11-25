@@ -25,26 +25,20 @@ import equivalence_scenarios as S  # noqa: E402
 GOLDEN = json.loads((pathlib.Path(__file__).parent / "golden" / "original_windows.json").read_text())
 CASES = [(m, s) for m in ("2450", "6430", "2602B", "2611A") for s in S.SCENARIOS]
 
-# Deliberate differences from the original windows, all in sweeps, all sent
-# just before the output turns on:
+# The one deliberate difference from the original windows, in sweeps, sent
+# just before the output turns on: no window sent the Source or Measure "Range"
+# choice. The merged window sends both, Auto included: the source range for the
+# sourced quantity, the measure range for the measured one (current, when
+# sourcing voltage), so a sweep no longer inherits a fixed range left by the
+# Multimeter tab. Every model resets on connect (smua.reset() / *RST), which
+# leaves auto-range on, so at Auto these repeat what the reset already set.
 #
-# 1. The 2602B and 2611A windows showed "Output Off" and "Auto Zero" but never
-#    sent them. The merged window sends both, as the 6430 window always did.
-# 2. No window sent the Source or Measure "Range" choice. The merged window
-#    sends both, Auto included: the source range for the sourced quantity, the
-#    measure range for the measured one (current, when sourcing voltage), so a
-#    sweep no longer inherits a fixed range left by the Multimeter tab.
-#
-# Every model resets on connect (smua.reset() / *RST), which leaves Output off
-# Normal, auto-zero on and auto-range on. At their defaults these commands
-# repeat that, so a run at default settings is taken exactly as the old ones were.
+# The 2602B and 2611A windows showed "Output Off" and "Auto Zero" but never sent
+# them. 1.0.2 sent both; on the lab 2602B a sweep at High-Z with Auto zero
+# Off/Once froze at Start, so the merged window is back to never sending them.
 OUTPUT_ON = {"2450": "OUTP ON", "6430": ":OUTP ON",
              "2602B": "smua.source.output = smua.OUTPUT_ON",
              "2611A": "smua.source.output = smua.OUTPUT_ON"}
-TSP_OFF_AND_ZERO = [
-    "smua.source.offmode = smua.OUTPUT_NORMAL",
-    "smua.measure.autozero = smua.AUTOZERO_AUTO",
-]
 AUTO_CURRENT_RANGE = {"2450": "SENS:CURR:RANG:AUTO ON", "6430": ":SENS:CURR:RANG:AUTO ON",
                       "2602B": "smua.measure.autorangei = smua.AUTORANGE_ON",
                       "2611A": "smua.measure.autorangei = smua.AUTORANGE_ON"}
@@ -56,9 +50,8 @@ AUTO_SOURCE_VOLTAGE_RANGE = {"2450": "SOUR:VOLT:RANG:AUTO ON", "6430": ":SOUR:VO
 def expected(model, scenario):
     sent = list(GOLDEN[model][scenario])
     if scenario.startswith("sweep"):
-        added = TSP_OFF_AND_ZERO if model in ("2602B", "2611A") else []
         i = sent.index(OUTPUT_ON[model])
-        sent[i:i] = added + [AUTO_SOURCE_VOLTAGE_RANGE[model], AUTO_CURRENT_RANGE[model]]
+        sent[i:i] = [AUTO_SOURCE_VOLTAGE_RANGE[model], AUTO_CURRENT_RANGE[model]]
     return sent
 
 
@@ -107,28 +100,18 @@ def test_merged_window_sends_what_the_original_sent(app, model, scenario):
 
 
 @pytest.mark.parametrize("model", ["2602B", "2611A"])
-def test_output_off_and_auto_zero_are_shown_and_sent(app, model):
+def test_output_off_and_auto_zero_are_hidden_and_never_sent(app, model):
     w = _window(model)
     try:
-        assert w.inst_settings.off_row.isVisible()
-        assert w.measure_settings.auto_zero_row.isVisible()
-        offered = [w.inst_settings.output_off_mode.itemText(i)
-                   for i in range(w.inst_settings.output_off_mode.count())]
-        assert offered == ["Normal", "Zero", "High-Z"]
-
-        channel = "b" if model == "2602B" else "a"
-        w._set_channel(channel)
+        assert not w.inst_settings.off_row.isVisible()
+        assert not w.measure_settings.auto_zero_row.isVisible()
+        # An experiment saved by 1.0.2 / 2.0.0-rc1 can still load these values
+        # into the hidden boxes; they must not reach the instrument.
         w.inst_settings.output_off_mode.setCurrentText("High-Z")
         w.measure_settings.auto_zero.setCurrentText("Once")
         sent = _sweep(app, w)
-        smu = f"smu{channel}"
-        on = sent.index(f"{smu}.source.output = {smu}.OUTPUT_ON")
-        assert sent[on - 4:on] == [
-            f"{smu}.source.offmode = {smu}.OUTPUT_HIGH_Z",
-            f"{smu}.measure.autozero = {smu}.AUTOZERO_ONCE",
-            f"{smu}.source.autorangev = {smu}.AUTORANGE_ON",
-            f"{smu}.measure.autorangei = {smu}.AUTORANGE_ON",
-        ]
+        assert sent, "the sweep sent nothing"
+        assert not [c for c in sent if "offmode" in c or "autozero" in c]
     finally:
         w.close()
         app.processEvents()

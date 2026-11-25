@@ -69,9 +69,9 @@ MODELS: Dict[str, Capabilities] = {
             ("100 nA", 100e-9), ("1 µA", 1e-6), ("10 µA", 10e-6), ("100 µA", 100e-6),
             ("1 mA", 1e-3), ("10 mA", 10e-3), ("100 mA", 100e-3), ("1 A", 1), ("3 A", 3),
         ),
-        auto_zero=True,
-        output_off_mode=True,
-        output_off_modes=("Normal", "Zero", "High-Z"),
+        # No auto_zero / output_off_mode: like the 2602B and 2611A programs this
+        # app replaced, neither is sent. 1.0.2 sent them, and on the lab 2602B
+        # a sweep at High-Z with Auto zero Off/Once froze at Start (Nov 2026).
     ),
     "2611A": Capabilities(
         model="2611A",
@@ -86,9 +86,9 @@ MODELS: Dict[str, Capabilities] = {
             ("100 nA", 100e-9), ("1 µA", 1e-6), ("10 µA", 10e-6), ("100 µA", 100e-6),
             ("1 mA", 1e-3), ("10 mA", 10e-3), ("100 mA", 100e-3), ("1 A", 1), ("1.5 A", 1.5),
         ),
-        auto_zero=True,
-        output_off_mode=True,
-        output_off_modes=("Normal", "Zero", "High-Z"),
+        # No auto_zero / output_off_mode: like the 2602B and 2611A programs this
+        # app replaced, neither is sent. 1.0.2 sent them, and on the lab 2602B
+        # a sweep at High-Z with Auto zero Off/Once froze at Start (Nov 2026).
     ),
 }
 

@@ -887,7 +887,7 @@ class InstrumentSettingsWidget(QGroupBox):
         self.guard_mode = QCheckBox("Guard mode (triax)")
         self._guard_row = FormRow(form, "", self.guard_mode)
 
-        # Output off state (6430, 2602B, 2611A)
+        # Output off state (6430)
         self.output_off_mode = QComboBox()
         self.output_off_mode.addItems(["Normal", "Zero", "High-Z"])
         self.output_off_mode.setMinimumWidth(FIELD_WIDTH)
@@ -4586,13 +4586,17 @@ class MainWindow(QMainWindow):
         _safe("Mode", lambda: f"# Mode: {'SIMULATION' if (self.smu and getattr(self.smu, 'simulate', False)) else 'HARDWARE'}")
         _safe("Channel", lambda: f"# Channel: {self.current_channel.upper()}")
         _safe("Source", lambda: f"# Source: function={ss.function} mode={ss.mode.currentText()} range={ss.range.currentText()} compliance={ss.compliance.value()}")
-        _safe("Sense", lambda: f"# Sense: {inst.sense}  OutputOff: {inst.output_off_mode.currentText()}")
+        _safe("Sense", lambda: f"# Sense: {inst.sense}  OutputOff: "
+              + (inst.output_off_mode.currentText() if self.smu and self.smu.caps.output_off_mode
+                 else "not set (instrument default)"))
         _safe(
             "Measure",
             lambda: (
                 "# Measure: "
                 + (",".join(name for name, cb in [("V", ms.measure_v), ("I", ms.measure_i), ("R", ms.measure_r), ("P", ms.measure_p)] if cb.isChecked()) or "-")
-                + f"  range={ms.measure_range.currentText()}  auto_zero={ms.auto_zero.currentText()}"
+                + f"  range={ms.measure_range.currentText()}  auto_zero="
+                + (ms.auto_zero.currentText() if self.smu and self.smu.caps.auto_zero
+                   else "not set (instrument default)")
             ),
         )
         _safe("Timing", lambda: f"# Timing: points={ts.points.value()} repeat={ts.repeat.value()} delay={ts.delay.value()}s nplc={ts.nplc.value()} step_size={ts.step_size.value()}s auto_delay={ts.auto_delay_check.isChecked()}")

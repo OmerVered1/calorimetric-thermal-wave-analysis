@@ -43,9 +43,9 @@ class Capabilities:
     # Optional hardware features. The UI shows a control only when True.
     terminal_select: bool = False     # 2450 front/rear jacks
     high_capacitance: bool = False    # 2450 SOUR:VOLT:HCAP
-    auto_zero: bool = False           # all four models
+    auto_zero: bool = False           # 2450 / 6430 (2602B, 2611A: never sent)
     guard_mode: bool = False          # 6430 triax guard
-    output_off_mode: bool = False     # 6430 / 2602B / 2611A behaviour when output turns off
+    output_off_mode: bool = False     # 6430: behaviour when output turns off
     nplc: bool = True                 # integration time control
     default_simulation_resistance: float = 1000.0
     # |I| at or below which R = V/I is not computed (zero-crossings of a sweep
