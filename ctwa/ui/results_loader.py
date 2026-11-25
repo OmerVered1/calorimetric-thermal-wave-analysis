@@ -8,8 +8,12 @@ Writes (``apply_*``) each return an int token and run one at a time, in call ord
 the loader emits ``write_done(op, token, result)`` (or ``write_failed(op, token, kind, message)``),
 then refreshes. ``op`` is "insert" | "update" | "delete" | "preset_insert" | "preset_delete".
 
-``failed(kind, message)``: kind is "login" (NotLoggedIn), "offline", "server" (ServerError) or
-"error" (anything else). Results come back by queued signals, and emits are guarded against a
+A batch of writes causes one refresh: it runs when no further write is queued, and also after a
+failed write (an insert that timed out may still have been committed).
+
+``failed(kind, message)`` reports rows / presets refresh errors only: kind is "login" (NotLoggedIn),
+"offline", "server" (ServerError) or "error" (anything else). A plot fetch that fails is answered by
+``graph_loaded(id, None)``; a write that fails by ``write_failed`` (kind "login" included). Results come back by queued signals, and emits are guarded against a
 loader deleted while a job ran (the same pattern as SavePanel and UploadManager).
 """
 from __future__ import annotations
@@ -84,6 +88,8 @@ class ResultsLoader(QObject):
         self._busy = {"rows": False, "presets": False}
         self._dirty = {"rows": False, "presets": False}
         self._next_token = 0
+        self._writes_left = 0          # writes started and not yet answered
+        self._refresh_after = set()    # what to fetch once the last queued write is answered
 
     # ---- read access ----
     @property
@@ -133,6 +139,7 @@ class ResultsLoader(QObject):
         if self._closed:
             self.write_failed.emit(op, token, "error", "The results loader is closed")
             return token
+        self._writes_left += 1
         self._pool.start(_Job(self._signals, "write", fn, {"op": op, "token": token, "id": row_id}))
         return token
 
@@ -172,15 +179,13 @@ class ResultsLoader(QObject):
                 self.failed.emit(out["kind"], out["message"])
             if self._dirty[what]:
                 self._dirty[what] = False
-                if out["ok"]:
-                    self._refresh(what)
+                self._refresh(what)      # even after a failure: the request came after that fetch began
         elif what == "graph":
             self._graphs_pending.discard(out["id"])
             if out["ok"]:
                 self._graphs[out["id"]] = out["result"]
                 self.graph_loaded.emit(out["id"], out["result"])
             else:
-                self.failed.emit(out["kind"], out["message"])
                 # not cached (a retry fetches again), but whoever waits for this plot is answered at once
                 self.graph_loaded.emit(out["id"], None)
         else:
@@ -188,18 +193,23 @@ class ResultsLoader(QObject):
 
     def _on_write(self, out: dict) -> None:
         op, token = out["op"], out["token"]
+        self._writes_left = max(0, self._writes_left - 1)
+        # a failed write may still have been committed (a timeout): look again either way
+        self._refresh_after.add("presets" if op.startswith("preset") else "rows")
         if not out["ok"]:
             self.write_failed.emit(op, token, out["kind"], out["message"])
-            if out["kind"] == "login":
-                self.failed.emit("login", out["message"])
-            return
-        if out.get("id") is not None and op in ("update", "delete"):
-            self._graphs.pop(int(out["id"]), None)   # the plot may have changed
-        self.write_done.emit(op, token, out["result"])
-        self._refresh("presets" if op.startswith("preset") else "rows")
+        else:
+            if out.get("id") is not None and op in ("update", "delete"):
+                self._graphs.pop(int(out["id"]), None)   # the plot may have changed
+            self.write_done.emit(op, token, out["result"])
+        if self._writes_left == 0:     # the last queued write: one refresh for the whole batch
+            wanted, self._refresh_after = self._refresh_after, set()
+            for which in ("rows", "presets"):
+                if which in wanted:
+                    self._refresh(which)
 
     def shutdown(self, timeout_ms: int = 500) -> None:
         """Stop accepting work and wait a moment for what is running."""
         self._closed = True
         self._pool.waitForDone(timeout_ms)
-        self._graph_pool.waitForDone(timeout_ms)
+        self._graph_pool.waitForDone(200)   # a plot in flight is not worth holding the close up

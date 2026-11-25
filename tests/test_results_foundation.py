@@ -885,7 +885,7 @@ def test_loader_failed_write_is_reported_and_next_write_still_runs(make_loader):
     assert _pump(lambda: wf and wd)
     assert wf[0][:3] == ("update", t1, "login") and wf[0][3]
     assert wd == [("delete", t2)]
-    assert ("login", wf[0][3]) in failed
+    assert failed == []     # a write failure is reported by write_failed only
 
 
 @pytest.mark.parametrize("exc,kind", [(Offline("x"), "offline"), (ServerError(400, "bad"), "server"),
@@ -923,8 +923,9 @@ def test_loader_failed_graph_fetch_resolves_the_waiter_with_none(make_loader):
     loader.graph_loaded.connect(lambda i, img: got.append((i, img)))
     loader.failed.connect(lambda k, m: failed.append((k, m)))
     loader.request_graph(7)
-    assert _pump(lambda: got and failed)
-    assert got == [(7, None)] and failed[0][0] == "offline"      # None = the fetch FAILED
+    assert _pump(lambda: got)
+    _pump(lambda: False, 0.1)
+    assert got == [(7, None)] and failed == []      # None = the fetch FAILED (graph_loaded only)
     c.errors = {}
     loader.request_graph(7)          # the failure was not cached: a retry fetches for real
     assert _pump(lambda: len(got) == 2)
@@ -1008,3 +1009,53 @@ def test_webapp_login_refreshes_the_loader(qapp, monkeypatch):
         win._webapp_login()
     finally:
         win.close()
+
+
+def _row_fetches(c):
+    return len([x for x in c.calls if x[0] == "select" and x[1] != "alpha_presets"])
+
+
+def test_loader_a_batch_of_writes_causes_one_refresh(make_loader):
+    c = ThreadedFakeClient(delay=0.02)
+    loader = make_loader(c)
+    done = []
+    loader.write_done.connect(lambda *a: done.append(a))
+    for i in range(6):
+        loader.apply_update(i + 1, {"model_name": "x"})
+    assert _pump(lambda: len(done) == 6)
+    _pump(lambda: False, 0.5)
+    assert _row_fetches(c) == 1
+
+
+def test_loader_failed_write_still_refreshes(make_loader):
+    c = ThreadedFakeClient(errors={"update": Offline("timed out")})
+    loader = make_loader(c)
+    wf, rows = [], []
+    loader.write_failed.connect(lambda *a: wf.append(a))
+    loader.rows_changed.connect(rows.append)
+    loader.apply_update(1, {"model_name": "x"})
+    assert _pump(lambda: wf and rows)
+
+
+def test_loader_refresh_requested_during_a_failing_fetch_runs_again(make_loader):
+    c = ThreadedFakeClient(delay=0.1, errors={"select": Offline("down")})
+    loader = make_loader(c)
+    failed = []
+    loader.failed.connect(lambda k, m: failed.append(k))
+    loader.refresh()
+    _pump(lambda: False, 0.03)
+    loader.refresh()                     # in flight: remembered
+    assert _pump(lambda: failed)         # the first fetch failed ...
+    c.errors = {}                        # ... the network is back for the re-run
+    assert _pump(lambda: loader.rows() == [{"id": 2}, {"id": 1}])
+    assert set(failed) == {"offline"}
+
+
+def test_loader_shutdown_waits_briefly_for_plots_and_longer_for_writes(make_loader):
+    loader = make_loader(ThreadedFakeClient())
+    waits = {}
+    real_w, real_g = loader._pool.waitForDone, loader._graph_pool.waitForDone
+    loader._pool.waitForDone = lambda ms=-1: waits.setdefault("write", ms) and real_w(ms)
+    loader._graph_pool.waitForDone = lambda ms=-1: waits.setdefault("plot", ms) and real_g(ms)
+    loader.shutdown(3000)
+    assert waits == {"write": 3000, "plot": 200}
