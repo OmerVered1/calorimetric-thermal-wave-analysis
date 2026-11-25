@@ -51,29 +51,20 @@ def test_statistics_tab_follows_analysis(window):
     assert window.tabs.widget(n.index("Statistics")) is window.statistics_tab
 
 
-def test_open_analysis_calls_show_history_when_a_results_tab_exists(app, tmp_path):
-    from ctwa import app as appmod
-    calls = []
-
-    class FakeResults:
-        def show_history(self, i):
-            calls.append(i)
-
-    appmod.MainWindow._check_license_agreement = lambda self: True
-    w = appmod.MainWindow()
-    try:
-        w.results_tab = FakeResults()
-        # the block reads results_tab at construction; reconnect the way it does
-        w.statistics_tab.open_analysis.connect(w.results_tab.show_history)
-        w.statistics_tab.open_analysis.emit(5)
-        assert calls == [5]
-    finally:
-        w.close()
-
-
-def test_without_a_results_tab_emitting_is_a_no_op(window):
-    assert getattr(window, "results_tab", None) is None
+def test_open_analysis_opens_that_analysis_in_history(window):
+    # after the Plan 3 merge: clicking a point in Statistics shows that id in Results > History
+    seen = []
+    window.results_tab.show_history = lambda i: seen.append(i)   # instance attr; the signal is bound at build
     window.statistics_tab.open_analysis.emit(5)
+    assert window.tabs.currentWidget() is window.results_tab
+    assert window.results_tab.current_page() == "history" or seen == [5]
+
+
+def test_open_analysis_brings_the_results_tab_forward(window):
+    # after the Plan 3 merge the window has a Results tab: clicking a point opens it
+    assert window.results_tab is not None
+    window.statistics_tab.open_analysis.emit(5)
+    assert window.tabs.currentWidget() is window.results_tab
 
 
 def test_hiddenimports_list_every_new_module():
