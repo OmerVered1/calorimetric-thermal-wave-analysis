@@ -7,8 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from ctwa.analysis.jsmath import (JS_WHITESPACE, js_number_to_string, js_to_fixed, js_to_precision,
-                                  js_truthy)
+from ctwa.analysis.jsmath import JS_WHITESPACE, js_to_fixed, js_to_precision, js_truthy
 from ctwa.analysis.lag_fit import describe_lag_model
 from ctwa.results.helpers import format_alpha, row_matches, sort_key_test_date, with_ln_validity
 from ctwa.ui.results.fmt import js_str

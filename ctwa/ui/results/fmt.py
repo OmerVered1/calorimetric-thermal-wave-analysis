@@ -9,10 +9,9 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
-from ctwa.analysis.jsmath import (JS_WHITESPACE, js_number, js_number_to_string, js_round,
-                                  js_to_fixed, js_to_precision)
+from ctwa.analysis.jsmath import JS_WHITESPACE, js_number, js_number_to_string, js_to_fixed, js_to_precision
 from ctwa.results.helpers import run_label, sort_key_test_date
 
 __all__ = ["js_to_fixed", "js_to_precision", "js_number", "compare_cells", "next_sort", "run_label_text",
