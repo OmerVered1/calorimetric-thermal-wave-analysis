@@ -85,6 +85,17 @@ class StatisticsSummary(QTableWidget):
 
     # ------------------------------------------------------------------ data
     def set_summary(self, rows: Sequence[SummaryRow]) -> None:
+        self.setUpdatesEnabled(False)
+        try:
+            self._fill(rows)
+        finally:
+            self.setUpdatesEnabled(True)
+        self._frozen.setColumnWidth(0, self.columnWidth(0))
+        self._fit_frozen()
+
+    def _fill(self, rows: Sequence[SummaryRow]) -> None:
+        hh = self.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.Interactive)       # sizing per insert is the slow part
         self.setRowCount(len(rows))
         for r, s in enumerate(rows):
             name = QTableWidgetItem(str(s.model))
@@ -103,8 +114,6 @@ class StatisticsSummary(QTableWidget):
                     self.setItem(r, col, it)
                     col += 1
         self.resizeColumnsToContents()
-        self._frozen.setColumnWidth(0, self.columnWidth(0))
-        self._fit_frozen()
 
     @staticmethod
     def _bold(f):

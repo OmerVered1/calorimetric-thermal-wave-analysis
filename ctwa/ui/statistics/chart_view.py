@@ -1,13 +1,14 @@
 """ChartView: draws any ChartSpec with pyqtgraph, with hover, click, lasso/box selection, legend bar and export."""
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QPen, QPolygonF
-from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QGraphicsPolygonItem, QHBoxLayout, QPushButton, QToolTip,
+from PySide6.QtWidgets import (QAbstractScrollArea, QApplication, QButtonGroup, QFileDialog, QGraphicsPolygonItem, QHBoxLayout, QMessageBox, QPushButton, QToolTip,
                                QVBoxLayout, QWidget)
 
 from ctwa import theme
@@ -84,6 +85,24 @@ class _SelectViewBox(pg.ViewBox):
             super().mouseClickEvent(ev)
 
 
+class _PagePlotWidget(pg.PlotWidget):
+    """PlotWidget whose wheel scrolls the page; Ctrl+wheel zooms the chart."""
+
+    def wheelEvent(self, ev):
+        if ev.modifiers() & Qt.ControlModifier:
+            super().wheelEvent(ev)
+            return
+        # a viewport does not propagate wheel events to its parents, so hand it to the enclosing page scroller
+        w = self.parentWidget()
+        while w is not None and not isinstance(w, QAbstractScrollArea):
+            w = w.parentWidget()
+        if w is None:
+            ev.ignore()
+            return
+        QApplication.sendEvent(w.viewport(), ev)
+        ev.accept()
+
+
 class ChartView(QWidget):
     point_clicked = Signal(int)
     selection_made = Signal(list)
@@ -115,6 +134,7 @@ class ChartView(QWidget):
             self._buttons[key] = b
             seg.append(b)
         reset = QPushButton("Reset view")
+        self._reset_button = reset
         reset.clicked.connect(self.reset_view)
         png = QPushButton("PNG")
         png.clicked.connect(lambda: self._export_dialog("png"))
@@ -131,7 +151,7 @@ class ChartView(QWidget):
         bar.addWidget(svg)
 
         self._vb = _SelectViewBox(self)
-        self._pw = pg.PlotWidget(viewBox=self._vb)
+        self._pw = _PagePlotWidget(viewBox=self._vb)
         self._pw.setBackground(theme.P.raised)
         self._plot: pg.PlotItem = self._pw.getPlotItem()
         self._plot.hideButtons()
@@ -210,7 +230,6 @@ class ChartView(QWidget):
         b.setStyle(tickLength=-5)
         p.getViewBox().invertY(False)
         p.getViewBox().setMouseEnabled(True, True)
-        p.getViewBox().enableAutoRange()
         for name in ("left", "bottom"):
             p.getAxis(name).setGrid(102)
 
@@ -220,6 +239,7 @@ class ChartView(QWidget):
     def set_categories(self, ticks: List[Tuple[str, str]]) -> None:
         """Bottom ticks at 0..n-1 with the spec's two-line texts."""
         self._plot.getAxis("bottom").setTicks([[(i, t[1]) for i, t in enumerate(ticks)]])
+        self._plot.getAxis("bottom").setHeight(72)       # two tick lines plus the axis label, no overlap
         self._plot.getAxis("bottom").setGrid(0)          # no vertical grid between categories
 
     def add_ref_lines(self, ref_lines: List[RefLine], ylog: bool = False) -> None:
@@ -272,14 +292,18 @@ class ChartView(QWidget):
     def set_spec(self, spec: Optional[ChartSpec]) -> None:
         had = bool(self._selected)
         self._selected = []
+        vb = self._plot.getViewBox()
+        vb.disableAutoRange()               # one autorange after the draw, not one per removed / added item
         self.clear()
         self._spec = spec
         self._legend.set_entries([])
         self._reset_axes()
+        self._set_tools_for(spec)
         if had:
             self.selection_cleared.emit()
         if spec is None:
             self._plot.setTitle(None)
+            vb.enableAutoRange()
             return
         self._plot.setTitle(spec.title, color=theme.P.text, size="%dpx" % TITLE_PX, bold=True)
         is_heat = spec.kind == "heatmap"
@@ -304,11 +328,23 @@ class ChartView(QWidget):
         self.add_ref_lines(spec.ref_lines, spec.ylog)
         self._legend.set_entries([(s.name, s.color, s.legendgroup) for s in spec.series if s.legend])
         self._apply_visibility()
+        vb.enableAutoRange()
         if spec.kind == "xy":
-            self._plot.getViewBox().autoRange()
+            vb.autoRange()
         self._install_log_ticks(spec)
         self._home = None if spec.kind == "xy" else self._plot.getViewBox().viewRange()
         self._place_ref_labels()
+
+    def _set_tools_for(self, spec: Optional[ChartSpec]) -> None:
+        """Heatmaps have no pan / selection / reset; box, violin and bar points carry no id to select."""
+        kind = spec.kind if spec is not None else "xy"
+        heat = kind == "heatmap"
+        pick = kind == "xy"
+        for key, shown in (("pan", not heat), ("lasso", pick), ("box", pick)):
+            self._buttons[key].setVisible(shown)
+        self._reset_button.setVisible(not heat)
+        if self._tool != "pan" and not pick:
+            self.set_tool("pan")
 
     def _install_log_ticks(self, spec: ChartSpec) -> None:
         """Decade labels (and 1-2-5 when there is room) instead of pyqtgraph's label at every digit."""
@@ -563,6 +599,8 @@ class ChartView(QWidget):
     def export_png(self, path: str) -> None:
         from pyqtgraph.exporters import ImageExporter
         self._export(ImageExporter, path, width=3 * self._pw.width(), background=QColor("#ffffff"))
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            raise OSError("could not write %s" % path)
 
     def export_svg(self, path: str) -> None:
         from pyqtgraph.exporters import SVGExporter
@@ -578,4 +616,7 @@ class ChartView(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Export chart", "%s.%s" % (slugify(title), kind),
                                               "%s (*.%s)" % (kind.upper(), kind))
         if path:
-            (self.export_png if kind == "png" else self.export_svg)(path)
+            try:
+                (self.export_png if kind == "png" else self.export_svg)(path)
+            except Exception as e:
+                QMessageBox.warning(self, "Export chart", "Could not save the chart:\n%s" % e)
