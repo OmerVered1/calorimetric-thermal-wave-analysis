@@ -101,7 +101,7 @@ def build_calibrated_row(src: dict, lag: float, result: AppliedLag, graph_image:
                          ref_ids: List[int], model: Optional[str]) -> dict:
     row = {k: src.get(k) for k in _COPIED}
     row.update({
-        "graph_image": graph_image,
+        "graph_image": graph_image or None,     # "" (no stored graph) and None (fetch failed) both insert null
         "use_calibration": True,
         "system_lag": lag,
         "net_lag_dt": result.net_lag_dt,

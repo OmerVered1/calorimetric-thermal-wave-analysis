@@ -266,6 +266,7 @@ class BatchSection(StepCard):
                 return
 
             def with_graphs(graphs) -> None:
+                self._no_plot = sum(1 for r in rows if graphs.get(r.a["id"]) is None)
                 try:
                     ops = [WriteOp("insert", None, build_calibrated_row(
                         r.a, r.lag, r.result, graphs.get(r.a["id"]), ref_ids, model), "#%s" % r.a["id"])
@@ -299,7 +300,11 @@ class BatchSection(StepCard):
             text = batch_report(summary.done, n, n_rows, n_cal, had_copies, summary.failures)
             if summary.aborted:
                 text += " · %s · %s" % (TEXT["loginNeeded"], TEXT["writtenOf"].format(n=summary.done, m=summary.total))
-            self._on_message(text, "ok" if not summary.failures and not summary.aborted else "warn")
+            no_plot = getattr(self, "_no_plot", 0)
+            if no_plot and summary.done:
+                text += " · " + TEXT["noPlotSaved"].format(n=min(no_plot, summary.done))
+            self._on_message(text, "ok" if not (summary.failures or summary.aborted or (no_plot and summary.done))
+                             else "warn")
         finally:
             # stay reserved until the refreshed rows (with the new copies) have reached the tab
             self._queue.release(after_refresh=summary.done > 0)

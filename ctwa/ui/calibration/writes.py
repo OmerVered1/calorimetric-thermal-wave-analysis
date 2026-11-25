@@ -75,6 +75,11 @@ class WriteQueue(QObject):
     def busy(self) -> bool:
         return self._busy
 
+    @property
+    def locked(self) -> bool:
+        """A write run is going or a save holds the reservation: other writers must not start."""
+        return self._busy or self._reserved
+
     # ---- reservation ----
     @property
     def reserved(self) -> bool:
@@ -213,7 +218,9 @@ class WriteQueue(QObject):
 
     # ---- graphs ----
     def with_graphs(self, ids: List[int], callback: Callable[[Dict[int, Optional[str]]], None]) -> None:
-        """callback({id: base64 or None}) once every graph is back, or after GRAPH_TIMEOUT_MS."""
+        """callback({id: base64 or None}) once every graph is back (a failed fetch counts as None at once), or
+        when GRAPH_TIMEOUT_MS passes without any graph arriving (the timeout restarts on each result, so
+        big batches are not cut off while the loader is still delivering)."""
         wanted = list(dict.fromkeys(int(i) for i in ids))
         job = {"wanted": set(wanted), "got": {}, "callback": callback, "timer": QTimer(self)}
         if not wanted:
@@ -232,10 +239,13 @@ class WriteQueue(QObject):
                 job["got"][id_] = image
                 if len(job["got"]) == len(job["wanted"]):
                     self._finish_graphs(job)
+                else:
+                    job["timer"].start(GRAPH_TIMEOUT_MS)   # inactivity timeout: progress restarts it
 
     def _finish_graphs(self, job: dict) -> None:
         if job not in self._graph_jobs:
             return
         self._graph_jobs.remove(job)
         job["timer"].stop()
-        job["callback"]({i: job["got"].get(i) for i in sorted(job["wanted"])})
+        # "" (the row has no stored graph) and None (fetch failed / timed out) both mean: no graph
+        job["callback"]({i: (job["got"].get(i) or None) for i in sorted(job["wanted"])})

@@ -162,6 +162,7 @@ def test_save_without_graph_still_inserts(qapp):
     loader.graphs = {}
     assert run_save(sec, loader)
     assert loader.ops[0][1]["graph_image"] is None
+    assert msgs[-1][1] == "warn" and "saved without a plot" in msgs[-1][0] and msgs[-1][0].startswith(TEXT["saved"])
 
 
 def test_save_failure_message(qapp):
@@ -221,3 +222,54 @@ def test_exception_releases(qapp, monkeypatch):
     assert wait_until(lambda: msgs)
     assert msgs[-1][1] == "error" and not queue.reserved and sec.save_button.isEnabled()
     assert loader.ops == []
+
+
+# ---- final-review minors ----
+def test_target_without_period_says_so(qapp):
+    rows = make_rows() + [dict(make_row(300), period_t=None)]
+    loader, state, queue, sec, msgs = build(rows)
+    state.target_id = 300
+    tick_refs(sec, [10, 11, 12, 13, 14])
+    assert not sec.result.isHidden()
+    assert sec.no_period_label.text() == TEXT["noPeriod"] == "This run has no period"
+    assert not sec.no_period_label.isHidden()
+    assert sec.cards.isHidden() and sec.not_cal_label.isHidden() and not sec.save_button.isEnabled()
+    state.target_id = 99
+    assert sec.no_period_label.isHidden()
+
+
+def test_reference_without_period_cannot_be_ticked(qapp):
+    rows = make_rows()
+    rows = [dict(r, period_t=None) if r["id"] == 12 else r for r in rows]
+    loader, state, queue, sec, msgs = build(rows)
+    item = next(sec.list.item(i) for i in range(sec.list.count()) if sec.list.item(i).data(Qt.UserRole) == 12)
+    assert not item.flags() & Qt.ItemIsEnabled
+    assert item.toolTip() == TEXT["refNoPeriod"]
+    sec._select_all()
+    assert 12 not in state.selected_ref_ids
+    item.setCheckState(Qt.Checked)
+    assert 12 not in state.selected_ref_ids and item.checkState() == Qt.Unchecked
+
+
+def test_result_card_sits_above_the_model_table(qapp):
+    loader, state, queue, sec, msgs = build()
+    body = sec.body
+    assert body.indexOf(sec.result) < body.indexOf(sec.models) < body.indexOf(sec.chart)
+
+
+def test_typing_in_the_target_combo_survives_a_refresh(qapp, monkeypatch):
+    loader, state, queue, sec, msgs = build()
+    state.target_id = 99
+    sec.target_combo.setEditText("Stain")
+    monkeypatch.setattr(sec, "_editing_target", lambda: True)
+    state.set_rows(make_rows())
+    state.set_rows(make_rows() + [make_row(301, model="New")])      # the list changes while the user types
+    assert sec.target_combo.currentText() == "Stain"
+    assert state.target_id == 99
+
+
+def test_calibrated_copy_of_source_without_graph_inserts_null(qapp):
+    loader, state, queue, sec, msgs = ready()
+    loader.graphs = {99: ""}
+    assert run_save(sec, loader)
+    assert loader.ops[0][1]["graph_image"] is None

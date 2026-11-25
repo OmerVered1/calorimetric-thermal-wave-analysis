@@ -3244,6 +3244,7 @@ class MainWindow(QMainWindow):
         from ctwa.ui.calibration.calibration_tab import CalibrationTab
         if self.results_loader is not None:
             self.calibration_tab = CalibrationTab(self.results_loader)
+            self.calibration_tab.login_needed.connect(self._webapp_login)
             tabs.addTab(self.calibration_tab, "Calibration")
         else:
             # No cloud: keep the tab, with the message instead of the page.
@@ -3700,6 +3701,8 @@ class MainWindow(QMainWindow):
             self.upload_manager.login_succeeded()
             self.upload_manager.request_flush()
             self.runs_tab.refresh()
+            if getattr(self, "results_loader", None) is not None:
+                self.results_loader.refresh()      # tabs that failed to load while logged out retry now
 
     def _open_auto_save_folder(self):
         if not os.path.exists(self.auto_save_path):

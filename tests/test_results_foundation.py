@@ -908,12 +908,27 @@ def test_loader_request_graph(make_loader):
     loader.request_graph(404)
     assert not c.threads
     assert _pump(lambda: len(got) == 2)
-    assert sorted(got, key=lambda x: x[0]) == [(7, "img7"), (404, None)]
+    assert sorted(got, key=lambda x: x[0]) == [(7, "img7"), (404, "")]   # "" = row has no stored graph
     assert all(t is not threading.main_thread() for t in c.threads)
     n = len(c.calls)
     loader.request_graph(7)          # cached: answered again without a request
     assert _pump(lambda: len(got) == 3)
     assert got[-1] == (7, "img7") and len(c.calls) == n
+
+
+def test_loader_failed_graph_fetch_resolves_the_waiter_with_none(make_loader):
+    c = ThreadedFakeClient(errors={"select": Offline("down")})
+    loader = make_loader(c)
+    got, failed = [], []
+    loader.graph_loaded.connect(lambda i, img: got.append((i, img)))
+    loader.failed.connect(lambda k, m: failed.append((k, m)))
+    loader.request_graph(7)
+    assert _pump(lambda: got and failed)
+    assert got == [(7, None)] and failed[0][0] == "offline"      # None = the fetch FAILED
+    c.errors = {}
+    loader.request_graph(7)          # the failure was not cached: a retry fetches for real
+    assert _pump(lambda: len(got) == 2)
+    assert got[-1] == (7, "img7")
 
 
 def test_loader_update_forgets_the_cached_graph(make_loader):
@@ -972,3 +987,24 @@ def test_closing_the_window_shuts_the_loader_down(qapp, monkeypatch):
     win2 = appmod.MainWindow()
     win2.results_loader = None          # cloud off
     win2.close()
+
+
+def test_webapp_login_refreshes_the_loader(qapp, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+    from ctwa import app as appmod
+    from ctwa.ui import login_dialog
+    monkeypatch.setattr(appmod.MainWindow, "_check_license_agreement", lambda self: True)
+    win = appmod.MainWindow()
+    try:
+        calls = []
+        monkeypatch.setattr(win.results_loader, "refresh", lambda: calls.append(1))
+        monkeypatch.setattr(login_dialog.LoginDialog, "exec", lambda self: QDialog.Rejected)
+        win._webapp_login()
+        assert calls == []
+        monkeypatch.setattr(login_dialog.LoginDialog, "exec", lambda self: QDialog.Accepted)
+        win._webapp_login()
+        assert calls == [1]
+        win.results_loader = None          # cloud off: nothing to refresh, no crash
+        win._webapp_login()
+    finally:
+        win.close()

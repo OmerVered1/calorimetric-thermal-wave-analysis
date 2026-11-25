@@ -115,3 +115,16 @@ def test_set_data_twice_replaces_items(qapp):
 def test_titles(qapp):
     c = FitChart()
     assert c.item.titleLabel.text and TEXT["fitChartTitle"] in c.item.titleLabel.text
+
+
+def test_legend_uses_the_model_label_and_period_ticks_are_plain(qapp):
+    fit, sel, target = setup_data()
+    c = FitChart()
+    c.set_data(fit, sel, target)
+    assert c.curve_item.opts["name"] == TEXT["model_" + fit.kind]
+    axis = c.item.getAxis("bottom")
+    ticks = axis.tickValues(math.log10(60), math.log10(600), 400)
+    labelled = [v for _s, vs in ticks for v in vs]
+    assert labelled and all(math.log10(60) <= v <= math.log10(600) for v in labelled)
+    strings = axis.tickStrings([math.log10(80), math.log10(100), math.log10(250)], 1, 0.1)
+    assert strings == ["80", "100", "250"]

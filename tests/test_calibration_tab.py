@@ -131,3 +131,42 @@ def test_gui_not_blocked_during_batch(qapp):
     gaps = [b - a for a, b in zip(ticks, ticks[1:])]
     # at most 2 missed 20 ms ticks (a little slack for a loaded machine)
     assert len(ticks) >= 5 and max(gaps) < 0.1, (len(ticks), max(gaps))
+
+
+# ---- first open offline / logged out ----
+def test_first_open_failure_shows_the_error_not_loading(qapp):
+    loader = FakeLoader(make_rows())
+    tab = CalibrationTab(loader)
+    tab.on_shown()
+    loader.failed.emit("offline", "No connection")
+    assert tab.loading_label.text() == "No connection" and not tab.loading_label.isHidden()
+    assert tab.login_button.isHidden() and tab.scroll.isHidden()
+
+
+def test_first_open_logged_out_offers_login_and_retries(qapp):
+    loader = FakeLoader(make_rows())
+    tab = CalibrationTab(loader)
+    tab.show()
+    asked = []
+    tab.login_needed.connect(lambda: asked.append(1))
+    tab.on_shown()
+    loader.failed.emit("login", "x")
+    assert tab.loading_label.text() == "Not logged in. Use Settings → Webapp login…"
+    assert not tab.login_button.isHidden()
+    tab.login_button.click()
+    assert asked == [1]
+    tab.on_shown()                      # shown again while still not loaded: retries
+    assert loader.refreshes == 2 and tab.loading_label.text() == "Loading..." and tab.login_button.isHidden()
+    loader.rows_changed.emit(loader.rows())
+    assert tab.loading_label.isHidden() and not tab.scroll.isHidden() and tab.login_button.isHidden()
+    tab.on_shown()
+    assert loader.refreshes == 2        # loaded: no more retries
+
+
+def test_presets_load_failure_reaches_the_presets_section(qapp):
+    loader, tab = loaded()
+    tab.refresh()
+    loader.failed.emit("server", "presets boom")
+    assert tab.presets.error_label.text().endswith("presets boom") and not tab.presets.error_label.isHidden()
+    loader.presets_changed.emit([])
+    assert tab.presets.error_label.isHidden()

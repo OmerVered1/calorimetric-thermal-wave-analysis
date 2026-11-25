@@ -86,7 +86,7 @@ class CalibrationState(QObject):
         self._rows: List[dict] = []
         self._presets: List[dict] = []
         self._cache: Dict[str, object] = {}
-        self._fits_memo = None
+        self._fits_memo: Dict[tuple, list] = {}     # points -> fits (toggling a reference back is instant)
 
     # ---- inputs ----
     method = _attr("method")
@@ -189,9 +189,11 @@ class CalibrationState(QObject):
         # the physical fit is slow and the points rarely change between two `changed` signals
         pts = fit_points(self.selected)
         key = tuple((p.period, p.lag) for p in pts)
-        if self._fits_memo is None or self._fits_memo[0] != key:
-            self._fits_memo = (key, fit_lag_models(pts))
-        return self._fits_memo[1]
+        if key not in self._fits_memo:
+            if len(self._fits_memo) >= 16:
+                self._fits_memo.pop(next(iter(self._fits_memo)))
+            self._fits_memo[key] = fit_lag_models(pts)
+        return self._fits_memo[key]
 
     @_derived
     def fit(self):
@@ -199,6 +201,8 @@ class CalibrationState(QObject):
 
     @_derived
     def source(self) -> str:
+        if self.lag_source == "curve" and self.fit is None:
+            return "direct"        # the chosen curve is gone (fewer than 2 references): use the direct mean
         return active_source(self.lag_source, self.fit)
 
     @_derived

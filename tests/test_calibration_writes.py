@@ -6,6 +6,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 
 from ctwa.ui.calibration import writes  # noqa: E402
 from ctwa.ui.calibration.writes import WriteOp, WriteQueue  # noqa: E402
@@ -145,6 +146,29 @@ def test_with_graphs_times_out_to_none(env, monkeypatch):
     assert out == [{7: None}]
 
 
+def test_with_graphs_timeout_restarts_on_each_result(env, monkeypatch):
+    loader, q = env
+    monkeypatch.setattr(writes, "GRAPH_TIMEOUT_MS", 120)
+    loader.silent_graphs = True
+    out = []
+    q.with_graphs([1, 2, 3, 4], out.append)
+    for i in (1, 2, 3, 4):              # 4 x 70 ms = 280 ms in all, never 120 ms without news
+        QTest.qWait(70)
+        loader.graph_loaded.emit(i, "G%d" % i)
+    assert out == [{1: "G1", 2: "G2", 3: "G3", 4: "G4"}]
+
+
+def test_with_graphs_failed_fetch_resolves_at_once(env, monkeypatch):
+    loader, q = env
+    monkeypatch.setattr(writes, "GRAPH_TIMEOUT_MS", 60_000)
+    loader.silent_graphs = True
+    out = []
+    q.with_graphs([1, 2], out.append)
+    loader.graph_loaded.emit(1, "G")
+    loader.graph_loaded.emit(2, None)      # the loader's answer to a failed fetch
+    assert out == [{1: "G", 2: None}]
+
+
 def test_with_graphs_empty(env):
     _, q = env
     out = []
@@ -172,3 +196,13 @@ def test_summary_lists_written_labels(env):
     loader.fail_at = {1: ("server", "boom")}
     s = run(q, updates(3))
     assert s.succeeded == ["#10", "#12"]
+
+
+def test_with_graphs_empty_string_means_no_graph(env):
+    loader, q = env
+    loader.silent_graphs = True
+    out = []
+    q.with_graphs([1, 2], out.append)
+    loader.graph_loaded.emit(1, "")       # row exists, no stored graph
+    loader.graph_loaded.emit(2, "G")
+    assert out == [{1: None, 2: "G"}]

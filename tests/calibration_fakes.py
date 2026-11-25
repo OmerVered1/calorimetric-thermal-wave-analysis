@@ -8,6 +8,9 @@ from typing import Dict, List, Optional, Set, Tuple
 from PySide6.QtCore import QObject, QTimer, Signal
 
 
+SS_PRESET = {"id": 1, "material_name": "Stainless Steel", "temperature_c": 800, "alpha_mm2s": 5.829, "note": None}
+
+
 class FakeStore:
     def __init__(self) -> None:
         self.calls: List[tuple] = []
