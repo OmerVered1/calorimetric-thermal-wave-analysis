@@ -3649,7 +3649,12 @@ class MainWindow(QMainWindow):
         check_for_updates(__version__, self)
 
     def _show_about(self):
+        from PySide6.QtCore import QUrl
+        # file:/// URL: the installed path has spaces, and on Windows a bare
+        # "C:/..." would be read as a URL scheme.
+        logo = QUrl.fromLocalFile(theme.asset("ctwa_logo_full.png")).toString()
         about_text = f"""
+        <p><img src="{logo}" width="300"></p>
         <h2>{__app_name__}</h2>
         <p><b>Version:</b> {__version__}</p>
         <p><b>Author:</b> {__author__}</p>
