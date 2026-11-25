@@ -65,9 +65,9 @@ class RangeSlider(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         y = self.height() / 2
-        p.setPen(QPen(QColor(theme.P.border), 3, cap=Qt.RoundCap))
+        p.setPen(QPen(QColor(theme.P.border), 3, Qt.SolidLine, Qt.RoundCap))
         p.drawLine(QPointF(8, y), QPointF(self.width() - 8, y))
-        p.setPen(QPen(QColor(theme.P.accent), 3, cap=Qt.RoundCap))
+        p.setPen(QPen(QColor(theme.P.accent), 3, Qt.SolidLine, Qt.RoundCap))
         p.drawLine(QPointF(self._x(self._lo), y), QPointF(self._x(self._hi), y))
         for v in (self._lo, self._hi):
             p.setPen(QPen(QColor(theme.P.accent_strong), 1.5))
