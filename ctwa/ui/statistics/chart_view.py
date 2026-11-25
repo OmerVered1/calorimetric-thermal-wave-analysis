@@ -480,7 +480,29 @@ class ChartView(QWidget):
             if cell is not None:
                 self.cell_clicked.emit(*cell)
 
+    def dist_hover_text(self, x: float, y: float) -> Optional[str]:
+        """Hover stats of the box / violin under view coordinates (x, y), if any (Plotly's box hover)."""
+        if self._spec is None or self._spec.kind not in ("box", "violin"):
+            return None
+        for item, _, _ in self._tracked:
+            fn = getattr(item, "hover_at", None)
+            if fn is not None and item.isVisible():
+                text = fn(x, y)
+                if text:
+                    return text
+        return None
+
     def _on_scene_move(self, pos) -> None:
+        if self._spec is not None and self._spec.kind in ("box", "violin"):
+            p = self._vb.mapSceneToView(pos)
+            text = self.dist_hover_text(p.x(), p.y())
+            if text:
+                QToolTip.showText(QCursor.pos(), text, self)
+                self._dist_tip = True
+            elif getattr(self, "_dist_tip", False):
+                QToolTip.hideText()
+                self._dist_tip = False
+            return
         h = getattr(self, "_heat_hover", None)
         if h is not None:
             text = h(pos)

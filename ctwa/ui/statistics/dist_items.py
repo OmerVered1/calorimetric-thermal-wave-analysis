@@ -2,7 +2,8 @@
 log10 of the positive values, exactly as Plotly does (it calculates on the axis' own scale)."""
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+import math
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import pyqtgraph as pg
@@ -10,6 +11,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainterPath, QPen
 
 from ctwa.stats.dist import HALF_WIDTH, BoxStats, box_stats, jitter_x, violin_shape
+from ctwa.stats.model import fmt_g
 from ctwa.stats.specs import ChartSpec, Group
 from ctwa.ui.statistics.geometry import mask_for_log, to_view
 
@@ -35,12 +37,46 @@ def _pen(color: str, width: float = LINE_PX) -> QPen:
     return p
 
 
-class BoxItem(pg.GraphicsObject):
+def _shown(v: float, ylog: bool) -> str:
+    """A value as the tooltip prints it: data units (10**v on a log axis), 4 significant digits."""
+    return fmt_g(10.0 ** v if ylog else v, 4)
+
+
+class _Hoverable:
+    """Plotly's hover on a box or violin: its name, n and the stats, one per line, from the top down
+    (max, upper fence, q3, median, q1, lower fence, min); a violin adds ``kde:``."""
+    name: str = ""
+    n: int = 0
+    ylog: bool = False
+    vmin: float = 0.0
+    vmax: float = 0.0
+    x: float = 0.0
+    stats: Optional[BoxStats] = None
+
+    def _lines(self) -> List[str]:
+        st = self.stats
+        rows = (("max", self.vmax), ("upper fence", st.hi_whisker), ("q3", st.q3), ("median", st.med),
+                ("q1", st.q1), ("lower fence", st.lo_whisker), ("min", self.vmin))
+        return [self.name, "n = %d" % self.n] + ["%s: %s" % (k, _shown(v, self.ylog)) for k, v in rows]
+
+    def _inside(self, x: float, y: float) -> bool:
+        return abs(x - self.x) <= HALF_WIDTH and self.vmin <= y <= self.vmax
+
+    def hover_at(self, x: float, y: float) -> Optional[str]:
+        """Tooltip text for view coordinates (x, y), or None outside this column / the value range."""
+        return "\n".join(self._lines()) if self._inside(x, y) else None
+
+
+class BoxItem(_Hoverable, pg.GraphicsObject):
     """Box q1..q3 with median line and whiskers lo..hi (Plotly's whiskerwidth is 0, so no caps by default)."""
 
-    def __init__(self, x: float, stats: BoxStats, color: str, cap: float = 0.0):
+    def __init__(self, x: float, stats: BoxStats, color: str, cap: float = 0.0, name: str = "", n: int = 0,
+                 vmin: Optional[float] = None, vmax: Optional[float] = None, ylog: bool = False):
         super().__init__()
         self.x, self.stats, self.color, self.cap = x, stats, color, cap
+        self.name, self.n, self.ylog = name, n, ylog
+        self.vmin = stats.lo_whisker if vmin is None else vmin
+        self.vmax = stats.hi_whisker if vmax is None else vmax
         self.q1, self.med, self.q3 = stats.q1, stats.med, stats.q3
         self.lo, self.hi = stats.lo_whisker, stats.hi_whisker
 
@@ -62,16 +98,41 @@ class BoxItem(pg.GraphicsObject):
             p.drawLine(QPointF(self.x - c, self.hi), QPointF(self.x + c, self.hi))
 
 
-class ViolinItem(pg.GraphicsObject):
+class ViolinItem(_Hoverable, pg.GraphicsObject):
     """Closed outline of the KDE shape: right side bottom-to-top, left side back down."""
 
-    def __init__(self, x: float, ts: List[float], half_widths: List[float], color: str):
+    def __init__(self, x: float, ts: List[float], half_widths: List[float], color: str, name: str = "",
+                 vals: Sequence[float] = (), stats: Optional[BoxStats] = None, bandwidth: float = 0.0,
+                 ylog: bool = False):
         super().__init__()
         self.x, self.color = x, color
+        self.name, self.ylog, self.stats = name, ylog, stats
+        self._vals, self._bw = sorted(float(v) for v in vals), bandwidth
+        self.n = len(self._vals)
+        self.vmin = self._vals[0] if self._vals else min(ts)
+        self.vmax = self._vals[-1] if self._vals else max(ts)
+        self._kde_top: Optional[float] = None
         right = [(x + w, t) for t, w in zip(ts, half_widths)]
         left = [(x - w, t) for t, w in zip(reversed(ts), reversed(half_widths))]
         self._pts = right + left
+        self._ts = list(ts)
         self._ymin, self._ymax = min(ts), max(ts)
+
+    def _kde(self, y: float) -> float:
+        bw = self._bw
+        return sum(math.exp(-0.5 * ((y - v) / bw) ** 2) for v in self._vals) / (len(self._vals) * bw * math.sqrt(2 * math.pi))
+
+    def kde_at(self, y: float) -> float:
+        """Plotly's ``kde:`` value: the density at y relative to this violin's highest sampled density."""
+        if self._bw <= 0 or not self._vals:
+            return 1.0
+        if self._kde_top is None:
+            self._kde_top = max(self._kde(t) for t in self._ts)
+        return self._kde(y) / self._kde_top
+
+    def hover_at(self, x: float, y: float) -> Optional[str]:
+        text = _Hoverable.hover_at(self, x, y)
+        return None if text is None else "%s\nkde: %.3f" % (text, self.kde_at(y))
 
     def polygon_points(self) -> List[Tuple[float, float]]:
         return list(self._pts)
@@ -133,11 +194,13 @@ def _draw_dist(plot: pg.PlotItem, spec: ChartSpec, violin: bool) -> List[pg.Grap
         ext = [float(vals.min()), float(vals.max())]
         if violin:
             shape = violin_shape(list(vals))
-            body = ViolinItem(i, shape.ts, shape.half_widths, g.color)
+            body = ViolinItem(i, shape.ts, shape.half_widths, g.color, g.name, vals, box_stats(list(vals)),
+                              shape.bandwidth, spec.ylog)
             ext += [shape.ts[0], shape.ts[-1]]
         else:
             stats = box_stats(list(vals))
-            body = BoxItem(i, stats, g.color)
+            body = BoxItem(i, stats, g.color, name=g.name, n=len(vals), vmin=float(vals.min()),
+                           vmax=float(vals.max()), ylog=spec.ylog)
             ext += [stats.lo_whisker, stats.hi_whisker]
         plot.addItem(body)
         pts = _points(i, g, vals, kept, len(g.values), g.name)
