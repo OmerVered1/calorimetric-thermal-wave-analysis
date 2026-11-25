@@ -77,6 +77,7 @@ class _Entry(QWidget):
         lay.setSpacing(5)
         self.dot = theme.swatch(color, 9)
         self.label = QLabel(name)
+        self.label.setTextFormat(Qt.PlainText)
         self.label.setStyleSheet("font-size: %dpx; background: transparent;" % theme.TEXT_SMALL)
         self.label.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.dot.setAttribute(Qt.WA_TransparentForMouseEvents)

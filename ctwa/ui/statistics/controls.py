@@ -48,6 +48,13 @@ def _dot(color: str, on: bool) -> QIcon:
     return QIcon(pm)
 
 
+def _is_number(v) -> bool:
+    try:
+        return v is not None and float(v) == float(v)
+    except (TypeError, ValueError):
+        return False
+
+
 class Chip(QPushButton):
     """A toggle drawn as a pill, optionally with the colour of the line it switches on."""
 
@@ -316,6 +323,7 @@ class ChartControls(QWidget):
             c.setParent(None)
             c.deleteLater()
         self.theory_chips = {}
+        presets = [p for p in presets if _is_number(p.get("temperature_c")) and _is_number(p.get("alpha_mm2s"))]
         for i, p in enumerate(presets):
             label = "%s %s°C (α=%s)" % (p["material_name"], js_number_to_string(float(p["temperature_c"])),
                                         js_number_to_string(float(p["alpha_mm2s"])))

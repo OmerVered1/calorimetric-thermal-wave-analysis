@@ -180,9 +180,18 @@ def group_value(row: Dict[str, Any], group_by: str, source: str = "src") -> Opti
     return row.get("model_name")   # "Model" and the page's default
 
 
+NO_MODEL = "(none)"
+
+
 def prepare_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """with_ln_validity on every row (new dicts; the input is untouched)."""
-    return [with_ln_validity(r) for r in rows]
+    """with_ln_validity on every row (new dicts; the input is untouched); an empty model name reads "(none)"."""
+    out = []
+    for r in rows:
+        r = with_ln_validity(r)
+        if not r.get("model_name"):
+            r = dict(r, model_name=NO_MODEL)
+        out.append(r)
+    return out
 
 
 def fmt_g(x: float, sig: int) -> str:

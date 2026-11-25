@@ -10,7 +10,7 @@ from dataclasses import replace
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from PySide6.QtCore import QPoint, QSettings, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
+from PySide6.QtWidgets import (QFileDialog, QMessageBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
                                QSplitter, QVBoxLayout, QWidget)
 
 from ctwa import theme
@@ -136,6 +136,7 @@ class StatisticsTab(QWidget):
         self._owner: Optional[ChartView] = None
         self._view = load_view(settings)
         self.rebuild_count = 0
+        self._dirty = False
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -417,6 +418,10 @@ class StatisticsTab(QWidget):
         self._timer.start()
 
     def _rebuild(self) -> None:
+        if self._requested and not self.isVisible():     # a hidden tab rebuilds once, when it is shown
+            self._dirty = True
+            return
+        self._dirty = False
         self.rebuild_count += 1
         v = self._view
         self._filtered = apply_filters(self._rows, v.filters)
@@ -575,18 +580,27 @@ class StatisticsTab(QWidget):
         path = self._save_path_provider()
         if not path:
             return
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(summary_csv(self._filtered))
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(summary_csv(self._filtered))
+        except Exception as e:
+            QMessageBox.warning(self, "Download Statistics", "Could not save the file:\n%s" % e)
 
     # ---- layout state
     def _on_split(self, *_) -> None:
         self._view.splitter = [int(s) for s in self.splitter.sizes()]
-        self._schedule()
+        self._save()
 
     def _toggle_filters(self) -> None:
         self._view.filters_collapsed = not self._view.filters_collapsed
         self._fit_filters()
-        self._schedule()
+        self._save()
+
+    def _save(self) -> None:
+        try:
+            save_view(self._settings, self._view)
+        except Exception:
+            pass
 
     def _fit_filters(self) -> None:
         narrow = self.width() < NARROW_PX
@@ -604,3 +618,6 @@ class StatisticsTab(QWidget):
         if not self._requested and self._loader is not None:
             self._requested = True
             self._loader.refresh()
+        if self._dirty:
+            self._timer.stop()
+            self._rebuild()
