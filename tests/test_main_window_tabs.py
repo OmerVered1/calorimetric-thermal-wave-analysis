@@ -232,3 +232,57 @@ def test_analysis_tab_shows_analyze_and_save_without_scrolling_at_1400x900(app, 
         bottom = btn.mapTo(view, btn.rect().bottomLeft()).y()
         top = btn.mapTo(view, btn.rect().topLeft()).y()
         assert top >= 0 and bottom <= view.height()
+
+
+def test_closing_sets_the_abort_flag_before_the_outputs_go_off(app, tmp_path):
+    from ctwa import app as appmod
+    appmod.MainWindow._check_license_agreement = lambda self: True
+    w = appmod.MainWindow()
+    w.connect_instrument("2602B", simulate=True, simulation_resistance=100.0)
+    seen = []
+    real_off = w.smu.all_outputs_off
+    w.smu.all_outputs_off = lambda: (seen.append(w.abort_flag), real_off())[1]
+    w.close()
+    assert seen == [True]
+
+
+@pytest.mark.parametrize("victim", [
+    "save_panel.shutdown", "upload_manager.shutdown", "results_loader.shutdown",
+    "runs_tab.shutdown", "analysis_tab.worker.shutdown", "results_tab.flush_pending"])
+def test_a_helper_failing_during_close_cannot_skip_the_instrument_teardown(app, tmp_path, victim):
+    from ctwa import app as appmod
+    appmod.MainWindow._check_license_agreement = lambda self: True
+    w = appmod.MainWindow()
+    w.connect_instrument("2602B", simulate=True, simulation_resistance=100.0)
+    calls = []
+    obj = w
+    *path, attr = victim.split(".")
+    for p in path:
+        obj = getattr(obj, p)
+
+    def boom(*a, **k):
+        raise RuntimeError("helper failed")
+    setattr(obj, attr, boom)
+    smu = w.smu
+    real_dis = smu.disconnect
+    smu.disconnect = lambda: (calls.append("smu.disconnect"), real_dis())[1]
+    real_stop = w.multimeter_panel.stop_live
+    w.multimeter_panel.stop_live = lambda: (calls.append("stop_live"), real_stop())[1]
+    w.close()
+    assert calls == ["stop_live", "smu.disconnect"]
+
+
+def test_the_calorimeter_disconnect_still_runs_when_stop_live_fails(app, tmp_path):
+    from ctwa import app as appmod
+    appmod.MainWindow._check_license_agreement = lambda self: True
+    w = appmod.MainWindow()
+    w.connect_instrument("2602B", simulate=True, simulation_resistance=100.0)
+    calls = []
+    w.multimeter_panel.stop_live = lambda: (_ for _ in ()).throw(RuntimeError("x"))
+    w.calorimeter_reader = object()
+    w.disconnect_calorimeter = lambda: calls.append("cal")
+    smu = w.smu
+    real_dis = smu.disconnect
+    smu.disconnect = lambda: (calls.append("smu"), real_dis())[1]
+    w.close()
+    assert calls == ["cal", "smu"]

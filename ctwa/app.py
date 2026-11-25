@@ -16,6 +16,7 @@ capability table instead.
 import sys
 import os
 import time
+import logging
 import threading
 import csv
 import json
@@ -4675,38 +4676,57 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Export Error", str(e))
 
+    def _close_step(self, what, fn, *args):
+        """One shutdown step: a failure is logged and the next step still runs.
+        True when the step went through."""
+        try:
+            fn(*args)
+            return True
+        except Exception:
+            logging.getLogger(__name__).exception("closing: %s failed", what)
+            return False
+
     def closeEvent(self, event):
-        # the instruments first: whatever else is slow to stop, the outputs go off now
-        if self.smu:
+        outputs_off = False
+        try:
+            # a running sweep must stop touching the instrument before anything else happens
+            self.abort_flag = True
+            self._pause_requested.clear()
+            # the instruments first: whatever else is slow to stop, the outputs go off now
+            if self.smu:
+                outputs_off = self._close_step("outputs off", self.smu.all_outputs_off)
+            # then the background helpers: no process left behind, no signals into dead objects
+            if self.save_panel is not None:
+                self._close_step("save panel", self.save_panel.shutdown)
+            if self.upload_manager is not None:
+                # a row still uploading stays in the queue
+                self._close_step("upload manager", self.upload_manager.shutdown, 500)
+            # --- Results tab (Plan 3) ---
+            # a delete still in its Undo window is sent first (a closed loader fails writes at once),
+            # and the loader then gets up to 3 s to finish it; 500 ms when nothing was pending
+            tab = getattr(self, "results_tab", None)
+            waiting = False
             try:
-                self.smu.all_outputs_off()
-            except:
-                pass
-        # then the background helpers: no process left behind, no signals into dead objects
-        if self.save_panel is not None:
-            self.save_panel.shutdown()
-        if self.upload_manager is not None:
-            self.upload_manager.shutdown(500)   # a row still uploading stays in the queue
-        # --- Results tab (Plan 3) ---
-        # a delete still in its Undo window is sent first (a closed loader fails writes at once),
-        # and the loader then gets up to 3 s to finish it; 500 ms when nothing was pending
-        tab = getattr(self, "results_tab", None)
-        waiting = bool(getattr(tab, "has_pending", lambda: False)())
-        if hasattr(tab, "flush_pending"):
-            tab.flush_pending()
-        # --- end Results tab ---
-        if getattr(self, "results_loader", None) is not None:
-            self.results_loader.shutdown(3000 if waiting else 500)
-        self.runs_tab.shutdown()
-        self.analysis_tab.worker.shutdown()
-        self.multimeter_panel.stop_live()
-        if self.calorimeter_reader is not None:
-            try:
-                self.disconnect_calorimeter()
+                waiting = bool(getattr(tab, "has_pending", lambda: False)())
             except Exception:
-                pass
-        if self.smu:
-            self.smu.disconnect()
+                logging.getLogger(__name__).exception("closing: pending check failed")
+            if hasattr(tab, "flush_pending"):
+                self._close_step("results flush", tab.flush_pending)
+            # --- end Results tab ---
+            if getattr(self, "results_loader", None) is not None:
+                self._close_step("results loader", self.results_loader.shutdown,
+                                 3000 if waiting else 500)
+            self._close_step("runs tab", self.runs_tab.shutdown)
+            self._close_step("analysis worker", self.analysis_tab.worker.shutdown)
+        finally:
+            # the instrument teardown always runs, whatever failed above
+            self._close_step("stop live readings", self.multimeter_panel.stop_live)
+            if self.calorimeter_reader is not None:
+                self._close_step("calorimeter disconnect", self.disconnect_calorimeter)
+            if self.smu:
+                if not outputs_off:   # the first attempt failed or was never reached
+                    self._close_step("outputs off", self.smu.all_outputs_off)
+                self._close_step("smu disconnect", self.smu.disconnect)
         event.accept()
 
 
