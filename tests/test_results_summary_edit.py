@@ -162,7 +162,7 @@ def test_edit_button_and_save_cancel_buttons(env):
     b.save.click()
     assert loader.updates() == [("update", 2, {"temperature_c": 700.0})]
     assert not tab.editor_widget("temperature_c").isEnabled() and not b.save.isEnabled()
-    loader.failed.emit("offline", "no route")
+    loader.write_failed.emit("update", 1, "offline", "no route")
     b.cancel.click()
     assert tab.editing_id() is None
 
@@ -236,11 +236,10 @@ def test_failed_save_keeps_the_editor_and_the_text(env):
     tab.begin_edit(2)
     tab.editor_widget("temperature_c").setText("771")
     tab.commit_edit()
-    loader.failed.emit("offline", "no route")
+    loader.write_failed.emit("update", 1, "offline", "no route")
     assert tab.editing_id() == 2 and msgs == ["Could not save #2: no route"] and logins == []
     w = tab.editor_widget("temperature_c")
     assert w.text() == "771" and w.isEnabled()
-    assert not tab.banner.isVisible()
     assert tab.commit_edit() == {"temperature_c": 771.0}     # a retry sends the same change
     loader.write_failed.emit("update", 2, "login", "Not logged in")
     loader.failed.emit("login", "Not logged in")             # the real loader emits both
@@ -256,3 +255,35 @@ def test_two_quick_enters_send_one_update(env):
     enter(w)
     enter(w)
     assert len(loader.updates()) == 1
+
+
+def test_refresh_that_changed_another_field_is_not_reverted(env):
+    tab, loader, *_ = env()
+    tab.begin_edit(2)
+    tab.editor_widget("temperature_c").setText("771")
+    loader.set_rows([row(1), row(2, period_t=650.0), row(3)])      # someone else changed period_t
+    assert tab.commit_edit() == {"temperature_c": 771.0}
+    assert loader.updates() == [("update", 2, {"temperature_c": 771.0})]
+
+
+def test_read_error_during_save_does_not_end_it(env):
+    tab, loader, msgs, _ = env()
+    tab.begin_edit(2)
+    tab.editor_widget("temperature_c").setText("771")
+    tab.commit_edit()
+    loader.failed.emit("server", "refresh failed")
+    assert tab.editing_id() == 2 and msgs == []
+    assert not tab._delegate.buttons.save.isEnabled()
+    assert tab.commit_edit() == {} and len(loader.updates()) == 1
+    loader.write_done.emit("update", 1, None)
+    assert tab.editing_id() is None and msgs == ["Saved #2"] and len(loader.updates()) == 1
+
+
+def test_login_write_failure_reports_once(env):
+    tab, loader, msgs, logins = env()
+    tab.begin_edit(2)
+    tab.editor_widget("temperature_c").setText("771")
+    tab.commit_edit()
+    loader.write_failed.emit("update", 1, "login", "Not logged in")
+    loader.failed.emit("login", "Not logged in")
+    assert msgs == ["Could not save #2: Not logged in"] and logins == [1]

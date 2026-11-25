@@ -457,9 +457,7 @@ class SummaryTab(QWidget):
         combo.blockSignals(False)
 
     def _on_failed(self, kind: str, msg: str) -> None:
-        if self._session is not None and self._session.saving:
-            self._save_failed(kind, msg)
-            return
+        # a read error never ends a save: only the token-matched write_done / write_failed do
         self._loaded = True
         self._failed_text = "Can't reach the database: %s" % msg
         self.banner_label.setText(self._failed_text)
@@ -625,7 +623,7 @@ class SummaryTab(QWidget):
             if cur is not None and s.changes(cur) and not self._confirm_discard(s.row_id):
                 return
             self._end_edit()
-        self._session = EditSession(row_id, initial_values(stored), focus_key)
+        self._session = EditSession(row_id, initial_values(stored), focus_key, initial=initial_values(stored))
         self._open_editors()
         self._focus_editor(focus_key)
 
@@ -641,7 +639,7 @@ class SummaryTab(QWidget):
         if not changes:
             self._end_edit()
             return {}
-        s.saving, s.sent = True, dict(changes)
+        s.saving, s.sent, s.token = True, dict(changes), None
         self._delegate.set_saving(True)
         s.token = self._loader.apply_update(s.row_id, changes)
         return changes
@@ -760,10 +758,11 @@ class SummaryTab(QWidget):
 
     def _on_write_done(self, op: str, token: int, _result) -> None:
         s = self._session
-        if s is not None and s.saving and op == "update" and token == s.token:
+        if s is not None and s.saving and op == "update" and s.token in (None, token):
             self._save_ok()
 
     def _on_write_failed(self, op: str, token: int, kind: str, msg: str) -> None:
         s = self._session
-        if s is not None and s.saving and op == "update" and token == s.token:
+        # token is None while apply_update itself is still running (a closed loader fails at once)
+        if s is not None and s.saving and op == "update" and s.token in (None, token):
             self._save_failed(kind, msg)

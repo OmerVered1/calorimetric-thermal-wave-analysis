@@ -33,9 +33,13 @@ class EditSession:
     saving: bool = False
     token: Optional[int] = None
     sent: Dict[str, Any] = field(default_factory=dict)
+    initial: Dict[str, Any] = field(default_factory=dict)   # the values when the edit began
 
     def changes(self, stored: Dict[str, Any]) -> Dict[str, Any]:
-        return build_update(stored, self.values)
+        """Only fields the user changed since the edit began (and that differ from the row now), so a
+        refresh that changed another field meanwhile is never overwritten with the old value."""
+        touched = {k: v for k, v in self.values.items() if v != self.initial.get(k)}
+        return build_update(stored, touched)
 
 
 def initial_values(stored: Dict[str, Any]) -> Dict[str, Any]:
