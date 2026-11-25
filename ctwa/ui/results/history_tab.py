@@ -139,10 +139,18 @@ class _Table(QTableWidget):
         super().keyPressEvent(e)
 
 
-def _ask_delete(title: str, message: str) -> bool:
+def _delete_box(title: str, message: str):
+    """The confirmation box. Cancel is the default and the Esc button: Enter or Esc never deletes."""
     box = QMessageBox(QMessageBox.Warning, title, message)
     delete = box.addButton("Delete", QMessageBox.DestructiveRole)
-    box.addButton("Cancel", QMessageBox.RejectRole)
+    cancel = box.addButton("Cancel", QMessageBox.RejectRole)
+    box.setDefaultButton(cancel)
+    box.setEscapeButton(cancel)
+    return box, delete
+
+
+def _ask_delete(title: str, message: str) -> bool:
+    box, delete = _delete_box(title, message)
     box.exec()
     return box.clickedButton() is delete
 

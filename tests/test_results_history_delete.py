@@ -296,3 +296,11 @@ def test_deleting_the_tab_stops_timers_without_sending(make, qapp):
     QApplication.sendPostedEvents(None, 0)
     QTest.qWait(DELAY * 4)
     assert deletes(loader) == []
+
+
+def test_confirmation_defaults_to_cancel():          # Enter or Esc never deletes
+    from ctwa.ui.results.history_tab import _delete_box
+    box, delete = _delete_box("Delete this analysis?", "x")
+    assert box.defaultButton() is not delete and box.defaultButton().text() == "Cancel"
+    assert box.escapeButton() is box.defaultButton()
+    assert delete.text() == "Delete"
