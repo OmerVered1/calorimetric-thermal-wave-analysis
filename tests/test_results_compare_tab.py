@@ -109,7 +109,7 @@ def test_broken_graphs_are_listed_not_raised(make):               # Review Focus
     loader.graph_loaded.emit(1, FIXTURE)
     loader.graph_loaded.emit(2, "<broken json")
     loader.graph_loaded.emit(3, "{}")
-    loader.graph_loaded.emit(4, None)
+    loader.graph_loaded.emit(4, "")                        # no stored graph (None now means a failed fetch)
     assert tab.no_waveform() == [label_of(by_id(i)) for i in (2, 3, 4)]
     assert len(tab.overlay.curve_names()) == 2
 
@@ -118,7 +118,7 @@ def test_no_run_with_waveform(make):
     tab, loader = make()
     tab.set_ids([1, 2])
     assert tab.overlay_message() == "Loading…"
-    loader.graph_loaded.emit(1, None)
+    loader.graph_loaded.emit(1, "")
     loader.graph_loaded.emit(2, "<x")
     assert tab.overlay_message() == "None of the selected analyses has a stored waveform to overlay."
     assert tab.overlay.curve_names() == [] and not tab.overlay_visible()
@@ -254,3 +254,69 @@ def test_painting_the_whole_tab_does_not_crash(make, qapp):
     qapp.processEvents()
     tab.grab()
     assert [n for n in vars(tab) if hasattr(QWidget, n) and not isinstance(getattr(QWidget, n), Signal)] == []      # no attribute hides a QWidget member
+
+
+def test_redraws_do_not_leak_plot_items(make):
+    tab, loader = make()
+    tab.set_ids([1, 3])
+    loader.graph_loaded.emit(1, FIXTURE)
+    loader.graph_loaded.emit(3, FIXTURE)
+    pi = tab.overlay._pi
+    base = (len(pi.items), len(pi.dataItems), len(pi.vb.addedItems))
+    for _ in range(5):
+        tab.norm_amp_button.click()
+    assert (len(pi.items), len(pi.dataItems), len(pi.vb.addedItems)) == base
+
+
+def test_overlay_curves_connect_finite(make):
+    tab, loader = make()
+    tab.set_ids([1])
+    loader.graph_loaded.emit(1, FIXTURE)
+    item = tab.overlay._items[0]
+    assert item.opts.get("connect") == "finite"
+
+
+def test_toggles_do_not_reparse_graph_json(make, monkeypatch):
+    tab, loader = make()
+    tab.set_ids([1, 3])
+    loader.graph_loaded.emit(1, FIXTURE)
+    loader.graph_loaded.emit(3, FIXTURE)
+    calls = []
+    real = cl.parse_graph
+    monkeypatch.setattr(cl, "parse_graph", lambda raw: (calls.append(1), real(raw))[1])
+    for _ in range(3):
+        tab.norm_amp_button.click()
+    assert calls == []
+    loader.graph_loaded.emit(1, FIXTURE + " ")          # changed text: parsed again
+    assert len(calls) == 1
+
+
+def test_known_graphs_not_requested_again_on_rows(make):
+    tab, loader = make()
+    tab.set_ids([1, 3])
+    loader.graph_loaded.emit(1, FIXTURE)
+    n = len(requests(loader))
+    loader.set_rows(ROWS)
+    assert requests(loader)[n:] == [3]
+
+
+def test_failed_graph_shows_note_and_retries(make):
+    tab, loader = make()
+    tab.set_ids([1, 3])
+    loader.graph_loaded.emit(1, FIXTURE)
+    loader.graph_loaded.emit(3, None)
+    assert tab.overlay_message() != "Loading…"
+    assert "Could not load the graph" in tab.footnote_text()
+    n = len(requests(loader))
+    loader.set_rows(ROWS)
+    assert requests(loader)[n:] == [3]          # retried; the good one is not
+
+
+def test_read_error_banner_when_rows_are_shown(make):
+    tab, loader = make()
+    tab.set_ids([1])
+    loader.failed.emit("net", "no route")
+    assert tab.banner.isVisible()
+    assert tab.banner_label.text() == "Can't reach the database: no route"
+    loader.set_rows(ROWS)
+    assert not tab.banner.isVisible()

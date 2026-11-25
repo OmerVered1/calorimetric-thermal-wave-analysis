@@ -3,6 +3,7 @@ overlay useMemo, differingRows). No Qt."""
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -13,6 +14,8 @@ from ctwa.ui.results.fmt import js_str, label_of
 
 DASH = "—"
 MAX_RUNS = 4
+_PARSED_MAX = 20
+_parsed: "OrderedDict[str, Any]" = OrderedDict()   # raw graph text -> parsed figure (LRU)
 
 # Two colours per run (source, response), so up to four runs stay distinct.
 COMPARE_COLORS = ["#1F5BB0", "#E4572E", "#2A9D8F", "#E9A23B", "#8E44AD", "#3BA3D9", "#16A085", "#D35D9B",
@@ -237,11 +240,27 @@ def _finite_extent(vals: List[float]) -> Tuple[float, float]:
     return lo, hi
 
 
+def _parse_cached(raw: Optional[str]):
+    """parse_graph with a small LRU keyed by the raw text: toggling an option re-draws without re-parsing
+    megabytes of JSON, and changed text is a different key."""
+    if not isinstance(raw, str):
+        return parse_graph(raw)
+    hit = _parsed.get(raw)
+    if hit is not None:
+        _parsed.move_to_end(raw)
+        return hit
+    fig = parse_graph(raw)
+    _parsed[raw] = fig
+    while len(_parsed) > _PARSED_MAX:
+        _parsed.popitem(last=False)
+    return fig
+
+
 def overlay_run(row: Dict[str, Any], raw_graph: Optional[str], index: int,
                 opts: OverlayOptions) -> Optional[OverlayRun]:
     """One run's traces and guide lines for the overlay, or None when it has no stored Plotly figure with
     a Source or Response trace (the page lists such runs in its "no stored waveform" note)."""
-    fig = parse_graph(raw_graph)
+    fig = _parse_cached(raw_graph)
     if not isinstance(fig, StoredFigure):
         return None
     wanted = [t for t in fig.traces if t.name in ("Source", "Response")]

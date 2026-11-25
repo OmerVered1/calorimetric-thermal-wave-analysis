@@ -225,3 +225,55 @@ def test_no_attribute_hides_a_qwidget_member(make):
     from PySide6.QtWidgets import QWidget
     tab, _ = make()
     assert [n for n in vars(tab) if hasattr(QWidget, n) and not isinstance(getattr(QWidget, n), Signal)] == []
+
+
+def test_visible_table_fill_is_fast(make):
+    """A refresh of a shown 300-row table must not re-measure every row per cell (was 5.5 s at 100 rows)."""
+    import time
+    rows = [row(i, model_name="Model %d" % i) for i in range(1, 301)]
+    tab, loader = make(rows)
+    assert tab.table.isVisible() and tab.table.rowCount() == 300
+    t0 = time.perf_counter()
+    loader.set_rows([dict(r, temperature_c=800) for r in rows])
+    tab.set_search("Model 1")
+    tab.set_search("")
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 1.0, "3 refreshes of 300 rows took %.2f s" % elapsed
+
+
+def test_failed_graph_shows_note_and_bars(make):
+    tab, loader = make()
+    tab.select_id(2)
+    assert tab.figure_view().mode() == "loading"
+    loader.graph_loaded.emit(2, None)
+    fv = tab.figure_view()
+    assert fv.mode() != "loading"
+    assert fv.note() == "Could not load the graph"
+    assert fv.bar_labels()
+    loader.graph_loaded.emit(1, None)           # not the selected one: ignored
+    assert fv.note() == "Could not load the graph"
+
+
+def test_read_error_banner_with_rows_on_screen(make):
+    tab, loader = make()
+    loader.failed.emit("net", "no route")
+    assert tab.banner_label.isVisible()
+    assert tab.banner_label.text() == "Can't reach the database: no route"
+    assert tab.table.rowCount() == 3
+    loader.set_rows(ROWS)
+    assert not tab.banner_label.isVisible()
+
+
+def test_created_is_local_time_and_parses_fractions(monkeypatch):
+    import time
+    from ctwa.ui.results.history_tab import _created
+    monkeypatch.setenv("TZ", "Asia/Jerusalem")
+    time.tzset()
+    try:
+        assert _created("2026-11-20T10:00:00Z") == "11/20/2026, 12:00:00 PM"
+        assert _created("2026-11-20T10:00:00.5Z") == "11/20/2026, 12:00:00 PM"
+        assert _created("2026-11-20T10:00:00.123456789+00:00") == "11/20/2026, 12:00:00 PM"
+        assert _created("2026-11-20T10:00:00.12Z") == "11/20/2026, 12:00:00 PM"
+    finally:
+        monkeypatch.undo()
+        time.tzset()

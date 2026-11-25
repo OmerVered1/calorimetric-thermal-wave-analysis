@@ -225,6 +225,11 @@ class FigureView(QWidget):
         self._message.setText("Loading…")
         self._stack.setCurrentWidget(self._message)
 
+    def show_graph_failed(self, row: Dict[str, Any]) -> None:
+        """The stored plot could not be fetched: the α bars with a note."""
+        self._remove_items()
+        self._show_bars(row, "Could not load the graph")
+
     def show_graph(self, raw: Optional[str], row: Dict[str, Any]) -> None:
         self._remove_items()
         try:

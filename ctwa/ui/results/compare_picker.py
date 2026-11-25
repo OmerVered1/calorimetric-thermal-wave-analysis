@@ -210,7 +210,7 @@ class RunPicker(QWidget):
             cl.addWidget(lab)
             x = QToolButton()
             x.setText("×")
-            x.setToolTip("Delete #%s" % js_str(id))
+            x.setToolTip("Remove #%s" % js_str(id))
             x.clicked.connect(lambda _=False, i=id: self.remove(i))
             cl.addWidget(x)
             self._chips.addWidget(chip)

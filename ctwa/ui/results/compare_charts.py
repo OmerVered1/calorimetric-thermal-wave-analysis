@@ -86,7 +86,7 @@ class OverlayChart(QWidget):
     def _clear(self) -> None:
         for it in self._items:
             try:
-                self._vb.removeItem(it)
+                self._pi.removeItem(it)
             except (RuntimeError, ValueError):
                 pass
         self._items, self._curves, self._lines, self._labels, self._boxes = [], [], [], [], []
@@ -106,7 +106,8 @@ class OverlayChart(QWidget):
             if run is None:
                 continue
             for tr in run.traces:
-                item = pg.PlotDataItem(tr.x, tr.y, pen=_pen(tr.color, 2.0, tr.dash), name=tr.name)
+                item = pg.PlotDataItem(tr.x, tr.y, pen=_pen(tr.color, 2.0, tr.dash), name=tr.name,
+                                    connect="finite")
                 self._pi.addItem(item)
                 item.setDownsampling(auto=True, method="peak")   # clip-to-view would skew the autorange
                 self._items.append(item)
