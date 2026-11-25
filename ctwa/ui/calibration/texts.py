@@ -115,6 +115,8 @@ TEXT: Dict[str, str] = {
     "all": "All",
     "none": "None",
     "loading": "Loading...",
+    "noPeriod": "This run has no period",
+    "refNoPeriod": "This reference has no period, so it cannot be used for the fit",
     "logIn": "Log in…",
     "delete": "Delete",
     # desktop-only wording (no webapp counterpart)

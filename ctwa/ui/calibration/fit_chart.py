@@ -22,6 +22,26 @@ CURVE_COLOR = "#7f8c8d"
 REGION_BRUSH = (31, 91, 176, int(round(0.07 * 255)))
 
 
+class _PeriodAxis(pg.AxisItem):
+    """Log-x axis in seconds: ticks at 1, 2, 3, 5, 7 x 10^k labelled as plain numbers (80, 100, 250)."""
+    _MANTISSAS = (1, 2, 3, 5, 7)
+
+    def tickValues(self, minVal, maxVal, size):
+        lo, hi = 10 ** minVal, 10 ** maxVal
+        vals = []
+        k = math.floor(math.log10(lo)) - 1
+        while 10 ** k <= hi:
+            for m in self._MANTISSAS:
+                v = m * 10 ** k
+                if lo <= v <= hi:
+                    vals.append(math.log10(v))
+            k += 1
+        return [(1.0, vals)]
+
+    def tickStrings(self, values, scale, spacing):
+        return ["%g" % round(10 ** v, 6) for v in values]
+
+
 def _hover(x, y, _data) -> str:
     return "%d s → %.1f s" % (x, y)
 
@@ -31,7 +51,7 @@ class FitChart(QWidget):
         super().__init__(parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.plot = pg.PlotWidget()
+        self.plot = pg.PlotWidget(axisItems={"bottom": _PeriodAxis("bottom")})
         self.plot.setFixedHeight(340)
         theme.style_plot(self.plot, TEXT["fitChartTitle"])
         self.item = self.plot.getPlotItem()
@@ -78,7 +98,7 @@ class FitChart(QWidget):
             self.scatter_items.append(it)
         # the fitted curve
         xs, ys = curve_points(fit)
-        self.curve_item = pg.PlotDataItem(xs, ys, pen=theme.pen(CURVE_COLOR, 2, dashed=True), name=fit.kind)
+        self.curve_item = pg.PlotDataItem(xs, ys, pen=theme.pen(CURVE_COLOR, 2, dashed=True), name=TEXT["model_" + fit.kind])
         self.item.addItem(self.curve_item)
         # the target: a vertical line, and a star on the curve at its period
         period = target.get("period_t") if target else None

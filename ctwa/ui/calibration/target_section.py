@@ -6,6 +6,7 @@ The section holds its own `saving` state from the click until the save has finis
 can take a while before the queue is even busy), so a double click cannot write two copies."""
 from __future__ import annotations
 
+import math
 from typing import Callable, List, Optional
 
 from PySide6.QtCore import QSortFilterProxyModel, Qt
@@ -27,6 +28,11 @@ from ctwa.ui.calibration.writes import WriteOp, WriteQueue
 
 DASH = "—"
 SORTS = [("period", "sortPeriod"), ("nearPeriod", "sortNearPeriod"), ("nearTemp", "sortNearTemp")]
+
+
+def _has_period(row: dict) -> bool:
+    p = row.get("period_t")
+    return isinstance(p, (int, float)) and math.isfinite(p) and p > 0
 
 
 def _signed(v: Optional[float]) -> str:
@@ -175,6 +181,8 @@ class TargetSection(StepCard):
         self.applied_label = QLabel("")
         self.applied_label.setWordWrap(True)
         rl.addWidget(self.applied_label)
+        self.no_period_label = theme.set_role(QLabel(TEXT["noPeriod"]), "danger")
+        rl.addWidget(self.no_period_label)
         self.range_warn = self._warn_label(rl, "danger")
         self.copy_warn = self._warn_label(rl, "warn")
         self.mismatch_warn = self._warn_label(rl, "danger")
@@ -207,7 +215,7 @@ class TargetSection(StepCard):
         brow.addWidget(self.save_button)
         brow.addStretch(1)
         rl.addLayout(brow)
-        body.addWidget(self.result)
+        body.insertWidget(body.indexOf(self.models), self.result)   # the Save card stays near the top
 
         # ---- wiring ----
         self.target_combo.currentIndexChanged.connect(self._on_target)
@@ -250,8 +258,8 @@ class TargetSection(StepCard):
         i = item.data(Qt.UserRole)
         ids = list(self._state.selected_ref_ids)
         if item.checkState() == Qt.Checked:
-            lag = next((x.lag for x in self._state.picker if x.ref["id"] == i), None)
-            if lag is None:     # a reference without a lag can never be ticked
+            lag = next((x.lag for x in self._state.picker if x.ref["id"] == i and _has_period(x.ref)), None)
+            if lag is None:     # a reference without a lag or period can never be ticked
                 self.list.blockSignals(True)
                 item.setCheckState(Qt.Unchecked)
                 self.list.blockSignals(False)
@@ -264,13 +272,18 @@ class TargetSection(StepCard):
 
     def _select_all(self) -> None:
         ids = list(self._state.selected_ref_ids)
-        ids += [x.ref["id"] for x in self._state.picker if x.lag is not None and x.ref["id"] not in ids]
+        ids += [x.ref["id"] for x in self._state.picker if x.lag is not None and _has_period(x.ref)
+                and x.ref["id"] not in ids]
         self._state.selected_ref_ids = ids
 
     def _on_model_row(self, row: int, _col: int) -> None:
         item = self.model_table.item(row, 1)
         if item is not None:
             self._state.model_kind = item.data(Qt.UserRole)
+
+    def _editing_target(self) -> bool:
+        edit = self.target_combo.lineEdit()
+        return edit is not None and edit.hasFocus()
 
     # ---- showing ----
     def refresh(self) -> None:
@@ -280,6 +293,8 @@ class TargetSection(StepCard):
         # target combo
         cands = s.non_references
         key = [(a["id"], label_of(a)) for a in cands]
+        editing = self._editing_target()
+        typed = self.target_combo.currentText()
         self.target_combo.blockSignals(True)
         if key != self._target_key:
             self._target_key = key
@@ -287,7 +302,10 @@ class TargetSection(StepCard):
             self.target_combo.addItem(TEXT["chooseTarget"], None)
             for i, text in key:
                 self.target_combo.addItem(text, i)
-        self.target_combo.setCurrentIndex(max(0, self.target_combo.findData(s.target_id)))
+        if editing:
+            self.target_combo.setEditText(typed)      # the user is typing: never reset the editor under them
+        else:
+            self.target_combo.setCurrentIndex(max(0, self.target_combo.findData(s.target_id)))
         self.target_combo.blockSignals(False)
         self.measured_label.setVisible(target is not None)
         if target is not None:
@@ -333,8 +351,10 @@ class TargetSection(StepCard):
                         lines[0] += " · ΔP = %s s" % _signed(x.d_p)
                     it = QListWidgetItem(lines[0])
                     flags = it.flags() | Qt.ItemIsUserCheckable
-                    if x.lag is None:
+                    if x.lag is None or not _has_period(ref):
                         flags &= ~Qt.ItemIsEnabled
+                    if x.lag is not None and not _has_period(ref):
+                        it.setToolTip(TEXT["refNoPeriod"])
                     it.setFlags(flags)
                     it.setData(Qt.UserRole, ref["id"])
                     self.list.addItem(it)
@@ -391,7 +411,13 @@ class TargetSection(StepCard):
         # result
         applied = s.applied
         cal = s.calibrated
-        self.result.setVisible(target is not None and applied is not None)
+        no_period = target is not None and applied is None and not _has_period(target)
+        self.result.setVisible(target is not None and (applied is not None or no_period))
+        self.no_period_label.setVisible(no_period)
+        if no_period:
+            for w in (self.applied_label, self.range_warn, self.copy_warn, self.mismatch_warn,
+                      self.cards, self.not_cal_label):
+                w.hide()
         if target is not None and applied is not None:
             via = (TEXT["sourceDirect"] if source == "direct"
                    else (TEXT["model_" + fit.kind] if fit else ""))
