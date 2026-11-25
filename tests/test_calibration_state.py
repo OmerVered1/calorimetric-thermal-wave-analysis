@@ -161,3 +161,30 @@ def test_picker_and_batch_rows(state):
     state.batch_material = "Stainless Steel"
     ids = [r.a["id"] for r in state.batch_rows]
     assert ids == [99, 100, 103]
+
+
+def test_curve_source_falls_back_to_direct_below_two_refs(state):
+    state.selected_ref_ids = [10, 11, 12, 13, 14]
+    state.lag_source = "curve"
+    assert state.fit is not None and state.source == "curve"
+    state.selected_ref_ids = [10]
+    assert state.fit is None and state.source == "direct"      # no curve to apply any more
+    state.selected_ref_ids = [10, 11, 12, 13, 14]
+    assert state.source == "curve"                             # the user's choice comes back with the curve
+
+
+def test_fits_memo_keeps_several_point_sets(state, monkeypatch):
+    from ctwa.ui.calibration import state as state_mod
+    calls = []
+    real = state_mod.fit_lag_models
+    monkeypatch.setattr(state_mod, "fit_lag_models", lambda pts: calls.append(len(pts)) or real(pts))
+    a, b = [10, 11, 12, 13, 14], [10, 11, 12, 13]
+    state.selected_ref_ids = a
+    state.fits
+    state.selected_ref_ids = b
+    state.fits
+    state.selected_ref_ids = a          # toggled back: instant, no refit
+    state.fits
+    state.selected_ref_ids = b
+    state.fits
+    assert len(calls) == 2
