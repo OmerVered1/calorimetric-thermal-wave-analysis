@@ -303,3 +303,31 @@ def test_committed_alpha_edit_does_not_block_refresh(env):
     row = next(r for r in rows if r["id"] == 10)
     assert table.table.item(0, 5).text() == "%s s" % num(true_lag_for_alpha(row, 0.5))
     assert table.alpha_edits[10].text() == "0.5"
+
+
+# ---- a Save's reservation (graph wait .. refresh after the write) blocks the other writers too ----
+def test_reservation_disables_and_guards_other_writers(qapp):
+    from tests.calibration_fakes import SS_PRESET
+    loader, state, queue, mark, table, msgs = build()
+    from ctwa.ui.calibration.presets_section import PresetsSection
+    presets = PresetsSection(state, queue, lambda t, k: msgs.append((t, k)))
+    state.set_presets([SS_PRESET])
+    state.mark_ids = [99]
+    state.mark_alpha = "5"
+    presets.material.setText("M")
+    presets.temp.setText("1")
+    presets.alpha.setText("2")
+    assert mark.mark_button.isEnabled() and presets.save_button.isEnabled()
+    assert queue.reserve()
+    assert not queue.busy
+    assert not mark.mark_button.isEnabled() and not mark.select_all.isEnabled()
+    assert not presets.save_button.isEnabled() and not presets.delete_buttons[0].isEnabled()
+    assert not table.unmark_buttons[11].isEnabled() and not table.alpha_edits[11].isEnabled()
+    mark.mark()
+    presets.save()
+    presets.delete(1)
+    table.unmark(11)
+    assert loader.ops == []
+    queue.release()
+    assert mark.mark_button.isEnabled() and presets.save_button.isEnabled()
+    assert table.unmark_buttons[11].isEnabled()

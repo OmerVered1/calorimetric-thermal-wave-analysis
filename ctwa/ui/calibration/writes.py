@@ -75,6 +75,11 @@ class WriteQueue(QObject):
     def busy(self) -> bool:
         return self._busy
 
+    @property
+    def locked(self) -> bool:
+        """A write run is going or a save holds the reservation: other writers must not start."""
+        return self._busy or self._reserved
+
     # ---- reservation ----
     @property
     def reserved(self) -> bool:

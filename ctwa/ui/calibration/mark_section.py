@@ -105,6 +105,7 @@ class MarkSection(QWidget):
         self.mark_button.clicked.connect(self.mark)
         state.changed.connect(self.refresh)
         queue.busy_changed.connect(lambda _b: self._sync_buttons())
+        queue.reserved_changed.connect(lambda _b: self._sync_buttons())
         queue.progress.connect(self._on_progress)
         self.refresh()
 
@@ -162,9 +163,9 @@ class MarkSection(QWidget):
     def _sync_buttons(self) -> None:
         n = len(self.ticked_rows())
         self.mark_button.setText(TEXT["markButton"].format(n=n))
-        self.mark_button.setEnabled(n > 0 and not self._queue.busy)
-        self.select_all.setDisabled(self._queue.busy)
-        self.clear.setDisabled(self._queue.busy)
+        self.mark_button.setEnabled(n > 0 and not self._queue.locked)
+        self.select_all.setDisabled(self._queue.locked)
+        self.clear.setDisabled(self._queue.locked)
 
     # ---- user actions ----
     def _on_item(self, item: QListWidgetItem) -> None:
@@ -183,7 +184,7 @@ class MarkSection(QWidget):
         self._state.mark_ids = ids
 
     def mark(self) -> None:
-        if self._queue.busy:
+        if self._queue.locked:
             return
         rows = self.ticked_rows()
         if not rows:

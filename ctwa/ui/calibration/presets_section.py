@@ -90,6 +90,7 @@ class PresetsSection(QWidget):
         self.save_button.clicked.connect(self.save)
         state.changed.connect(self.refresh)
         queue.busy_changed.connect(self._sync_busy)
+        queue.reserved_changed.connect(self._sync_busy)
         self.refresh()
 
     # ---- showing ----
@@ -146,7 +147,7 @@ class PresetsSection(QWidget):
         self.chip_host.updateGeometry()
 
     def _sync_busy(self, *_args) -> None:
-        busy = self._queue.busy
+        busy = self._queue.locked
         self.save_button.setDisabled(busy)
         for x in self.delete_buttons:
             x.setDisabled(busy)
@@ -164,7 +165,7 @@ class PresetsSection(QWidget):
         self.literature.blockSignals(False)
 
     def save(self) -> None:
-        if self._queue.busy:
+        if self._queue.locked:
             return
         material = self.material.text().strip()
         temp = parse_number(self.temp.text())
@@ -190,7 +191,7 @@ class PresetsSection(QWidget):
             w.clear()
 
     def delete(self, preset_id: int, name: str = "") -> None:
-        if self._queue.busy:
+        if self._queue.locked:
             return
         self._queue.run([WriteOp("preset_delete", preset_id, None, name or "#%s" % preset_id)], self._deleted)
 

@@ -66,6 +66,7 @@ class ReferenceTable(QWidget):
         self.search.textChanged.connect(self._apply_search)
         state.changed.connect(self.refresh)
         queue.busy_changed.connect(lambda _b: self._sync_busy())
+        queue.reserved_changed.connect(lambda _b: self._sync_busy())
         self.refresh()
 
     # ---- showing ----
@@ -176,7 +177,7 @@ class ReferenceTable(QWidget):
             self.table.setRowHidden(r, bool(q.strip()) and not row_matches(by_id[i], q))
 
     def _sync_busy(self) -> None:
-        busy = self._queue.busy
+        busy = self._queue.locked
         for b in self.unmark_buttons.values():
             b.setDisabled(busy)
         for e in self.alpha_edits.values():
@@ -236,7 +237,7 @@ class ReferenceTable(QWidget):
             self._set_status(i, TEXT["cellSaved"], SAVED_MS)
 
     def unmark(self, i: int) -> None:
-        if self._queue.busy:
+        if self._queue.locked:
             return
         self._queue.run([WriteOp("update", i, {"is_reference": False, "reference_alpha_mm2s": None}, "#%s" % i)],
                         lambda s, i=i: self._unmarked(i, s))
