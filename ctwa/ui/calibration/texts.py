@@ -115,6 +115,7 @@ TEXT: Dict[str, str] = {
     "all": "All",
     "none": "None",
     "loading": "Loading...",
+    "logIn": "Log in…",
     "delete": "Delete",
     # desktop-only wording (no webapp counterpart)
     "cellSaving": "saving…",

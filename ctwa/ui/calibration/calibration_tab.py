@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea, QVBoxLayout,
                                QWidget)
 
@@ -34,12 +34,16 @@ def ask_confirm(title: str, message: str, button_label: str) -> bool:
 
 
 class CalibrationTab(QWidget):
+    login_needed = Signal()     # the 'Log in…' button: the app opens its webapp login dialog
+
     def __init__(self, loader, parent: Optional[QWidget] = None,
                  confirm: Callable[[str, str, str], bool] = ask_confirm) -> None:
         super().__init__(parent)
         self._loader = loader
         self._shown = False
         self._loaded = False
+        self._load_failed = False     # the last load attempt failed and no rows have arrived yet
+        self._presets_pending = False
         self.state = CalibrationState(self)
         self.queue = WriteQueue(loader, self)
 
@@ -71,6 +75,10 @@ class CalibrationTab(QWidget):
 
         self.loading_label = theme.set_role(QLabel(TEXT["loading"]), "muted")
         root.addWidget(self.loading_label)
+        self.login_button = QPushButton(TEXT["logIn"])
+        self.login_button.hide()
+        root.addWidget(self.login_button, 0, Qt.AlignLeft)
+        self.login_button.clicked.connect(self.login_needed.emit)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -98,7 +106,7 @@ class CalibrationTab(QWidget):
         self.combined_button.clicked.connect(lambda: self._set_method("combined"))
         self.refresh_button.clicked.connect(self._on_refresh)
         loader.rows_changed.connect(self._on_rows)
-        loader.presets_changed.connect(self.state.set_presets)
+        loader.presets_changed.connect(self._on_presets)
         loader.failed.connect(self._on_failed)
         self.queue.busy_changed.connect(self._on_busy)
         self.state.changed.connect(self._sync)
@@ -106,12 +114,22 @@ class CalibrationTab(QWidget):
 
     # ---- public ----
     def refresh(self) -> None:
-        self._loader.refresh()
+        self._start_load()
 
     def on_shown(self) -> None:
-        if not self._shown:
+        # first time, and again whenever the page is still not there because the last load failed
+        # (offline / logged out at first open)
+        if not self._shown or (self._load_failed and not self._loaded):
             self._shown = True
-            self._loader.refresh()
+            self._start_load()
+
+    def _start_load(self) -> None:
+        if not self._loaded:
+            self._load_failed = False
+            self.loading_label.setText(TEXT["loading"])
+            self.login_button.hide()
+        self._presets_pending = True
+        self._loader.refresh()
 
     def show_message(self, text: str, kind: str = "info", ms: int = 5000) -> None:
         """Errors stay until the next action; everything else fades after `ms`."""
@@ -124,8 +142,15 @@ class CalibrationTab(QWidget):
     def _on_message(self, text: str, kind: str) -> None:
         self.show_message(text, kind, 5000 if text == TEXT["saved"] else REPORT_MS)
 
+    def _on_presets(self, presets) -> None:
+        self._presets_pending = False
+        self.presets.set_load_error("")
+        self.state.set_presets(presets)
+
     def _on_rows(self, rows) -> None:
         self._loaded = True
+        self._load_failed = False
+        self.login_button.hide()
         self.state.set_rows(rows)
         self.loading_label.hide()
         self.scroll.show()
@@ -133,7 +158,16 @@ class CalibrationTab(QWidget):
     def _on_failed(self, kind: str, message: str) -> None:
         if self.queue.busy:
             return      # the queue reports its own failures
-        self.show_message(LOGIN_TEXT if kind == "login" else message, "error")
+        text = LOGIN_TEXT if kind == "login" else message
+        if not self._loaded:
+            # first open failed: show why instead of "Loading..." forever, and how to fix it
+            self._load_failed = True
+            self.loading_label.setText(text)
+            self.loading_label.show()
+            self.login_button.setVisible(kind == "login")
+        elif self._presets_pending:
+            self.presets.set_load_error(text)     # the rows came, the presets did not
+        self.show_message(text, "error")
 
     def _on_busy(self, busy: bool) -> None:
         if busy:

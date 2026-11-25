@@ -987,3 +987,24 @@ def test_closing_the_window_shuts_the_loader_down(qapp, monkeypatch):
     win2 = appmod.MainWindow()
     win2.results_loader = None          # cloud off
     win2.close()
+
+
+def test_webapp_login_refreshes_the_loader(qapp, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+    from ctwa import app as appmod
+    from ctwa.ui import login_dialog
+    monkeypatch.setattr(appmod.MainWindow, "_check_license_agreement", lambda self: True)
+    win = appmod.MainWindow()
+    try:
+        calls = []
+        monkeypatch.setattr(win.results_loader, "refresh", lambda: calls.append(1))
+        monkeypatch.setattr(login_dialog.LoginDialog, "exec", lambda self: QDialog.Rejected)
+        win._webapp_login()
+        assert calls == []
+        monkeypatch.setattr(login_dialog.LoginDialog, "exec", lambda self: QDialog.Accepted)
+        win._webapp_login()
+        assert calls == [1]
+        win.results_loader = None          # cloud off: nothing to refresh, no crash
+        win._webapp_login()
+    finally:
+        win.close()
