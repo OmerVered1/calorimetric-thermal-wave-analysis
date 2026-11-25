@@ -225,3 +225,17 @@ def test_no_attribute_hides_a_qwidget_member(make):
     from PySide6.QtWidgets import QWidget
     tab, _ = make()
     assert [n for n in vars(tab) if hasattr(QWidget, n) and not isinstance(getattr(QWidget, n), Signal)] == []
+
+
+def test_visible_table_fill_is_fast(make):
+    """A refresh of a shown 300-row table must not re-measure every row per cell (was 5.5 s at 100 rows)."""
+    import time
+    rows = [row(i, model_name="Model %d" % i) for i in range(1, 301)]
+    tab, loader = make(rows)
+    assert tab.table.isVisible() and tab.table.rowCount() == 300
+    t0 = time.perf_counter()
+    loader.set_rows([dict(r, temperature_c=800) for r in rows])
+    tab.set_search("Model 1")
+    tab.set_search("")
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 1.0, "3 refreshes of 300 rows took %.2f s" % elapsed

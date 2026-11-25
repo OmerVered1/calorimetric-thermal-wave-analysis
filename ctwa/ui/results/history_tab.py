@@ -251,7 +251,7 @@ class HistoryTab(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(theme.ROW_HEIGHT)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)   # sized once per fill
         self.table.horizontalHeader().setSortIndicatorShown(True)
         self.table.horizontalHeader().setSectionsClickable(True)
         self.table.horizontalHeader().sectionClicked.connect(lambda c: self.header_click(HISTORY_COLS[c][0]))
@@ -472,6 +472,7 @@ class HistoryTab(QWidget):
     def _fill_table(self) -> None:
         t = self.table
         self._syncing = True
+        t.setUpdatesEnabled(False)
         try:
             t.setRowCount(len(self._shown))
             for r, row in enumerate(self._shown):
@@ -481,6 +482,7 @@ class HistoryTab(QWidget):
                     align = Qt.AlignLeft if key in _TEXT_COLS else Qt.AlignRight
                     it.setData(Qt.TextAlignmentRole, int(align | Qt.AlignVCenter))
                     t.setItem(r, c, it)
+            t.resizeColumnsToContents()          # once: ResizeToContents would re-measure every row per item
             key, direction = self._sort
             hh = t.horizontalHeader()
             if key and direction:
@@ -490,6 +492,7 @@ class HistoryTab(QWidget):
                 hh.setSortIndicator(-1, Qt.AscendingOrder)
             self._sync_table_selection()
         finally:
+            t.setUpdatesEnabled(True)
             self._syncing = False
 
     def _sync_table_selection(self) -> None:
