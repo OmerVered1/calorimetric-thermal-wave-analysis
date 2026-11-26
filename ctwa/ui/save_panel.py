@@ -218,13 +218,21 @@ class SavePanel(QWidget):
         started = h.get("started")
         self.date_edit.setText(started.strftime("%d/%m/%Y") if isinstance(started, datetime) else "")
         self.time_edit.setText(started.strftime("%H:%M") if isinstance(started, datetime) else "")
-        self.source_device_edit.setText(instrument_device(h.get("instrument")))  # type: ignore[arg-type]
-        self.response_device_edit.setText(calorimeter_device(h.get("calorimeter")))  # type: ignore[arg-type]
-        self.temperature_edit.setText(region_temperature(self._run.parsed, self._opts.sel_min, self._opts.sel_max))
+        # the experiment's details (run header) win; otherwise what the file's other lines and
+        # the per-experiment memory give, as before
+        self.source_device_edit.setText(
+            str(h.get("power_source") or "") or instrument_device(h.get("instrument")))  # type: ignore[arg-type]
+        self.response_device_edit.setText(
+            str(h.get("response_device") or "") or calorimeter_device(h.get("calorimeter")))  # type: ignore[arg-type]
+        temperature = region_temperature(self._run.parsed, self._opts.sel_min, self._opts.sel_max)
+        if not temperature and isinstance(h.get("temperature_c"), (int, float)):
+            temperature = "%g" % h["temperature_c"]  # type: ignore[index]
+        self.temperature_edit.setText(temperature)
         k = self._experiment_key(self._run, "sample")
-        self.sample_edit.setText(str(self._settings.value(k, "")) if k else "")
+        self.sample_edit.setText(str(h.get("sample") or "") or (str(self._settings.value(k, "")) if k else ""))
         k = self._experiment_key(self._run, "gas")
-        self.gas_combo.setCurrentText(str(self._settings.value(k, "Ar")) if k else "Ar")
+        self.gas_combo.setCurrentText(
+            str(h.get("gas") or "") or (str(self._settings.value(k, "Ar")) if k else "Ar"))
         if not self._busy:  # a save in flight keeps Save disabled until its job ends
             self.status_label.setText("")
             self._refresh_enabled()

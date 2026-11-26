@@ -690,3 +690,65 @@ def test_enqueue_failure_shows_the_error_and_keeps_the_form(env):
     assert not panel._busy
     assert panel.sample_edit.text() == "Keep me" and panel.sample_edit.isEnabled()
     assert panel.save_btn.isEnabled()  # the result is still armed for another try
+
+
+# ---- experiment details in the run header (Task 4) ----
+
+def _with_header(run_and_results, **header):
+    """The same result, with the run's header extended (and optionally a run without temperatures)."""
+    import copy
+    run, opts, results, plot = run_and_results
+    run2 = copy.copy(run)
+    run2.header = dict(run.header, **header)
+    return run2, opts, results, plot
+
+
+def test_header_details_win_over_the_old_sources(env, run_and_results):
+    panel, _, settings = env(FakeClient())
+    experiment = run_and_results[0].header["experiment"]
+    settings.setValue("save/last/%s/sample" % quote(experiment, safe=""), "Remembered")
+    settings.setValue("save/last/%s/gas" % quote(experiment, safe=""), "Air")
+    panel.set_result(_with_header(run_and_results, sample="Al2O3", gas="He", power_source="PS-1",
+                                  response_device="Cal-1"))
+    assert panel.sample_edit.text() == "Al2O3"
+    assert panel.gas_combo.currentText() == "He"
+    assert panel.source_device_edit.text() == "PS-1"
+    assert panel.response_device_edit.text() == "Cal-1"
+
+
+def test_no_header_details_fall_back_to_memory_and_old_sources(env, run_and_results):
+    panel, _, settings = env(FakeClient())
+    experiment = run_and_results[0].header["experiment"]
+    settings.setValue("save/last/%s/sample" % quote(experiment, safe=""), "Remembered")
+    settings.setValue("save/last/%s/gas" % quote(experiment, safe=""), "Air")
+    panel.set_result(_with_header(run_and_results, sample=None, gas=None, power_source=None,
+                                  response_device=None))
+    assert panel.sample_edit.text() == "Remembered"
+    assert panel.gas_combo.currentText() == "Air"
+    assert panel.source_device_edit.text() == "Keithley 2602B"
+    assert panel.response_device_edit.text() == "Drop Calorimeter"
+    # and with no memory either: gas defaults to Ar, sample blank
+    other = _with_header(run_and_results, experiment="never saved before", sample=None, gas=None)
+    panel.set_result(other)
+    assert panel.sample_edit.text() == "" and panel.gas_combo.currentText() == "Ar"
+
+
+def test_measured_temperature_wins_over_the_header(env, run_and_results):
+    panel, _, _ = env(FakeClient())
+    run, opts, _, _ = run_and_results
+    panel.set_result(_with_header(run_and_results, temperature_c=999.0))
+    measured = panel.temperature_edit.text()
+    assert measured and measured != "999"
+
+
+def test_header_temperature_is_used_when_the_run_has_no_temperature_column(env, run_and_results):
+    from types import SimpleNamespace
+    panel, _, _ = env(FakeClient())
+    run, opts, results, plot = _with_header(run_and_results, temperature_c=800.5)
+    run.parsed = SimpleNamespace(time=list(run.parsed.time),
+                                 temperature=[float("nan")] * len(run.parsed.time))
+    panel.set_result((run, opts, results, plot))
+    assert panel.temperature_edit.text() == "800.5"
+    run.header["temperature_c"] = None
+    panel.set_result((run, opts, results, plot))
+    assert panel.temperature_edit.text() == ""

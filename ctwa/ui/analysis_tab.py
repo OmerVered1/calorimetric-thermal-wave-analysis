@@ -221,6 +221,12 @@ class AnalysisTab(QWidget):
     def _on_loaded(self, run: LoadedRun) -> None:
         if run.path != self._path:
             return
+        # radii the experiment's details wrote into the run: the first Analyze uses them
+        # (r2 <= r1 is left to the usual radii check, which keeps Analyze disabled)
+        for key, spin in (("r1_mm", self.settings.r1_spin), ("r2_mm", self.settings.r2_spin)):
+            value = run.header.get(key)
+            if isinstance(value, (int, float)):
+                spin.setValue(float(value))
         self.run = run
         self._loading = False
         s = run.synced

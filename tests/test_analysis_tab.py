@@ -583,3 +583,46 @@ def test_divider_is_a_splitter_with_a_roomy_plot_and_remembers_its_state(qapp, t
     p, q = b.splitter.sizes()
     assert abs(p / (p + q) - want[0] / sum(want)) < 0.03
     b.worker.shutdown()
+
+
+# ---- experiment details in the run header ----
+
+def _run_with_header(run_file, tmp_path, lines):
+    with open(run_file, "rb") as f:
+        body = f.read()
+    out = tmp_path / "with_details.csv"
+    out.write_bytes(("\n".join(lines) + "\n").encode("utf-8") + body)
+    return str(out)
+
+
+def _open(qapp, path):
+    w = AnalysisTab()
+    w.resize(1200, 800)
+    w.open_run(path)
+    assert wait_until(lambda: w.run is not None), "run did not load"
+    return w
+
+
+def test_header_radii_set_the_spins(qapp, run_file, tmp_path):
+    w = _open(qapp, _run_with_header(run_file, tmp_path, ["# InnerRadius: 5.5", "# OuterRadius: 12.25"]))
+    try:
+        assert w.settings.r1_spin.value() == 5.5 and w.settings.r2_spin.value() == 12.25
+        assert w.run.header["r1_mm"] == 5.5
+        assert w.analyze_btn.isEnabled()
+    finally:
+        w.worker.shutdown()
+
+
+def test_no_header_radii_leave_the_spins_alone(tab):
+    from ctwa.ui.analysis_settings import DEFAULT_R1, DEFAULT_R2
+    assert tab.settings.r1_spin.value() == DEFAULT_R1 and tab.settings.r2_spin.value() == DEFAULT_R2
+
+
+def test_header_r2_not_above_r1_keeps_analyze_disabled(qapp, run_file, tmp_path):
+    w = _open(qapp, _run_with_header(run_file, tmp_path, ["# InnerRadius: 9", "# OuterRadius: 7"]))
+    try:
+        assert w.settings.r1_spin.value() == 9 and w.settings.r2_spin.value() == 7
+        assert not w.analyze_btn.isEnabled()
+        assert not w.settings.radii_ok()
+    finally:
+        w.worker.shutdown()
