@@ -234,7 +234,7 @@ def test_analysis_tab_pages_fit_without_scrolling_at_1400x900(app, window, tmp_p
         return top >= 0 and bottom <= view.height()
 
     # Setup: no plot, the form and the settings get the height; Next is in view
-    assert tab.step() == "setup" and tab.plot.isHidden()
+    assert tab.step() == "setup" and not tab.plot.isVisibleTo(tab)
     assert fits(tab.next_region_btn)
     # Region: a roomy plot, Analyze in view
     out = tmp_path / "al2o3_ctwa.csv"

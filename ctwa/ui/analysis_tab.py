@@ -7,6 +7,7 @@ GUI thread only draws. Results are shown here and announced through
 `result_ready`; saving is somebody else's job."""
 from __future__ import annotations
 
+import json
 import os
 from typing import List, Optional
 
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushB
                                QSizePolicy, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
 
 from ctwa import theme
+from ctwa.analysis.row import clean_for_json
 from ctwa.analysis.runner import LoadedRun, RegionInfo
 from ctwa.analysis.jsmath import js_round
 from ctwa.analysis.sine_fit import refine_peak
@@ -26,6 +28,7 @@ from ctwa.ui.analysis_results import ResultsPanel
 from ctwa.ui.analysis_settings import SettingsPanel
 from ctwa.ui.analysis_worker import AnalysisWorker
 from ctwa.ui.dual_axis import ResponseViewBox, link_y_zoom
+from ctwa.ui.results.figure_view import FigureView
 
 MARKER_NAMES = ("S1", "S2", "R1", "R2")  # source peak 1, 2; response peak 1, 2
 STEPS = (("setup", "1 Setup"), ("region", "2 Region"), ("peaks", "3 Peaks"), ("results", "4 Results"))
@@ -54,6 +57,8 @@ class AnalysisTab(QWidget):
         self._options: Optional[PipelineOptions] = None
         self._placed_for = None  # (sel_min, sel_max) the markers were last placed for
         self._has_results = False
+        self._plot_dict = None       # the analysis figure (Plotly dict) of the result on show
+        self._result_row = {}        # what the figure's bar fallback needs
         self._info = {}        # (path, sel_min, sel_max, smooth, wave) -> runner.RegionInfo
         self._pending = {}     # marker index -> dropped time, waiting for the smoothed series
         self._pending_key = None
@@ -66,7 +71,11 @@ class AnalysisTab(QWidget):
         self.title = theme.set_role(QLabel("Open a run from the Runs tab"), "heading")
         self.splitter = QSplitter(Qt.Vertical)
         self.splitter.setChildrenCollapsible(False)
-        self.splitter.addWidget(self._build_plot())
+        self.result_figure = FigureView()
+        self._top = QStackedWidget()     # the shared plot, or on 4 Results the analysis figure
+        self._top.addWidget(self._build_plot())
+        self._top.addWidget(self.result_figure)
+        self.splitter.addWidget(self._top)
         root.addWidget(self.splitter, stretch=1)
 
         self.stack = QStackedWidget()
@@ -214,7 +223,8 @@ class AnalysisTab(QWidget):
         self.stack.setCurrentWidget(self._pages[step])
         self.step_buttons[step].setChecked(True)
         item = self.plot.getPlotItem()
-        self.plot.setVisible(step != "setup")
+        self._top.setVisible(step != "setup")
+        self._top.setCurrentWidget(self.result_figure if self._show_result_figure(step) else self.plot)
         if step == "region":
             item.vb.autoRange()
             self._vb2.autoRange()
@@ -225,6 +235,27 @@ class AnalysisTab(QWidget):
         self._update_controls()
         if not self._moved:
             QTimer.singleShot(0, self._size_divider)
+
+    def _show_result_figure(self, step: str) -> bool:
+        """Draw the analysis figure on ④ Results. False (the shared plot stays) when there is none
+        or it fell back to bars."""
+        if step != "results" or self._plot_dict is None:
+            return False
+        try:
+            raw = json.dumps(clean_for_json(self._plot_dict), separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError):
+            return False
+        self.result_figure.show_graph(raw, self._result_row)
+        return self.result_figure.mode() == "figure"
+
+    def result_figure_shown(self) -> bool:
+        return self._top.currentWidget() is self.result_figure
+
+    def _clear_result(self) -> None:
+        self._has_results = False
+        if self._plot_dict is not None:
+            self._plot_dict = None
+            self.result_figure.show_graph(None, {})
 
     def _place_analyze(self) -> None:
         """Analyze (with Cancel) lives on the Peaks page in Manual mode, else on the Region page."""
@@ -372,7 +403,7 @@ class AnalysisTab(QWidget):
         self.run = None
         self._loading = True
         self._running = False
-        self._has_results = False
+        self._clear_result()
         self._placed_for = None
         self._info = {}
         self._pending = {}
@@ -532,7 +563,7 @@ class AnalysisTab(QWidget):
         self._pending_key = None
         self._place_pending = False
         self._running = True
-        self._has_results = False
+        self._clear_result()
         self.result_cleared.emit()
         self.results_panel.show_busy()
         self._update_controls()
@@ -552,6 +583,11 @@ class AnalysisTab(QWidget):
         res, plot = outcome   # the worker built the plot too: no maths here
         self._running = False
         self._has_results = True
+        self._plot_dict = plot
+        self._result_row = {
+            "alpha_combined_raw": res.alpha_combined_raw, "alpha_phase_raw": res.alpha_phase_raw,
+            "alpha_combined_cal": res.alpha_combined_cal, "alpha_phase_cal": res.alpha_phase_cal,
+            "use_calibration": self.settings.calib_check.isChecked()}
         self.results_panel.show_results(res)
         self._update_controls()
         self.result_ready.emit((self.run, self._options, res, plot))
@@ -562,7 +598,7 @@ class AnalysisTab(QWidget):
         was_loading = self._loading
         self._running = False
         self._loading = False
-        self._has_results = False
+        self._clear_result()
         self.result_cleared.emit()
         if was_loading and self._path:
             self.title.setText(os.path.basename(self._path))
@@ -575,7 +611,7 @@ class AnalysisTab(QWidget):
         self._pending_key = None
         self._pending = {}
         self._place_pending = False
-        self._has_results = False
+        self._clear_result()
         self.results_panel.show_note("Couldn't snap the markers; they stay where you dropped them.")
         self._update_controls()
 
@@ -589,7 +625,7 @@ class AnalysisTab(QWidget):
 
     def _on_settings_changed(self) -> None:
         if self._has_results:
-            self._has_results = False
+            self._clear_result()
             self.results_panel.show_stale()
             self.result_cleared.emit()   # Save waits for the next analysis
         if self._step == "peaks" and not self.settings.manual():

@@ -659,7 +659,7 @@ def test_starts_on_setup_with_the_plot_hidden(qapp):
     w.resize(1200, 800)
     w.show()
     assert w.step() == "setup"
-    assert w.plot.isHidden()
+    assert not w.plot.isVisibleTo(w)   # the plot sits in the top stack, which is hidden on Setup
     assert [w.step_buttons[n].text() for n in ("setup", "region", "peaks", "results")] == \
         ["1 Setup", "2 Region", "3 Peaks", "4 Results"]
     assert w.step_buttons["setup"].isEnabled()
@@ -672,10 +672,10 @@ def test_starts_on_setup_with_the_plot_hidden(qapp):
 
 def test_next_goes_to_region_once_loaded(tab):
     tab.show()
-    assert tab.step() == "setup" and tab.plot.isHidden()
+    assert tab.step() == "setup" and not tab.plot.isVisibleTo(tab)
     assert tab.next_region_btn.text() == "Next: Region →" and tab.next_region_btn.isEnabled()
     tab.next_region_btn.click()
-    assert tab.step() == "region" and not tab.plot.isHidden()
+    assert tab.step() == "region" and tab.plot.isVisibleTo(tab)
     assert tab.step_buttons["region"].isChecked()
     lo, hi = tab.region.getRegion()
     assert tab.region_readout.text() == "Region %.0f – %.0f s" % (lo, hi)
@@ -789,7 +789,7 @@ def test_opening_another_run_returns_to_setup_and_clears(tab, run_file):
     assert not tab.step_buttons["results"].isEnabled()
     assert tab.results_panel.text("alpha_phase_raw") == "—"
     assert wait_until(lambda: tab.run is not None)
-    assert tab.step() == "setup" and tab.plot.isHidden()
+    assert tab.step() == "setup" and not tab.plot.isVisibleTo(tab)
 
 
 def test_mode_change_away_from_manual_on_peaks_goes_to_region(tab):
@@ -827,3 +827,108 @@ def test_without_a_save_panel_the_pages_still_work(tab):
     tab.go("region")
     analyze_and_wait(tab)
     assert wait_until(lambda: tab.step() == "results")
+
+
+# ---- 4 Results shows the analysis figure ----
+
+def _analyze_to_results(tab, smooth=False):
+    tab.show()
+    _auto_case(tab)
+    tab.settings.smooth_check.setChecked(smooth)
+    tab.go("region")
+    got = []
+    tab.result_ready.connect(got.append)
+    analyze_and_wait(tab)
+    assert wait_until(lambda: tab.step() == "results")
+    return got[-1]
+
+
+def test_results_shows_the_analysis_figure(tab):
+    _analyze_to_results(tab)
+    assert tab.result_figure_shown()
+    assert tab.result_figure.mode() == "figure"
+    # source on the left axis, response on the right one
+    assert tab.result_figure.curve_count() >= 1 and tab.result_figure.curve_count(second_axis=True) >= 1
+    tab.results_back_btn.click()
+    assert tab.step() == "region" and not tab.result_figure_shown()
+    assert tab.plot.isVisibleTo(tab)
+
+
+def _finite(a):
+    a = np.asarray(a, dtype=float)
+    return a[np.isfinite(a)]
+
+
+def test_results_figure_of_a_smoothed_analysis_shows_the_smoothed_traces(tab):
+    _run, _opts, _res, plot = _analyze_to_results(tab, smooth=True)
+    assert tab._options.smooth_to_sine
+    assert tab.result_figure_shown()
+    want = _finite(plot["data"][0]["y"])
+    got = _finite(tab.result_figure._handles.curves[0].getData()[1])
+    assert got.shape == want.shape and np.allclose(got, want)
+    # and it is not the raw source curve of the shared plot
+    raw = _finite(tab.src_curve.getData()[1])
+    assert raw.shape != got.shape or not np.allclose(raw, got)
+
+
+def test_a_second_analysis_replaces_the_figure(tab):
+    _analyze_to_results(tab)
+    first = tab.result_figure._handles
+    lo, hi = tab.region.getRegion()
+    tab.go("region")
+    tab.settings.smooth_check.setChecked(True)
+    _run, _opts, _res, plot = _analyze_to_results_again(tab)
+    assert tab.result_figure_shown()
+    assert tab.result_figure._handles is not first
+    want = _finite(plot["data"][0]["y"])
+    assert np.allclose(_finite(tab.result_figure._handles.curves[0].getData()[1]), want)
+
+
+def _analyze_to_results_again(tab):
+    got = []
+    tab.result_ready.connect(got.append)
+    tab.go("region")
+    analyze_and_wait(tab)
+    assert wait_until(lambda: tab.step() == "results")
+    return got[-1]
+
+
+def test_a_cleared_result_clears_the_figure(tab):
+    _analyze_to_results(tab)
+    lo, hi = tab.region.getRegion()
+    tab.region.setRegion((lo + 50, hi))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    assert tab.step() == "region" and not tab.result_figure_shown()
+    assert tab.result_figure.mode() == "empty"
+
+
+def test_no_plot_keeps_the_shared_plot_on_results(tab, monkeypatch):
+    from ctwa.ui import analysis_worker  # noqa: F401
+    tab.show()
+    _auto_case(tab)
+    tab.go("region")
+    orig = tab._on_finished
+    monkeypatch.setattr(tab, "_on_finished", lambda outcome: orig((outcome[0], None)))
+    tab.worker.finished.disconnect(orig)
+    tab.worker.finished.connect(tab._on_finished)
+    analyze_and_wait(tab)
+    assert wait_until(lambda: tab.step() == "results")
+    assert not tab.result_figure_shown() and tab.plot.isVisibleTo(tab)
+    lo, hi = tab.region.getRegion()
+    x0, x1 = _x_range(tab)
+    assert x0 >= lo - (hi - lo) and x1 <= hi + (hi - lo)   # zoomed to the region as before
+
+
+def test_the_shared_plot_response_axis_zooms_on_its_own_axis(tab):
+    from tests.test_dual_axis import FakeWheel
+    from PySide6.QtCore import QPointF
+    tab.show()
+    tab.go("region")
+    QApplication.processEvents()
+    ax = tab.plot.getPlotItem().getAxis("right")
+    y0 = tab.plot.getPlotItem().vb.viewRange()[1][:]
+    r0 = tab._vb2.viewRange()[1][:]
+    r = tab._vb2.sceneBoundingRect()   # a point on the axis, just right of the plot
+    ax.wheelEvent(FakeWheel(QPointF(r.right() + 10, r.center().y()), QPointF(2, 2)))
+    assert tab._vb2.viewRange()[1] != r0
+    assert tab.plot.getPlotItem().vb.viewRange()[1] == y0
