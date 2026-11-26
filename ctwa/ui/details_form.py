@@ -61,6 +61,8 @@ class PresetCombo(QComboBox):
     """Editable dropdown: presets, then `Fill in new…`, which clears the field for typing."""
 
     edited = Signal()
+    textChanged = Signal(str)   # like QLineEdit: any change of the text, typed or set
+    textEdited = Signal(str)    # typing only
 
     def __init__(self, presets: Iterable[str] = (), parent=None) -> None:
         super().__init__(parent)
@@ -70,6 +72,8 @@ class PresetCombo(QComboBox):
         self.set_presets(presets)
         self.activated.connect(self._on_activated)
         self.lineEdit().textEdited.connect(lambda _t: self.edited.emit())
+        self.lineEdit().textEdited.connect(self.textEdited)
+        self.lineEdit().textChanged.connect(self.textChanged)
 
     def set_presets(self, presets: Iterable[str]) -> None:
         text = self.value()
@@ -92,6 +96,12 @@ class PresetCombo(QComboBox):
 
     def set_value(self, text: str) -> None:
         self.setEditText(text or "")
+
+    def text(self) -> str:
+        return self.value()
+
+    def setText(self, text: str) -> None:
+        self.set_value(text)
 
 
 class DetailsForm(QWidget):

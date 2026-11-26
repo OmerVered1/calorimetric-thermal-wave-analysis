@@ -3285,6 +3285,9 @@ class MainWindow(QMainWindow):
         # --- end Results foundation ---
         if self.save_panel is not None and self.results_loader is not None:
             self.save_panel.saved.connect(lambda row_id: self.results_loader.refresh() if row_id is not None else None)
+        self._first_show_done = False
+        self._connect_results_loader()
+        self._refresh_detail_presets()
         self.runs_tab.open_run.connect(self._open_run_in_analysis)
         tabs.addTab(self.runs_tab, "Runs")
         tabs.addTab(self.analysis_tab, "Analysis")
@@ -3630,10 +3633,28 @@ class MainWindow(QMainWindow):
             return []
         return sorted(n for n in names if n)
 
-    def _refresh_detail_presets(self):
+    def _refresh_detail_presets(self, *_rows):
         names = self._sample_names()
         for field in ("sample", "power_source", "response_device"):
-            self.run_details_form.set_presets(field, details_module.presets_for(field, self.settings, names))
+            presets = details_module.presets_for(field, self.settings, names)
+            self.run_details_form.set_presets(field, presets)
+            if getattr(self, "save_panel", None) is not None:
+                self.save_panel.set_presets(field, presets)
+
+    def _connect_results_loader(self):
+        """Fresh database rows re-fill every Sample / device dropdown."""
+        loader = getattr(self, "results_loader", None)
+        if loader is not None:
+            loader.rows_changed.connect(self._refresh_detail_presets)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_first_show_done", True):
+            self._first_show_done = True
+            loader = getattr(self, "results_loader", None)
+            if loader is not None:
+                # one fetch so the Sample dropdowns have the names before any results tab is opened
+                QTimer.singleShot(0, lambda: self.results_loader.refresh())
 
     def _connected_details_defaults(self) -> dict:
         # The model the user connected ("Keithley 2602B"), not an *IDN? query:

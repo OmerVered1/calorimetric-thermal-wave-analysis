@@ -301,3 +301,72 @@ def test_the_calorimeter_disconnect_still_runs_when_stop_live_fails(app, tmp_pat
     smu.disconnect = lambda: (calls.append("smu"), real_dis())[1]
     w.close()
     assert calls == ["cal", "smu"]
+
+
+class _FakeLoader:
+    def __init__(self):
+        from PySide6.QtCore import QObject, Signal
+
+        class _L(QObject):
+            rows_changed = Signal(list)
+
+        self._o = _L()
+        self.rows_changed = self._o.rows_changed
+        self._rows = []
+        self.refreshes = 0
+
+    def rows(self):
+        return list(self._rows)
+
+    def refresh(self):
+        self.refreshes += 1
+
+    def shutdown(self, *_a):
+        pass
+
+
+def _combo_items(combo):
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
+def test_rows_changed_fills_sample_dropdowns(window):
+    from ctwa.ui.details_form import FILL_IN_NEW
+    from ctwa.ui.save_panel import SavePanel
+    made = None
+    if window.save_panel is None:
+        made = window.save_panel = SavePanel(object())   # cloud off here: a panel with a stub manager
+    loader = _FakeLoader()
+    window.results_loader = loader
+    window._connect_results_loader()
+    loader._rows = [{"model_name": "Stainless Steel"}, {"model_name": "unk foam "}]
+    loader.rows_changed.emit(loader.rows())
+    for combo in (window.run_details_form.fields["sample"], window.save_panel.sample_edit):
+        items = _combo_items(combo)
+        assert "Stainless Steel" in items and "unk foam" in items
+        assert items[-1] == FILL_IN_NEW
+    if made is not None:
+        window.save_panel = None    # the stub panel must not be shut down by closeEvent
+
+
+def test_rows_changed_fills_dropdowns_without_save_panel(window):
+    from ctwa.ui.details_form import FILL_IN_NEW
+    window.save_panel = None
+    loader = _FakeLoader()
+    window.results_loader = loader
+    window._connect_results_loader()
+    loader._rows = [{"model_name": "Stainless Steel"}, {"model_name": "unk foam "}]
+    loader.rows_changed.emit(loader.rows())
+    items = _combo_items(window.run_details_form.fields["sample"])
+    assert "Stainless Steel" in items and "unk foam" in items and items[-1] == FILL_IN_NEW
+
+
+def test_first_show_refreshes_once(app, window):
+    loader = _FakeLoader()
+    window.results_loader = loader
+    window._first_show_done = False
+    window.show()
+    pump(app, 0.2)
+    window.hide()
+    window.show()
+    pump(app, 0.2)
+    assert loader.refreshes == 1

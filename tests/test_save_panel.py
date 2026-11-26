@@ -847,3 +847,16 @@ def test_busy_save_disables_both_parts(env):
     client.gate.set()
     assert wait(lambda: not panel._busy)
     assert panel.sample_edit.isEnabled()
+
+
+def test_sample_field_is_preset_combo_with_text_api(env):
+    panel = env(FakeClient())[0]
+    from ctwa.ui.details_form import PresetCombo
+    for w in (panel.sample_edit, panel.source_device_edit, panel.response_device_edit):
+        assert isinstance(w, PresetCombo)
+    panel.set_presets("sample", ["Brass"])
+    panel.sample_edit.setText("  Brass ")
+    assert panel.sample_edit.text() == "Brass"
+    assert "Saving as: Brass" in panel.saving_label.text()
+    panel.sample_edit.setText("")
+    assert panel.sample_edit.text() == ""

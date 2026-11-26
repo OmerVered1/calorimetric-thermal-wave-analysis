@@ -165,13 +165,14 @@ class SavePanel(QWidget):
         self._busy = False
         self._job: Dict[str, Any] = {}  # snapshot taken at click time
 
-        self.sample_edit = QLineEdit()
+        from ctwa.ui.details_form import PresetCombo, presets_for  # here: details_form imports this module
+        self.sample_edit = PresetCombo(presets_for("sample", self._settings))
         self.date_edit = QLineEdit()
         self.date_edit.setPlaceholderText("DD/MM/YYYY")
         self.time_edit = QLineEdit()
         self.time_edit.setPlaceholderText("HH:MM")
-        self.source_device_edit = QLineEdit()
-        self.response_device_edit = QLineEdit()
+        self.source_device_edit = PresetCombo(presets_for("power_source", self._settings))
+        self.response_device_edit = PresetCombo(presets_for("response_device", self._settings))
         self.temperature_edit = QLineEdit()
         self.temperature_edit.setPlaceholderText("°C")
         self.gas_combo = QComboBox()
@@ -222,6 +223,13 @@ class SavePanel(QWidget):
         self._fields = (self.sample_edit, self.date_edit, self.time_edit, self.source_device_edit,
                         self.response_device_edit, self.temperature_edit, self.gas_combo)
         self._update_saving_line()
+
+    def set_presets(self, field: str, values) -> None:
+        """Dropdown entries of one field: "sample", "power_source" or "response_device"."""
+        combo = {"sample": self.sample_edit, "power_source": self.source_device_edit,
+                 "response_device": self.response_device_edit}.get(field)
+        if combo is not None:
+            combo.set_presets(values)
 
     def _on_temperature_typed(self, _text: str) -> None:
         self._temperature_typed = True
