@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QGridLayout, QTabWidget, QGroupBox, QLabel, QPushButton,
     QComboBox, QLineEdit, QCheckBox, QSpinBox, QDoubleSpinBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
-    QFrame, QMessageBox, QFileDialog, QDialog, QListWidget,
+    QFrame, QMessageBox, QFileDialog, QDialog, QListWidget, QListWidgetItem,
     QProgressBar, QStatusBar, QTextEdit, QSizePolicy, QMenuBar,
     QMenu, QFormLayout, QScrollArea, QAbstractSpinBox,
     QInputDialog, QToolButton
@@ -207,6 +207,22 @@ class ExperimentStore:
 
     def names(self) -> List[str]:
         return sorted(self._experiments.keys(), key=str.lower)
+
+    def _created(self, name: str) -> Optional[datetime]:
+        try:
+            return datetime.fromisoformat(str(self._experiments[name].get("created_at") or ""))
+        except (ValueError, TypeError):
+            return None
+
+    def names_by_created(self) -> List[str]:
+        """Newest created first; records without a (readable) created_at last, alphabetically."""
+        dated = [(n, self._created(n)) for n in self.names()]  # names() is alphabetical: ties stay so
+        has = sorted((x for x in dated if x[1] is not None), key=lambda x: x[1], reverse=True)
+        return [n for n, _ in has] + [n for n, d in dated if d is None]
+
+    def created_label(self, name: str) -> str:
+        d = self._created(name)
+        return d.strftime("%d/%m/%Y") if d else ""
 
     def get(self, name: str) -> Optional[dict]:
         return self._experiments.get(name)
@@ -1183,7 +1199,7 @@ class ExperimentsSidebar(QGroupBox):
         self.list_widget.setCurrentItem(item)
         menu = QMenu(self)
         menu.addAction("Load", self._on_load_clicked)
-        if item.text() == self._current_name:
+        if item.data(Qt.UserRole) == self._current_name:
             menu.addAction("Rename\u2026", self._on_rename_clicked)
         menu.addAction("Clone\u2026", self._on_clone_clicked)
         menu.addSeparator()
@@ -1195,8 +1211,11 @@ class ExperimentsSidebar(QGroupBox):
     def refresh(self):
         self._suppress_select = True
         self.list_widget.clear()
-        for name in self.store.names():
-            self.list_widget.addItem(name)
+        for name in self.store.names_by_created():
+            date = self.store.created_label(name)
+            item = QListWidgetItem("%s   %s" % (name, date) if date else name)
+            item.setData(Qt.UserRole, name)
+            self.list_widget.addItem(item)
             if name == self._current_name:
                 self.list_widget.setCurrentRow(self.list_widget.count() - 1)
         self._suppress_select = False
@@ -1210,7 +1229,7 @@ class ExperimentsSidebar(QGroupBox):
         self.list_widget.clearSelection()
         if name:
             for i in range(self.list_widget.count()):
-                if self.list_widget.item(i).text() == name:
+                if self.list_widget.item(i).data(Qt.UserRole) == name:
                     self.list_widget.setCurrentRow(i)
                     break
         self._suppress_select = False
@@ -1240,7 +1259,7 @@ class ExperimentsSidebar(QGroupBox):
 
     def _selected_name(self) -> Optional[str]:
         items = self.list_widget.selectedItems()
-        return items[0].text() if items else None
+        return items[0].data(Qt.UserRole) if items else None
 
     def _on_new_clicked(self):
         existing = set(self.store.names())
@@ -1268,7 +1287,7 @@ class ExperimentsSidebar(QGroupBox):
     def _on_item_double_clicked(self, item):
         if item is None:
             return
-        name = item.text()
+        name = item.data(Qt.UserRole)
         if name == self._current_name and not self._dirty:
             return
         self.experiment_selected.emit(name)
@@ -1313,7 +1332,7 @@ class ExperimentsSidebar(QGroupBox):
     def _on_clone_clicked(self):
         # Clone whatever is selected in the list (falls back to currently loaded).
         items = self.list_widget.selectedItems()
-        source = items[0].text() if items else self._current_name
+        source = items[0].data(Qt.UserRole) if items else self._current_name
         if not source:
             QMessageBox.information(self, "Clone",
                                      "Select an experiment to clone, or save the current state first.")
