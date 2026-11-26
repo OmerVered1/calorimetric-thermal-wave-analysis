@@ -4,6 +4,6 @@ Bump the string below when cutting a release. All app modules and the
 PyInstaller spec import from here.
 """
 
-__version__ = "2.0.3"
+__version__ = "2.0.4"
 __app_name__ = "Calorimetric Thermal Wave Analysis Program"
 __author__ = "Omer Vered"
