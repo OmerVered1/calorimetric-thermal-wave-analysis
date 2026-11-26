@@ -6,10 +6,16 @@ import re
 from datetime import datetime
 from typing import Dict, Iterable, Optional, Union
 
+from ctwa.experiment_details import parse_number
+
 __all__ = ["parse_run_header"]
 
 _KEYS = {"started": "started", "experiment": "experiment",
-         "instrument": "instrument", "calorimeter": "calorimeter"}
+         "instrument": "instrument", "calorimeter": "calorimeter",
+         "sample": "sample", "powersource": "power_source", "responsedevice": "response_device",
+         "gas": "gas", "temperature": "temperature_c",
+         "innerradius": "r1_mm", "outerradius": "r2_mm"}
+_NUMBERS = ("temperature_c", "r1_mm", "r2_mm")
 _LINE = re.compile(r"^#\s*([A-Za-z]+)\s*:\s*(.*?)\s*$")
 _MAX_LINES = 60
 
@@ -24,13 +30,16 @@ def _parse_started(value: str) -> Optional[datetime]:
 
 
 def parse_run_header(text_or_lines: Union[str, Iterable[str]]) -> Dict[str, object]:
-    """started (datetime or None), experiment, instrument, calorimeter (str or None).
+    """started (datetime or None), experiment, instrument, calorimeter, sample, power_source,
+    response_device, gas (str or None), temperature_c, r1_mm, r2_mm (float or None).
 
     Reads the leading comment lines only; a line wrapped in double quotes (the
     CSV writer quotes the ones with commas) is unwrapped first."""
     lines = text_or_lines.splitlines() if isinstance(text_or_lines, str) else text_or_lines
     out: Dict[str, object] = {"started": None, "experiment": None,
-                              "instrument": None, "calorimeter": None}
+                              "instrument": None, "calorimeter": None,
+                              "sample": None, "power_source": None, "response_device": None,
+                              "gas": None, "temperature_c": None, "r1_mm": None, "r2_mm": None}
     for n, raw in enumerate(lines):
         if n >= _MAX_LINES:
             break
@@ -49,5 +58,10 @@ def parse_run_header(text_or_lines: Union[str, Iterable[str]]) -> Dict[str, obje
         if key is None or out[key] is not None:
             continue
         value = m.group(2)
-        out[key] = _parse_started(value) if key == "started" else (value or None)
+        if key == "started":
+            out[key] = _parse_started(value)
+        elif key in _NUMBERS:
+            out[key] = parse_number(value)
+        else:
+            out[key] = value or None
     return out

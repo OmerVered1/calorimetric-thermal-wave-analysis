@@ -41,7 +41,7 @@ from PySide6.QtGui import QFont, QColor, QPalette, QIcon, QKeySequence, QAction,
 
 import pyqtgraph as pg
 
-from ctwa import theme
+from ctwa import experiment_details, theme
 from ctwa.connect_panel import ChoiceCard, SMUConnectPanel
 from ctwa.instruments import registry
 from ctwa.instruments.smu import SMU, NotSupported
@@ -2842,6 +2842,7 @@ class MainWindow(QMainWindow):
         self.experiment_store = ExperimentStore()
         self._current_experiment_name: Optional[str] = None
         self._current_experiment_notes: str = ""
+        self._current_experiment_details: dict = {}
         self._current_wave_config: Optional[dict] = None
         self._suppress_dirty = False
 
@@ -4569,6 +4570,8 @@ class MainWindow(QMainWindow):
         if self.run_start_datetime:
             rows.append([f"# Started: {self.run_start_datetime.strftime('%Y-%m-%d %H:%M:%S')}"])
         rows.append([f"# Experiment: {self._current_experiment_name or '(Untitled)'}"])
+        for line in experiment_details.header_lines(self._current_experiment_details):
+            rows.append([line])
         # Each optional row goes through _safe(). If a single row's builder
         # throws (missing widget attr, driver query returns junk, etc.), we
         # append an error marker and keep going instead of dropping every
