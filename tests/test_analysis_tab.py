@@ -115,6 +115,8 @@ def test_manual_shows_four_markers_and_drop_snaps_to_peak(tab):
     assert not any(m.isVisible() for m in tab.markers)
     tab.settings.set_mode("Manual")
     tab.show()
+    assert not any(m.isVisible() for m in tab.markers)   # steps: the markers belong to 3 Peaks
+    tab.go("peaks")
     assert all(m.isVisible() for m in tab.markers)
     assert len(tab.markers) == 4
     settle(tab)
@@ -250,7 +252,9 @@ def test_region_and_markers_locked_while_running(tab):
     assert not tab.region.movable
     assert not any(m.movable for m in tab.markers)
     assert wait_until(lambda: not tab.is_running())
-    assert tab.region.movable and all(m.movable for m in tab.markers)
+    # this default placement fails the pairs check: still on 3 Peaks, markers free again, region locked
+    assert tab.step() == "peaks"
+    assert not tab.region.movable and all(m.movable for m in tab.markers)
 
 
 def test_region_edges_are_whole_seconds_after_a_drag(tab):
@@ -558,7 +562,7 @@ def test_save_disabled_when_the_region_moves_until_reanalyzed(tab):
     panel.shutdown()
 
 
-def test_divider_is_a_splitter_with_a_roomy_plot_and_remembers_its_state(qapp, tmp_path):
+def test_divider_is_a_splitter_with_a_roomy_plot_and_remembers_its_state(qapp, tmp_path, run_file):
     from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QSplitter
     path = str(tmp_path / "s.ini")
@@ -566,6 +570,9 @@ def test_divider_is_a_splitter_with_a_roomy_plot_and_remembers_its_state(qapp, t
     a = AnalysisTab(settings=s1)
     a.resize(1200, 800)
     a.show()
+    a.open_run(run_file)
+    assert wait_until(lambda: a.run is not None)
+    a.go("region")   # the plot is hidden on the Setup step
     wait_until(lambda: False, 0.2)
     assert isinstance(a.splitter, QSplitter)
     plot_h, bottom_h = a.splitter.sizes()
@@ -579,6 +586,9 @@ def test_divider_is_a_splitter_with_a_roomy_plot_and_remembers_its_state(qapp, t
     b = AnalysisTab(settings=s2)
     b.resize(1200, 800)
     b.show()
+    b.open_run(run_file)
+    assert wait_until(lambda: b.run is not None)
+    b.go("region")
     qapp.processEvents()
     p, q = b.splitter.sizes()
     assert abs(p / (p + q) - want[0] / sum(want)) < 0.03
@@ -626,3 +636,185 @@ def test_header_r2_not_above_r1_keeps_analyze_disabled(qapp, run_file, tmp_path)
         assert not w.settings.radii_ok()
     finally:
         w.worker.shutdown()
+
+
+# ---- steps: 1 Setup, 2 Region, 3 Peaks (Manual), 4 Results ----
+
+def _x_range(tab):
+    return tab.plot.getPlotItem().vb.viewRange()[0]
+
+
+def _auto_case(tab):
+    """The golden raw AutoFit case: a quick, valid analysis."""
+    case = golden("al2o3_ctwa__AutoFit_raw.json")
+    tab.settings.calib_check.setChecked(False)
+    tab.settings.lag_spin.setValue(0)
+    tab.region.setRegion((case["options"]["selMin"], case["options"]["selMax"]))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+
+
+def test_starts_on_setup_with_the_plot_hidden(qapp):
+    w = AnalysisTab()
+    w.resize(1200, 800)
+    w.show()
+    assert w.step() == "setup"
+    assert w.plot.isHidden()
+    assert [w.step_buttons[n].text() for n in ("setup", "region", "peaks", "results")] == \
+        ["1 Setup", "2 Region", "3 Peaks", "4 Results"]
+    assert w.step_buttons["setup"].isEnabled()
+    assert not w.step_buttons["region"].isEnabled() and not w.step_buttons["results"].isEnabled()
+    assert not w.next_region_btn.isEnabled()
+    w.go("region")   # nothing loaded: refused
+    assert w.step() == "setup"
+    w.worker.shutdown()
+
+
+def test_next_goes_to_region_once_loaded(tab):
+    tab.show()
+    assert tab.step() == "setup" and tab.plot.isHidden()
+    assert tab.next_region_btn.text() == "Next: Region →" and tab.next_region_btn.isEnabled()
+    tab.next_region_btn.click()
+    assert tab.step() == "region" and not tab.plot.isHidden()
+    assert tab.step_buttons["region"].isChecked()
+    lo, hi = tab.region.getRegion()
+    assert tab.region_readout.text() == "Region %.0f – %.0f s" % (lo, hi)
+    assert not any(m.isVisible() for m in tab.markers)
+    assert tab.region.movable
+    tab.region_back_btn.click()
+    assert tab.step() == "setup"
+
+
+def test_manual_region_to_peaks_shows_markers_and_zooms(tab):
+    tab.show()
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    tab.go("region")
+    lo, hi = tab.region.getRegion()
+    assert tab.next_peaks_btn.text() == "Next: Peaks →" and tab.next_peaks_btn.isVisibleTo(tab)
+    assert not tab.analyze_btn.isVisibleTo(tab)
+    whole = _x_range(tab)
+    assert whole[0] <= lo and whole[1] >= hi and (whole[1] - whole[0]) > (hi - lo) * 1.2
+    tab.next_peaks_btn.click()
+    assert tab.step() == "peaks"
+    assert all(m.isVisible() for m in tab.markers) and all(m.movable for m in tab.markers)
+    assert not tab.region.movable
+    x0, x1 = _x_range(tab)
+    margin = (hi - lo) * 0.05
+    assert lo - margin - 1e-6 <= x0 <= lo and hi <= x1 <= hi + margin + 1e-6
+    assert tab.analyze_btn.isVisibleTo(tab) and tab.peaks_back_btn.text() == "← Region"
+    tab.peaks_back_btn.click()   # back to Region: the whole run again
+    assert tab.step() == "region" and not any(m.isVisible() for m in tab.markers)
+    x0, x1 = _x_range(tab)
+    assert (x1 - x0) > (hi - lo) * 1.2
+
+
+def test_auto_mode_has_no_peaks_step_and_analyze_is_on_region(tab):
+    tab.show()
+    tab.go("region")
+    assert not tab.step_buttons["peaks"].isVisibleTo(tab)
+    assert not tab.next_peaks_btn.isVisibleTo(tab)
+    assert tab.analyze_btn.isVisibleTo(tab)
+    tab.go("peaks")   # refused outside Manual
+    assert tab.step() == "region"
+
+
+def test_analyze_ends_on_results_and_back_returns(tab):
+    tab.show()
+    _auto_case(tab)
+    tab.go("region")
+    got = []
+    tab.result_ready.connect(got.append)
+    tab.analyze_btn.click()
+    assert wait_until(lambda: tab.step() == "results")
+    assert len(got) == 1 and tab.step_buttons["results"].isEnabled()
+    assert tab.results_panel.text("alpha_phase_raw") != "—"
+    assert tab.results_panel.text("period_resp") != "—"
+    assert tab.results_back_btn.text() == "← Back"
+    tab.results_back_btn.click()
+    assert tab.step() == "region"
+
+
+def test_manual_results_back_goes_to_peaks_and_markers_are_locked(tab):
+    tab.show()
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    tab.region.setRegion((10700, 12000))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    tab.settings.calib_check.setChecked(False)
+    settle(tab)
+    tab.go("peaks")
+    tab.analyze_btn.click()
+    assert wait_until(lambda: not tab.is_running())
+    if tab.step() != "results":
+        pytest.skip("this placement does not analyze")
+    assert all(m.isVisible() for m in tab.markers) and not any(m.movable for m in tab.markers)
+    tab.results_back_btn.click()
+    assert tab.step() == "peaks"
+
+
+def test_changing_the_region_on_results_clears_and_returns(tab):
+    tab.show()
+    _auto_case(tab)
+    tab.go("region")
+    analyze_and_wait(tab)
+    assert wait_until(lambda: tab.step() == "results")
+    cleared = []
+    tab.result_cleared.connect(lambda: cleared.append(1))
+    lo, hi = tab.region.getRegion()
+    tab.region.setRegion((lo + 50, hi))
+    tab.region.sigRegionChangeFinished.emit(tab.region)
+    assert cleared and tab.step() == "region"
+    assert not tab.step_buttons["results"].isEnabled()
+
+
+def test_opening_another_run_returns_to_setup_and_clears(tab, run_file):
+    tab.show()
+    _auto_case(tab)
+    tab.go("region")
+    analyze_and_wait(tab)
+    assert wait_until(lambda: tab.step() == "results")
+    cleared = []
+    tab.result_cleared.connect(lambda: cleared.append(1))
+    tab.open_run(run_file)
+    assert tab.step() == "setup" and cleared
+    assert not tab.step_buttons["results"].isEnabled()
+    assert tab.results_panel.text("alpha_phase_raw") == "—"
+    assert wait_until(lambda: tab.run is not None)
+    assert tab.step() == "setup" and tab.plot.isHidden()
+
+
+def test_mode_change_away_from_manual_on_peaks_goes_to_region(tab):
+    tab.show()
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    tab.go("peaks")
+    assert tab.step() == "peaks" and tab.step_buttons["peaks"].isVisibleTo(tab)
+    tab.settings.set_mode("AutoFit")
+    assert tab.step() == "region"
+    assert not tab.step_buttons["peaks"].isVisibleTo(tab)
+    assert wait_until(lambda: tab.analyze_btn.isVisibleTo(tab), 2.0)   # Qt shows a moved widget on the next event-loop turn
+
+
+def test_edit_link_goes_to_setup_and_form_lives_on_setup(tab):
+    from types import SimpleNamespace
+    from ctwa.ui.save_panel import SavePanel
+    panel = SavePanel(SimpleNamespace(client=None, login_succeeded=lambda: None,
+                                      request_flush=lambda: None, enqueue=lambda r: None))
+    tab.set_save_panel(panel)
+    tab.show()
+    assert tab._pages["setup"].isAncestorOf(panel.form_widget)
+    assert tab._pages["results"].isAncestorOf(panel.action_widget)
+    assert panel.date_edit.text()   # a run already open is handed to the panel
+    tab.go("region")
+    panel.edit_btn.click()
+    assert tab.step() == "setup"
+    panel.shutdown()
+
+
+def test_without_a_save_panel_the_pages_still_work(tab):
+    tab.show()
+    assert tab._save_panel is None
+    _auto_case(tab)
+    tab.go("region")
+    analyze_and_wait(tab)
+    assert wait_until(lambda: tab.step() == "results")

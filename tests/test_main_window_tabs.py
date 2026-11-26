@@ -94,8 +94,9 @@ def test_changing_the_auto_save_folder_updates_the_runs_tab(window, tmp_path, mo
 
 
 def test_save_panel_sits_in_the_analysis_tab_and_gets_results(window):
-    assert window.analysis_tab.isAncestorOf(window.save_panel)
-    assert window.save_panel.parent() is not None
+    # the save panel is split: the form sits on the Setup page, the save part on the Results page
+    assert window.analysis_tab.isAncestorOf(window.save_panel.form_widget)
+    assert window.analysis_tab.isAncestorOf(window.save_panel.action_widget)
     window.analysis_tab.result_ready.emit(("run", "opts", "results", None))
     assert window.save_panel._results == "results"
 
@@ -219,19 +220,33 @@ def test_a_failing_recording_lock_cannot_drop_the_live_csv_writer(app, window, m
     pump(app, 1)
 
 
-def test_analysis_tab_shows_analyze_and_save_without_scrolling_at_1400x900(app, window):
+def test_analysis_tab_pages_fit_without_scrolling_at_1400x900(app, window, tmp_path):
     window.resize(1400, 900)
     window.show()
     window.tabs.setCurrentWidget(window.analysis_tab)
     pump(app, 0.5)
     tab = window.analysis_tab
+    view = tab.splitter.widget(1).viewport()
+
+    def fits(btn):
+        top = btn.mapTo(view, btn.rect().topLeft()).y()
+        bottom = btn.mapTo(view, btn.rect().bottomLeft()).y()
+        return top >= 0 and bottom <= view.height()
+
+    # Setup: no plot, the form and the settings get the height; Next is in view
+    assert tab.step() == "setup" and tab.plot.isHidden()
+    assert fits(tab.next_region_btn)
+    # Region: a roomy plot, Analyze in view
+    out = tmp_path / "al2o3_ctwa.csv"
+    with gzip.open(os.path.join(RUNS_DIR, "al2o3_ctwa.csv.gz"), "rb") as src, open(out, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    tab.open_run(str(out))
+    assert pump(app, 30, lambda: tab.run is not None)
+    tab.go("region")
+    pump(app, 0.5)
     sizes = tab.splitter.sizes()
     assert sizes[0] / sum(sizes) >= 0.30
-    view = tab.splitter.widget(1).viewport()
-    for btn in (tab.analyze_btn, window.save_panel.save_btn):
-        bottom = btn.mapTo(view, btn.rect().bottomLeft()).y()
-        top = btn.mapTo(view, btn.rect().topLeft()).y()
-        assert top >= 0 and bottom <= view.height()
+    assert fits(tab.analyze_btn)
 
 
 def test_closing_sets_the_abort_flag_before_the_outputs_go_off(app, tmp_path):

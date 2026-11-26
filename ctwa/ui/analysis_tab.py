@@ -1,4 +1,6 @@
-"""The Analysis tab: one run, its region and peaks on a plot, settings, Analyze, results.
+"""The Analysis tab: one run, in steps like the webapp: 1 Setup, 2 Region, 3 Peaks (Manual
+mode only), 4 Results. A step bar on top, the plot (hidden on Setup) above a stacked panel with
+one page per step.
 
 Loading and analysis both go through AnalysisWorker (a separate process), so the
 GUI thread only draws. Results are shown here and announced through
@@ -12,8 +14,8 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-                               QSizePolicy, QSplitter, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+                               QSizePolicy, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
 
 from ctwa import theme
 from ctwa.analysis.runner import LoadedRun, RegionInfo
@@ -25,6 +27,10 @@ from ctwa.ui.analysis_settings import SettingsPanel
 from ctwa.ui.analysis_worker import AnalysisWorker
 
 MARKER_NAMES = ("S1", "S2", "R1", "R2")  # source peak 1, 2; response peak 1, 2
+STEPS = (("setup", "1 Setup"), ("region", "2 Region"), ("peaks", "3 Peaks"), ("results", "4 Results"))
+PEAKS_HINT = ("Drag S1 and S2 onto two neighbouring source peaks, R1 and R2 onto the response "
+              "peaks that follow them.")
+ZOOM_MARGIN = 0.05  # the Peaks and Results views show the region plus this share of its width each side
 
 
 def _round2(x: float) -> float:
@@ -52,43 +58,93 @@ class AnalysisTab(QWidget):
         self._pending_key = None
         self._place_pending = False
 
+        self._step = "setup"
+        self._save_panel = None
         root = QVBoxLayout(self)
+        root.addLayout(self._build_step_bar())
         self.title = theme.set_role(QLabel("Open a run from the Runs tab"), "heading")
-        root.addWidget(self.title)
         self.splitter = QSplitter(Qt.Vertical)
         self.splitter.setChildrenCollapsible(False)
         self.splitter.addWidget(self._build_plot())
         root.addWidget(self.splitter, stretch=1)
 
-        bottom_area = QWidget()
-        bottom = QHBoxLayout(bottom_area)
-        bottom.setContentsMargins(0, 0, 0, 0)
+        self.stack = QStackedWidget()
         scroll = QScrollArea()   # a short bottom half scrolls instead of refusing to shrink
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setWidget(bottom_area)
+        scroll.setWidget(self.stack)
         self.splitter.addWidget(scroll)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)   # extra height goes to the plot
         self._restored = self._restore_splitter()
+        self._moved = self._restored
         self.splitter.splitterMoved.connect(self._save_splitter)
-        left = QVBoxLayout()
+
         self.settings = SettingsPanel()
-        left.addWidget(self.settings, stretch=1)
-        buttons = QHBoxLayout()
+        self.results_panel = ResultsPanel()
         self.analyze_btn = theme.set_role(QPushButton("Analyze"), "primary")
         self.analyze_btn.setEnabled(False)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.hide()
-        buttons.addWidget(self.analyze_btn)
-        buttons.addWidget(self.cancel_btn)
-        buttons.addStretch(1)
-        left.addLayout(buttons)
-        bottom.addLayout(left, stretch=1)
-        self.results_panel = ResultsPanel()
-        self._right = QVBoxLayout()   # the results column; set_save_panel adds below
-        self._right.addWidget(self.results_panel, stretch=1)
-        bottom.addLayout(self._right, stretch=1)
+        self._analyze_box = QWidget()   # Analyze + Cancel; moved onto the Region or the Peaks page
+        box = QHBoxLayout(self._analyze_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.addWidget(self.analyze_btn)
+        box.addWidget(self.cancel_btn)
+
+        # 1 Setup: run line, the save form (set_save_panel), settings, Next
+        setup = QWidget()
+        self._setup_lay = QVBoxLayout(setup)
+        self._setup_lay.addWidget(self.title)
+        self._setup_lay.addWidget(self.settings, stretch=1)
+        self.next_region_btn = theme.set_role(QPushButton("Next: Region \u2192"), "primary")
+        self.next_region_btn.clicked.connect(lambda: self.go("region"))
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.next_region_btn)
+        self._setup_lay.addLayout(row)
+        # 2 Region: readout, Back, Next: Peaks / Analyze
+        region_page = QWidget()
+        lay = QVBoxLayout(region_page)
+        self.region_readout = theme.set_role(QLabel(""), "readout")
+        lay.addWidget(self.region_readout)
+        lay.addStretch(1)
+        self._region_row = QHBoxLayout()
+        self.region_back_btn = theme.set_role(QPushButton("\u2190 Back"), "quiet")
+        self.region_back_btn.clicked.connect(lambda: self.go("setup"))
+        self.next_peaks_btn = theme.set_role(QPushButton("Next: Peaks \u2192"), "primary")
+        self.next_peaks_btn.clicked.connect(lambda: self.go("peaks"))
+        self._region_row.addWidget(self.region_back_btn)
+        self._region_row.addStretch(1)
+        self._region_row.addWidget(self.next_peaks_btn)
+        lay.addLayout(self._region_row)
+        # 3 Peaks: hint, Back, Analyze
+        peaks_page = QWidget()
+        lay = QVBoxLayout(peaks_page)
+        hint = QLabel(PEAKS_HINT)
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        lay.addStretch(1)
+        self._peaks_row = QHBoxLayout()
+        self.peaks_back_btn = theme.set_role(QPushButton("\u2190 Region"), "quiet")
+        self.peaks_back_btn.clicked.connect(lambda: self.go("region"))
+        self._peaks_row.addWidget(self.peaks_back_btn)
+        self._peaks_row.addStretch(1)
+        lay.addLayout(self._peaks_row)
+        # 4 Results: results, the save part (set_save_panel), Back
+        results_page = QWidget()
+        self._results_lay = QVBoxLayout(results_page)
+        self._results_lay.addWidget(self.results_panel, stretch=1)
+        self.results_back_btn = theme.set_role(QPushButton("\u2190 Back"), "quiet")
+        self.results_back_btn.clicked.connect(lambda: self.go(self._back_from_results()))
+        row = QHBoxLayout()
+        row.addWidget(self.results_back_btn)
+        row.addStretch(1)
+        self._results_lay.addLayout(row)
+        self._pages = {"setup": setup, "region": region_page, "peaks": peaks_page, "results": results_page}
+        for name, _label in STEPS:
+            self.stack.addWidget(self._pages[name])
+        self._analyze_host = None
 
         self.analyze_btn.clicked.connect(self._on_analyze)
         self.cancel_btn.clicked.connect(self._on_cancel)
@@ -99,33 +155,120 @@ class AnalysisTab(QWidget):
         self.worker.failed.connect(self._on_failed)
         self.settings.changed.connect(self._on_settings_changed)
         self.settings.mode_changed.connect(lambda _m: self._on_settings_changed())
+        self.region.sigRegionChanged.connect(self._update_readout)
+        self.result_cleared.connect(self._on_result_cleared)
+        self._update_readout()
+        self.go("setup")
         self._update_controls()
+
+    # ---- steps ----
+    def _build_step_bar(self) -> QHBoxLayout:
+        bar = QHBoxLayout()
+        frame = theme.set_role(QFrame(), "segmented")
+        inner = QHBoxLayout(frame)
+        inner.setContentsMargins(2, 2, 2, 2)
+        inner.setSpacing(2)
+        self._step_group = QButtonGroup(self)
+        self._step_group.setExclusive(True)
+        self.step_buttons = {}
+        for name, label in STEPS:
+            b = theme.set_role(QPushButton(label), "segment")
+            b.setCheckable(True)
+            b.clicked.connect(lambda _c=False, n=name: self.go(n))
+            self._step_group.addButton(b)
+            inner.addWidget(b)
+            self.step_buttons[name] = b
+        bar.addWidget(frame)
+        bar.addStretch(1)
+        return bar
+
+    def step(self) -> str:
+        return self._step
+
+    def _step_reachable(self, name: str) -> bool:
+        loaded = self.run is not None
+        return {"setup": True, "region": loaded, "peaks": loaded and self.settings.manual(),
+                "results": self._has_results}[name]
+
+    def _peaks_or_region(self) -> str:
+        return "peaks" if self.settings.manual() else "region"
+
+    def _back_from_results(self) -> str:
+        return self._peaks_or_region()
+
+    def go(self, step: str) -> None:
+        """Show a step. An unreachable step is refused (the bar greys it out too)."""
+        if step not in self._pages or not self._step_reachable(step):
+            return
+        self._step = step
+        for name, page in self._pages.items():   # the panel is as tall as the page shown, not the tallest page
+            pol = page.sizePolicy()
+            pol.setVerticalPolicy(QSizePolicy.Preferred if name == step else QSizePolicy.Ignored)
+            page.setSizePolicy(pol)
+        self.stack.setCurrentWidget(self._pages[step])
+        self.step_buttons[step].setChecked(True)
+        item = self.plot.getPlotItem()
+        self.plot.setVisible(step != "setup")
+        if step == "region":
+            item.vb.autoRange()
+            self._vb2.autoRange()
+        elif step == "peaks":
+            self._ensure_markers_placed()
+        if step in ("peaks", "results"):
+            self._zoom_to_region()
+        self._update_controls()
+        if not self._moved:
+            QTimer.singleShot(0, self._size_divider)
+
+    def _place_analyze(self) -> None:
+        """Analyze (with Cancel) lives on the Peaks page in Manual mode, else on the Region page."""
+        row = self._peaks_row if self.settings.manual() else self._region_row
+        if self._analyze_host is row:
+            return
+        if self._analyze_host is not None:
+            self._analyze_host.removeWidget(self._analyze_box)
+        row.addWidget(self._analyze_box)
+        self._analyze_host = row
+
+    def _zoom_to_region(self) -> None:
+        lo, hi = self._region()
+        pad = (hi - lo) * ZOOM_MARGIN
+        self.plot.getPlotItem().setXRange(lo - pad, hi + pad, padding=0)
+
+    def _update_readout(self, *_a) -> None:
+        lo, hi = self.region.getRegion()
+        self.region_readout.setText("Region %.0f \u2013 %.0f s" % (lo, hi))
+
+    def _on_result_cleared(self) -> None:
+        if self._step == "results":
+            self.go(self._peaks_or_region())
 
     def _restore_splitter(self) -> bool:
         if self._app_settings is None:
             return False
         try:
-            state = self._app_settings.value("analysis/splitter")
+            state = self._app_settings.value("analysis/splitter2")
             return bool(state) and self.splitter.restoreState(state)
         except Exception:
             return False
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        if not self._restored and not getattr(self, "_sized", False):
-            # first show without a saved divider: the lower half gets what it needs
-            # (Analyze and Save visible), the plot the rest
-            self._sized = True
+        if not self._moved:
+            # no saved divider: the lower half gets what the step's page needs, the plot the rest
             QTimer.singleShot(0, self._size_divider)
 
     def _size_divider(self) -> None:
-        need = self.splitter.widget(1).widget().sizeHint().height() + 4
+        if self._moved or self._step == "setup":
+            return
+        need = self._pages[self._step].sizeHint().height() + 4
         total = self.splitter.height()
         self.splitter.setSizes([max(total - need, 1), need])
 
     def _save_splitter(self, *_args) -> None:
+        self._moved = True   # the user chose a layout: it is no longer sized to fit the page
         if self._app_settings is not None:
-            self._app_settings.setValue("analysis/splitter", self.splitter.saveState())
+            self._app_settings.setValue("analysis/splitter2", self.splitter.saveState())
 
     # ---- plot ----
     def _build_plot(self) -> QWidget:
@@ -183,20 +326,18 @@ class AnalysisTab(QWidget):
         self._vb2.setGeometry(vb.sceneBoundingRect())
         self._vb2.linkedViewChanged(vb, self._vb2.XAxis)
 
-    def set_save_panel(self, panel: QWidget) -> None:
-        """Put the save panel under the results and feed it each finished analysis."""
-        lay = panel.layout()   # snug, so Save fits under the results at the default layout
-        if lay is not None:
-            lay.setContentsMargins(0, 0, 0, 0)
-            lay.setSpacing(4)
-            form = lay.itemAt(0).layout()
-            if form is not None and hasattr(form, "setVerticalSpacing"):
-                form.setVerticalSpacing(4)
-        self._right.addWidget(panel.form_widget)
-        self._right.addWidget(panel.action_widget)
+    def set_save_panel(self, panel) -> None:
+        """Place the save form on Setup and the save part on Results, and feed the panel the
+        run and each finished analysis. Without a save panel those places stay empty."""
+        self._save_panel = panel
+        self._setup_lay.insertWidget(1, panel.form_widget)
+        self._results_lay.insertWidget(1, panel.action_widget)
         self.run_loaded.connect(panel.set_run)
         self.result_ready.connect(panel.set_result)
         self.result_cleared.connect(panel.clear_result)
+        panel.edit_requested.connect(lambda: self.go("setup"))
+        if self.run is not None:
+            panel.set_run(self.run)
 
     # ---- opening ----
     def open_run(self, path: str) -> None:
@@ -211,6 +352,7 @@ class AnalysisTab(QWidget):
         self._pending_key = None
         self._place_pending = False
         self.result_cleared.emit()
+        self.go("setup")
         self.src_curve.clear()
         self.resp_curve.clear()
         self.region.setBounds((None, None))
@@ -356,6 +498,8 @@ class AnalysisTab(QWidget):
     def _on_analyze(self) -> None:
         if self._running or self.run is None or self._loading:
             return
+        if self._step in ("setup", "results"):   # show the progress where Analyze lives
+            self.go(self._peaks_or_region())
         self._options = self._options_now()
         self._pending = {}
         self._pending_key = None
@@ -384,6 +528,7 @@ class AnalysisTab(QWidget):
         self.results_panel.show_results(res)
         self._update_controls()
         self.result_ready.emit((self.run, self._options, res, plot))
+        self.go("results")
 
     def _on_failed(self, kind: str, message: str) -> None:
         """A load or an analysis failed."""
@@ -420,18 +565,28 @@ class AnalysisTab(QWidget):
             self._has_results = False
             self.results_panel.show_stale()
             self.result_cleared.emit()   # Save waits for the next analysis
+        if self._step == "peaks" and not self.settings.manual():
+            self.go("region")   # there is no Peaks step outside Manual
         self._ensure_markers_placed()
         self._update_controls()
 
     def _update_controls(self) -> None:
         manual = self.settings.manual() and self.run is not None
+        self._place_analyze()
+        for name, b in self.step_buttons.items():
+            b.setEnabled(self._step_reachable(name))
+        self.step_buttons["peaks"].setVisible(self.settings.manual())
+        self.next_region_btn.setEnabled(self.run is not None)
+        self.next_peaks_btn.setVisible(self.settings.manual())
+        self.next_peaks_btn.setEnabled(self.run is not None and not self._running)
+        peaks_view = self._step in ("peaks", "results")
         for m in self.markers:
-            m.setVisible(manual)
+            m.setVisible(manual and peaks_view)
         ready = self.run is not None and not self._running and not self._loading and not self.is_snapping() \
             and self.settings.radii_ok()
         self.analyze_btn.setEnabled(ready)
         self.cancel_btn.setVisible(self._running)
-        self.region.setMovable(not self._running)
+        self.region.setMovable(not self._running and not peaks_view)
         for m in self.markers:
-            m.setMovable(not self._running)
+            m.setMovable(not self._running and self._step != "results")
         self.settings.setEnabled(not self._running)
