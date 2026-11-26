@@ -45,6 +45,8 @@ from ctwa import experiment_details, theme
 from ctwa.connect_panel import ChoiceCard, SMUConnectPanel
 from ctwa.instruments import registry
 from ctwa.instruments.smu import SMU, NotSupported
+from ctwa.ui import details_form as details_module
+from ctwa.ui.details_form import DetailsForm
 from ctwa.ui.experiment_details_dialog import ExperimentDetailsDialog
 
 from calorimeter_reader import (
@@ -218,12 +220,6 @@ class ExperimentStore:
         record["modified_at"] = now
         self._experiments[name] = record
         self._persist()
-
-    def set_details(self, name: str, details: dict):
-        """Replace one record's `details`; every other key stays as it is."""
-        if name in self._experiments:
-            self._experiments[name]["details"] = dict(details)
-            self._persist()
 
     def delete(self, name: str):
         if name in self._experiments:
@@ -1079,6 +1075,23 @@ class TimingSettingsWidget(QGroupBox):
 UNTITLED = "Untitled experiment"
 
 
+class RunDetailsBox(QGroupBox):
+    """The "Run details" box of the experiment Settings tab; tells when it is shown so the
+    preset lists can be refreshed (new database rows, newly remembered values)."""
+
+    shown = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__("Run details", parent)
+        lay = QVBoxLayout(self)
+        self.form = DetailsForm()
+        lay.addWidget(self.form)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.shown.emit()
+
+
 class ExperimentsSidebar(QGroupBox):
     """Sidebar listing saved experiments with action buttons + notes."""
 
@@ -1089,16 +1102,15 @@ class ExperimentsSidebar(QGroupBox):
     new_requested = Signal(str, dict)   # (name, details) of a new experiment (saved immediately)
     clone_requested = Signal(str, str)  # (source_name, new_name)
     notes_changed = Signal(str)
-    details_edited = Signal(dict)       # Edit details... accepted: the new details
 
     def __init__(self, store: ExperimentStore, parent=None):
         super().__init__(parent)
         theme.set_role(self, "plain")
         self.store = store
         self._current_name: Optional[str] = None
-        self._details: dict = {}
-        # MainWindow replaces this with one that reads the connected devices
+        # MainWindow replaces these: the connected devices, and (settings, sample names) for the presets
         self.defaults_provider = lambda: experiment_details.default_details(None, None)
+        self.presets_provider = lambda: (None, ())
         self._dirty = False
         self._suppress_select = False
         self._setup_ui()
@@ -1142,25 +1154,6 @@ class ExperimentsSidebar(QGroupBox):
         theme.set_role(self.current_label, "card-title")
         self.current_label.setWordWrap(True)
         layout.addWidget(self.current_label)
-
-        # The run details of the loaded experiment, compact, with a small edit button
-        # under them (beside them, the narrow sidebar wrapped every value)
-        self.details_box = QWidget()
-        dl = QVBoxLayout(self.details_box)
-        dl.setContentsMargins(0, 0, 0, 0)
-        dl.setSpacing(2)
-        self.details_label = QLabel("")
-        self.details_label.setWordWrap(True)
-        self.details_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        dl.addWidget(self.details_label, 1)
-        self.edit_details_btn = theme.set_role(QToolButton(), "quiet")
-        self.edit_details_btn.setText("Edit details\u2026")
-        self.edit_details_btn.setToolTip("Sample, devices, temperature, gas and radii that every run of "
-                                         "this experiment carries into the Analysis tab")
-        self.edit_details_btn.clicked.connect(self._on_edit_details_clicked)
-        dl.addWidget(self.edit_details_btn, 0, Qt.AlignLeft)
-        layout.addWidget(self.details_box)
-        self.details_box.setVisible(False)
 
         # Save works from anywhere in the window, not only from the menu
         save_shortcut = QShortcut(QKeySequence.Save, self)
@@ -1209,19 +1202,7 @@ class ExperimentsSidebar(QGroupBox):
         self._suppress_select = False
         self._update_label()
 
-    def set_details(self, details: Optional[dict]):
-        """Show these details under the experiment name (hidden when nothing is loaded)."""
-        self._details = dict(details or {})
-        lines = []
-        for key, label in experiment_details.FIELDS:
-            value = str(self._details.get(key) or "").strip()
-            if value:
-                lines.append("%s: %s" % (label.split(" (")[0], value))
-        self.details_label.setText("\n".join(lines))
-        self.details_label.setVisible(bool(lines))
-        self.details_box.setVisible(self._current_name is not None)
-
-    def set_current(self, name: Optional[str], notes: str = "", details: Optional[dict] = None):
+    def set_current(self, name: Optional[str], notes: str = ""):
         """Set the currently-loaded experiment (without firing experiment_selected)."""
         self._current_name = name
         self._dirty = False
@@ -1236,7 +1217,6 @@ class ExperimentsSidebar(QGroupBox):
         self.notes.blockSignals(True)
         self.notes.setPlainText(notes or "")
         self.notes.blockSignals(False)
-        self.set_details(details)
         self._update_label()
 
     def mark_dirty(self, dirty: bool = True):
@@ -1267,20 +1247,14 @@ class ExperimentsSidebar(QGroupBox):
         i = 1
         while f"Experiment {i}" in existing:
             i += 1
-        dialog = ExperimentDetailsDialog(self, f"Experiment {i}", self.defaults_provider(), existing)
+        settings, sample_names = self.presets_provider()
+        dialog = ExperimentDetailsDialog(self, f"Experiment {i}", self.defaults_provider(), existing,
+                                         settings=settings, sample_names=sample_names)
         if dialog.exec() != QDialog.Accepted:
             return
         name, details = dialog.values()
         if name:
             self.new_requested.emit(name, details)
-
-    def _on_edit_details_clicked(self):
-        if not self._current_name:
-            return
-        dialog = ExperimentDetailsDialog(self, None, self._details)
-        if dialog.exec() != QDialog.Accepted:
-            return
-        self.details_edited.emit(dialog.values()[1])
 
     def _on_load_clicked(self):
         name = self._selected_name()
@@ -2889,7 +2863,6 @@ class MainWindow(QMainWindow):
         self.experiment_store = ExperimentStore()
         self._current_experiment_name: Optional[str] = None
         self._current_experiment_notes: str = ""
-        self._current_experiment_details: dict = {}
         self._current_wave_config: Optional[dict] = None
         self._suppress_dirty = False
 
@@ -3187,7 +3160,7 @@ class MainWindow(QMainWindow):
         self.experiments_sidebar.delete_requested.connect(self._delete_experiment)
         self.experiments_sidebar.new_requested.connect(self._new_experiment)
         self.experiments_sidebar.defaults_provider = self._connected_details_defaults
-        self.experiments_sidebar.details_edited.connect(self._on_details_edited)
+        self.experiments_sidebar.presets_provider = lambda: (self.settings, self._sample_names())
         self.experiments_sidebar.clone_requested.connect(self._clone_experiment)
         self.experiments_sidebar.notes_changed.connect(self._on_notes_changed)
         iv_outer_splitter.addWidget(self.experiments_sidebar)
@@ -3217,7 +3190,12 @@ class MainWindow(QMainWindow):
 
         settings_layout.setColumnStretch(0, 1)
         settings_layout.setColumnStretch(1, 1)
-        settings_layout.setRowStretch(2, 1)
+        self.run_details = RunDetailsBox()
+        self.run_details_form = self.run_details.form
+        self.run_details.shown.connect(self._refresh_detail_presets)
+        settings_layout.addWidget(self.run_details, 2, 0, 1, 2)
+
+        settings_layout.setRowStretch(3, 1)
 
         settings_scroll = QScrollArea()
         settings_scroll.setWidgetResizable(True)
@@ -3415,6 +3393,7 @@ class MainWindow(QMainWindow):
         hook(ms.measure_r, "toggled")
         hook(ms.measure_p, "toggled")
         hook(ts.auto_delay_check, "toggled")
+        self.run_details_form.changed.connect(self._mark_dirty)
 
     def _mark_dirty(self, *args):
         if self._suppress_dirty:
@@ -3462,6 +3441,7 @@ class MainWindow(QMainWindow):
             },
             "wave_config": self._current_wave_config,
             "notes": self._current_experiment_notes,
+            "details": self.run_details_form.values(),
             "channel": self.current_channel,
         }
 
@@ -3526,6 +3506,9 @@ class MainWindow(QMainWindow):
                 slist.sweep_values = list(sd["values"])
                 slist._update_table()
 
+            # Records from before the run details existed show every field blank.
+            self.run_details_form.set_values(exp.get("details") or {})
+
             self._current_wave_config = exp.get("wave_config")
             # If the dialog already exists in memory, push the config in too.
             if getattr(self, "_wave_dialog", None) is not None and self._current_wave_config:
@@ -3541,8 +3524,7 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 # restore selection
                 self.experiments_sidebar.set_current(self._current_experiment_name,
-                                                     self._current_experiment_notes,
-                                             self._current_experiment_details)
+                                                     self._current_experiment_notes)
                 return
         exp = self.experiment_store.get(name)
         if not exp:
@@ -3550,28 +3532,25 @@ class MainWindow(QMainWindow):
         self._apply_state(exp)
         self._current_experiment_name = name
         self._current_experiment_notes = exp.get("notes", "")
-        self._current_experiment_details = dict(exp.get("details") or {})
-        self.experiments_sidebar.set_current(name, self._current_experiment_notes,
-                                             self._current_experiment_details)
+        self.experiments_sidebar.set_current(name, self._current_experiment_notes)
         self.status.showMessage(f"Loaded experiment: {name}")
 
     def _save_experiment(self, name: str):
         payload = self._capture_state()
         payload["notes"] = self._current_experiment_notes
-        payload["details"] = dict(self._current_experiment_details)
         self.experiment_store.save(name, payload)
+        details_module.remember(self.settings, payload["details"])
+        self._refresh_detail_presets()
         self._current_experiment_name = name
         self.experiments_sidebar.refresh()
-        self.experiments_sidebar.set_current(name, self._current_experiment_notes,
-                                             self._current_experiment_details)
+        self.experiments_sidebar.set_current(name, self._current_experiment_notes)
         self.status.showMessage(f"Saved experiment: {name}")
 
     def _rename_experiment(self, old: str, new: str):
         self.experiment_store.rename(old, new)
         self._current_experiment_name = new
         self.experiments_sidebar.refresh()
-        self.experiments_sidebar.set_current(new, self._current_experiment_notes,
-                                             self._current_experiment_details)
+        self.experiments_sidebar.set_current(new, self._current_experiment_notes)
         self.status.showMessage(f"Renamed: {old} → {new}")
 
     def _delete_experiment(self, name: str):
@@ -3579,18 +3558,20 @@ class MainWindow(QMainWindow):
         if self._current_experiment_name == name:
             self._current_experiment_name = None
             self._current_experiment_notes = ""
-            self._current_experiment_details = {}
         self.experiments_sidebar.refresh()
         self.experiments_sidebar.set_current(self._current_experiment_name,
-                                              self._current_experiment_notes,
-                                             self._current_experiment_details)
+                                              self._current_experiment_notes)
         self.status.showMessage(f"Deleted experiment: {name}")
 
     def _new_experiment(self, name: str, details: Optional[dict] = None):
         # Snapshot whatever the UI currently has and save it under the new name,
         # then switch to it so the user can start editing immediately.
         self._current_experiment_notes = ""
-        self._current_experiment_details = dict(details or {})
+        self._suppress_dirty = True
+        try:
+            self.run_details_form.set_values(details or {})
+        finally:
+            self._suppress_dirty = False
         self._save_experiment(name)
 
     def _clone_experiment(self, source: str, new_name: str):
@@ -3602,13 +3583,11 @@ class MainWindow(QMainWindow):
         if source and source == self._current_experiment_name:
             record = self._capture_state()
             record["notes"] = self._current_experiment_notes
-            record["details"] = copy.deepcopy(self._current_experiment_details)
         else:
             stored = self.experiment_store.get(source)
             if stored is None:
                 record = self._capture_state()
                 record["notes"] = self._current_experiment_notes
-                record["details"] = copy.deepcopy(self._current_experiment_details)
             else:
                 record = copy.deepcopy(stored)
         # Strip identity fields so save() treats it as a new record
@@ -3618,18 +3597,24 @@ class MainWindow(QMainWindow):
         self.experiments_sidebar.refresh()
         # Keep the currently-loaded experiment as-is (do NOT switch to the clone)
         self.experiments_sidebar.set_current(self._current_experiment_name,
-                                              self._current_experiment_notes,
-                                             self._current_experiment_details)
+                                              self._current_experiment_notes)
         self.status.showMessage(f"Cloned '{source}' → '{new_name}'")
 
-    def _on_details_edited(self, details: dict):
-        """Edit details...: straight into the store record; the dirty flag is not touched."""
-        name = self._current_experiment_name
-        if not name or self.experiment_store.get(name) is None:
-            return
-        self._current_experiment_details = dict(details)
-        self.experiment_store.set_details(name, details)
-        self.experiments_sidebar.set_details(details)
+    def _sample_names(self) -> List[str]:
+        """Sample names already in the results database (what the app holds; none without cloud)."""
+        loader = getattr(self, "results_loader", None)
+        if loader is None:
+            return []
+        try:
+            names = {str(r.get("model_name") or "").strip() for r in loader.rows()}
+        except Exception:
+            return []
+        return sorted(n for n in names if n)
+
+    def _refresh_detail_presets(self):
+        names = self._sample_names()
+        for field in ("sample", "power_source", "response_device"):
+            self.run_details_form.set_presets(field, details_module.presets_for(field, self.settings, names))
 
     def _connected_details_defaults(self) -> dict:
         # The model the user connected ("Keithley 2602B"), not an *IDN? query:
@@ -4648,7 +4633,7 @@ class MainWindow(QMainWindow):
         if self.run_start_datetime:
             rows.append([f"# Started: {self.run_start_datetime.strftime('%Y-%m-%d %H:%M:%S')}"])
         rows.append([f"# Experiment: {self._current_experiment_name or '(Untitled)'}"])
-        for line in experiment_details.header_lines(self._current_experiment_details):
+        for line in experiment_details.header_lines(self.run_details_form.values()):
             rows.append([line])
         # Each optional row goes through _safe(). If a single row's builder
         # throws (missing widget attr, driver query returns junk, etc.), we

@@ -83,7 +83,7 @@ def test_sweep_writes_the_details_into_the_run_csv(app, tmp_path):
     w = _window("2602B")
     try:
         w.auto_save_path = str(tmp_path)
-        w._current_experiment_details = dict(FULL)
+        w.run_details_form.set_values(FULL)
         _sweep(app, w)
         csvs = list(tmp_path.rglob("*.csv"))
         assert csvs

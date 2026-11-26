@@ -79,10 +79,8 @@ def test_new_with_details_is_stored_and_shown(app, monkeypatch):
         assert rec["details"]["power_source"] == "Keithley 2602B"
         assert rec["details"]["response_device"] == ""
         assert (rec["details"]["gas"], rec["details"]["r1_mm"], rec["details"]["r2_mm"]) == ("Ar", "6.72", "14.86")
-        assert w._current_experiment_details == rec["details"]
-        sb = w.experiments_sidebar
-        assert "Sample: Al2O3" in sb.details_label.text()
-        assert not sb.details_box.isHidden()
+        assert w.run_details_form.values() == rec["details"]
+        assert not w.experiments_sidebar.is_dirty()
     finally:
         w.close()
 
@@ -118,14 +116,13 @@ def test_old_record_without_details_loads_saves_and_clones(app, monkeypatch):
         w.experiment_store.save("Old", w._capture_state())  # no details key, as before this feature
         w.experiment_store.get("Old").pop("details", None)
         w._load_experiment("Old")
-        sb = w.experiments_sidebar
-        assert w._current_experiment_details == {}
-        assert sb.details_label.text() == "" and sb.details_label.isHidden()
+        assert all(v == "" for v in w.run_details_form.values().values())
+        assert not w.experiments_sidebar.is_dirty()
         from ctwa.experiment_details import header_lines
-        assert header_lines(w._current_experiment_details) == []
+        assert header_lines(w.run_details_form.values()) == []
         w._save_experiment("Old")
         w._clone_experiment("Old", "Old copy")
-        assert w.experiment_store.get("Old copy").get("details") == {}
+        assert w.experiment_store.get("Old copy")["details"] == w.run_details_form.values()
     finally:
         w.close()
 
@@ -152,37 +149,99 @@ def test_clone_copies_details_independently(app, monkeypatch):
         w.close()
 
 
-def test_edit_details_saves_to_the_store_and_leaves_dirty_alone(app, monkeypatch):
+def test_run_details_box_is_in_the_settings_tab_with_seven_fields(app):
+    from ctwa.experiment_details import FIELDS
     w = _window()
     try:
-        _answer(monkeypatch, name="E1", sample="Al2O3")
-        w.experiments_sidebar._on_new_clicked()
-        sb = w.experiments_sidebar
-        keep = dict(w.experiment_store.get("E1"))
-        assert not sb.is_dirty()
-        _answer(monkeypatch, sample="SiC", gas="Air")
-        sb._on_edit_details_clicked()
-        rec = w.experiment_store.get("E1")
-        assert rec["details"]["sample"] == "SiC" and rec["details"]["gas"] == "Air"
-        assert rec["sweep"] == keep["sweep"] and rec["notes"] == keep["notes"]
-        assert not sb.is_dirty()
-        assert "Sample: SiC" in sb.details_label.text()
-        # and it is on disk
-        from ctwa.app import ExperimentStore
-        assert ExperimentStore().get("E1")["details"]["sample"] == "SiC"
-        # a dirty experiment stays dirty
-        sb.mark_dirty(True)
-        _answer(monkeypatch, sample="SiO2")
-        sb._on_edit_details_clicked()
-        assert sb.is_dirty()
+        assert w.run_details.title() == "Run details"
+        assert set(w.run_details_form.fields) == {k for k, _ in FIELDS} and len(FIELDS) == 7
+        assert w.run_details.parent() is w.source_settings.parent()  # same page as the other settings
+        assert not hasattr(w.experiments_sidebar, "edit_details_btn")
+        assert not hasattr(w.experiments_sidebar, "details_label")
     finally:
         w.close()
 
 
-def test_panel_is_hidden_with_no_experiment_and_never_touches_the_real_file(app, _scratch_experiments_file):
+def test_editing_the_box_marks_dirty_and_save_stores_it(app, monkeypatch):
     w = _window()
     try:
-        assert w.experiments_sidebar.details_box.isHidden()
+        _answer(monkeypatch, name="E1", sample="Al2O3")
+        w.experiments_sidebar._on_new_clicked()
+        assert not w.experiments_sidebar.is_dirty()
+        w.run_details_form.fields["temperature_c"].textEdited.emit("5")  # a user edit
+        w.run_details_form.fields["temperature_c"].setText("800")
+        assert w.experiments_sidebar.is_dirty()
+        w._save_experiment("E1")
+        assert w.experiment_store.get("E1")["details"]["temperature_c"] == "800"
+        assert not w.experiments_sidebar.is_dirty()
+        # typed values are remembered for the dropdowns
+        from ctwa.ui.details_form import remembered
+        assert "Al2O3" in remembered(w.settings, "sample")
+    finally:
+        w.close()
+
+
+def test_start_before_save_writes_the_box_values_into_the_header(app, monkeypatch):
+    w = _window()
+    try:
+        _answer(monkeypatch, name="E1", sample="Al2O3")
+        w.experiments_sidebar._on_new_clicked()
+        w.run_details_form.set_values({"sample": "SiC", "temperature_c": "650", "gas": "Air"})
+        w.run_details_form.fields["sample"].edited.emit()
+        assert w.experiments_sidebar.is_dirty()
+        lines = [r[0] for r in w._build_csv_metadata_rows([]) if r]
+        assert "# Sample: SiC" in lines and "# Temperature: 650" in lines and "# Gas: Air" in lines
+        assert w.experiment_store.get("E1")["details"]["sample"] == "Al2O3"  # not saved yet
+    finally:
+        w.close()
+
+
+def test_loading_another_experiment_fills_the_box_without_dirtying(app, monkeypatch):
+    w = _window()
+    try:
+        _answer(monkeypatch, name="E1", sample="Al2O3")
+        w.experiments_sidebar._on_new_clicked()
+        _answer(monkeypatch, name="E2", sample="SiC", temperature_c="300")
+        w.experiments_sidebar._on_new_clicked()
+        assert w.run_details_form.values()["sample"] == "SiC"
+        w._load_experiment("E1")
+        assert w.run_details_form.values()["sample"] == "Al2O3"
+        assert w.run_details_form.values()["temperature_c"] == ""
+        assert not w.experiments_sidebar.is_dirty()
+    finally:
+        w.close()
+
+
+def test_sample_presets_include_names_from_the_results_loader(app, monkeypatch):
+    w = _window()
+    try:
+        class FakeLoader:
+            def rows(self):
+                return [{"model_name": "unk foam "}, {"model_name": "Alumina"}, {"model_name": None}]
+        w.results_loader = FakeLoader()
+        w._refresh_detail_presets()
+        combo = w.run_details_form.fields["sample"]
+        items = [combo.itemText(i) for i in range(combo.count())]
+        assert items == ["Alumina", "unk foam", "Fill in new\u2026"]
+        # and the New dialog gets them too
+        captured = {}
+
+        def fake_exec(self):
+            c = self.edits["sample"]
+            captured["items"] = [c.itemText(i) for i in range(c.count())]
+            return QDialog.Rejected
+        monkeypatch.setattr(ExperimentDetailsDialog, "exec", fake_exec)
+        w.experiments_sidebar._on_new_clicked()
+        assert "unk foam" in captured["items"]
+        w.results_loader = None  # no cloud: no database names, no crash
+        assert w._sample_names() == []
+    finally:
+        w.close()
+
+
+def test_never_touches_the_real_file(app, _scratch_experiments_file):
+    w = _window()
+    try:
         assert w.experiment_store.path == _scratch_experiments_file
     finally:
         w.close()
