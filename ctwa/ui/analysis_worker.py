@@ -26,10 +26,12 @@ class AnalysisWorker(QObject):
     finished = Signal(object)  # (AnalysisResults, plot dict or None), both built in the process
     region_ready = Signal(object)  # runner.RegionInfo for the last request
     region_failed = Signal(str, str)  # a region_info request failed (same kinds as `failed`)
+    smoothed_ready = Signal(str, object)  # (path, runner.smoothed_full result or None) for the whole run
     failed = Signal(str, str)  # kind ("pipeline" | "analysis" | "crash"), message
 
     # request id, "loaded"/"finished"/"failed", payload or (kind, message)
     _delivered = Signal(int, str, object)
+    _smoothed_delivered = Signal(int, str, object)  # request id, path, result or None
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -38,6 +40,12 @@ class AnalysisWorker(QObject):
         self._current = 0  # the only request whose result is still wanted
         self._busy = False  # a request is in flight in the process
         self._delivered.connect(self._on_delivered)
+        # The whole-run smoothing takes seconds. It has a process of its own, so it never
+        # makes a region request wait (or a region request kill it).
+        self._smooth_executor: Optional[ProcessPoolExecutor] = None
+        self._smooth_current = 0
+        self._smooth_busy = False
+        self._smoothed_delivered.connect(self._on_smoothed_delivered)
         app = QCoreApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self.shutdown)
@@ -53,6 +61,41 @@ class AnalysisWorker(QObject):
                     wave: str = "sine") -> None:
         self._submit("region", runner.region_info, path, sel_min, sel_max, smooth, wave)
 
+    def smoothed_full(self, path: str) -> None:
+        """Smooth the whole run in the background; `smoothed_ready(path, result)` follows.
+        A failure just means no result: the plot stays raw."""
+        req = next(self._ids)
+        self._smooth_current = req
+        if self._smooth_busy:
+            self._discard_smooth_pool()
+        self._smooth_busy = True
+        try:
+            if self._smooth_executor is None:
+                self._smooth_executor = ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn"))
+            fut = self._smooth_executor.submit(runner.smoothed_full, path)
+        except Exception:
+            self._smooth_busy = False
+            self._discard_smooth_pool()
+            return
+        fut.add_done_callback(lambda f, req=req, path=path: self._on_smooth_future(req, path, f))
+
+    def _on_smooth_future(self, req: int, path: str, fut: Future) -> None:
+        if fut.cancelled():
+            return
+        result = None if fut.exception() is not None else fut.result()
+        self._smoothed_delivered.emit(req, path, result)
+
+    @Slot(int, str, object)
+    def _on_smoothed_delivered(self, req: int, path: str, result: object) -> None:
+        if req != self._smooth_current:
+            return
+        self._smooth_busy = False
+        self.smoothed_ready.emit(path, result)
+
+    def _discard_smooth_pool(self) -> None:
+        ex, self._smooth_executor = self._smooth_executor, None
+        self._kill_pool(ex)
+
     def cancel(self) -> None:
         """Drop the running request (its result is ignored). The process is only
         replaced if it is busy; an idle one keeps its warm start and parse cache."""
@@ -65,6 +108,9 @@ class AnalysisWorker(QObject):
         self._current = next(self._ids)
         self._busy = False
         self._discard_pool()
+        self._smooth_current = next(self._ids)
+        self._smooth_busy = False
+        self._discard_smooth_pool()
 
     # ---- internals ----
     def _ensure_pool(self) -> ProcessPoolExecutor:
@@ -74,6 +120,10 @@ class AnalysisWorker(QObject):
 
     def _discard_pool(self) -> None:
         ex, self._executor = self._executor, None
+        self._kill_pool(ex)
+
+    @staticmethod
+    def _kill_pool(ex) -> None:
         if ex is None:
             return
         try:

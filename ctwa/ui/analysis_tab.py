@@ -63,6 +63,10 @@ class AnalysisTab(QWidget):
         self._pending = {}     # marker index -> dropped time, waiting for the smoothed series
         self._pending_key = None
         self._place_pending = False
+        self._smoothed = {}    # path -> runner.smoothed_full result (None: nothing to show), the run on show only
+        self._smoothed_asked = set()   # paths whose smoothing is in the worker
+        self._drawn = ("raw",)  # what src_curve / resp_curve hold: ("raw",), ("full", path) or ("snap", key)
+        self._title_base = ""
 
         self._step = "setup"
         self._save_panel = None
@@ -166,6 +170,7 @@ class AnalysisTab(QWidget):
         self.worker.loaded.connect(self._on_loaded)
         self.worker.region_ready.connect(self._on_region_ready)
         self.worker.region_failed.connect(self._on_region_failed)
+        self.worker.smoothed_ready.connect(self._on_smoothed_ready)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
         self.settings.changed.connect(self._on_settings_changed)
@@ -230,6 +235,8 @@ class AnalysisTab(QWidget):
             self._vb2.autoRange()
         elif step == "peaks":
             self._ensure_markers_placed()
+        self._refresh_curves()
+        self._ensure_snap_series()
         if step in ("peaks", "results"):
             self._zoom_to_region()
         self._update_controls()
@@ -409,6 +416,9 @@ class AnalysisTab(QWidget):
         self._pending = {}
         self._pending_key = None
         self._place_pending = False
+        self._smoothed = {}
+        self._smoothed_asked = set()
+        self._drawn = ("raw",)
         self.result_cleared.emit()
         self.go("setup")
         self.src_curve.clear()
@@ -445,8 +455,10 @@ class AnalysisTab(QWidget):
         self.plot.getPlotItem().vb.autoRange()
         self._vb2.autoRange()
         started = run.header.get("started")
-        self.title.setText(os.path.basename(run.path) + (("  —  %s" % started) if started else ""))
+        self._title_base = os.path.basename(run.path) + (("  —  %s" % started) if started else "")
+        self.title.setText(self._title_base)
         self._ensure_markers_placed()
+        self._refresh_curves()
         self._update_controls()
         self.run_loaded.emit(run)
 
@@ -454,6 +466,67 @@ class AnalysisTab(QWidget):
     def _region(self):
         lo, hi = self.region.getRegion()
         return lo, hi
+
+    # ---- which curves the plot shows ----
+    def _wanted_curves(self):
+        """What the plot should hold now: the smoothed run on ② (smoothing on), the series the
+        markers snap on at ③ (when the worker has it for this region), raw otherwise."""
+        if self.run is None:
+            return ("raw",)
+        path = self.run.path
+        if self._step == "region" and self._smooth_wanted() and self._smoothed.get(path) is not None:
+            return ("full", path)
+        if self._step == "peaks" and self.settings.manual():
+            key = self._info_key()
+            info = self._info.get(key)
+            if info is not None and info.snap is not None:
+                return ("snap", key)
+        return ("raw",)
+
+    def _refresh_curves(self) -> None:
+        """Draw what _wanted_curves says (nothing happens when it is already drawn), and ask the
+        worker once per run for the smoothed run when ② wants it."""
+        if self.run is None:
+            return
+        path = self.run.path
+        if (self._step == "region" and self._smooth_wanted()
+                and path not in self._smoothed and path not in self._smoothed_asked):
+            self._smoothed_asked.add(path)
+            self.worker.smoothed_full(path)
+        want = self._wanted_curves()
+        suffix = "  (smoothed)" if want[0] == "full" or (want[0] == "snap" and want[1][3]) else ""
+        self.title.setText(self._title_base + suffix)
+        if want == self._drawn:
+            return
+        self._drawn = want
+        if want[0] == "full":
+            ts, vs, tc, vc = self._smoothed[path]
+        elif want[0] == "snap":
+            ts, vs, tc, vc = self._info[want[1]].snap
+        else:
+            s = self.run.synced
+            ts, vs, tc, vc = s.t_src, s.v_src, s.t_cal, s.v_cal
+        self.src_curve.setData(np.asarray(ts), np.asarray(vs))
+        self.resp_curve.setData(np.asarray(tc), np.asarray(vc))
+        if self._step == "region":
+            self.plot.getPlotItem().vb.autoRange()
+            self._vb2.autoRange()
+        elif self._step in ("peaks", "results"):
+            self._zoom_to_region()
+
+    def _ensure_snap_series(self) -> None:
+        """③ draws the series the markers snap on: ask for it when this region / smoothing
+        state has none yet (smoothing toggled elsewhere, a first visit)."""
+        if (self._step == "peaks" and self.run is not None and not self._running
+                and self._info_key() not in self._info and self._pending_key != self._info_key()):
+            self._request_region(self._info_key())
+
+    def _on_smoothed_ready(self, path: str, result) -> None:
+        self._smoothed_asked.discard(path)
+        if self.run is None or path != self.run.path:
+            return   # a run opened since: its smoothing is not the one on show
+        self._smoothed[path] = result
+        self._refresh_curves()
 
     def _smooth_wanted(self) -> bool:
         return self.settings.smooth_check.isChecked() and self.settings.wave() == "sine"
@@ -502,6 +575,7 @@ class AnalysisTab(QWidget):
         if key is None or self.run is None:
             return
         self._info[key] = info
+        self._refresh_curves()
         items, self._pending = self._pending, {}
         place, self._place_pending = self._place_pending, False
         if key == self._info_key():
@@ -624,6 +698,7 @@ class AnalysisTab(QWidget):
         self._on_settings_changed()
 
     def _on_settings_changed(self) -> None:
+        self._refresh_curves()
         if self._has_results:
             self._clear_result()
             self.results_panel.show_stale()
@@ -631,6 +706,7 @@ class AnalysisTab(QWidget):
         if self._step == "peaks" and not self.settings.manual():
             self.go("region")   # there is no Peaks step outside Manual
         self._ensure_markers_placed()
+        self._ensure_snap_series()
         self._update_controls()
 
     def _update_controls(self) -> None:

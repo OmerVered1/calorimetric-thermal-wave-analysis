@@ -18,7 +18,7 @@ from ctwa.analysis.run_header import parse_run_header
 from ctwa.analysis.modes import run_auto_fit_analysis
 from ctwa.analysis.row import build_analysis_plot
 from ctwa.analysis.sine_fit import remove_period_mean, sine_lag
-from ctwa.analysis.smoothing import smooth_to_shared_sine
+from ctwa.analysis.smoothing import smooth_piecewise, smooth_to_shared_sine
 from ctwa.analysis.square import detect_square_period
 from ctwa.analysis.types import AnalysisParams, AnalysisResults, CombinedParsed, PipelineOptions, SyncedData
 
@@ -128,6 +128,30 @@ def smoothed_region(path: str, sel_min: float, sel_max: float):
     _SMOOTH_CACHE[key] = result
     while len(_SMOOTH_CACHE) > _SMOOTH_MAX:
         _SMOOTH_CACHE.popitem(last=False)
+    return result
+
+
+_FULL_CACHE: "OrderedDict[Tuple[str, int, int], object]" = OrderedDict()
+
+
+def smoothed_full(path: str):
+    """The webapp's overview smoothing: (t_src, v_src_smoothed, t_cal, v_cal_smoothed) over the
+    whole run, each oscillating burst replaced by its own sine fit, gaps left raw (a
+    smooth_piecewise of the synced signals). None when the run has no signal to smooth.
+    Cached per file."""
+    st = os.stat(path)
+    key = (path, st.st_mtime_ns, st.st_size)
+    if key in _FULL_CACHE:
+        _FULL_CACHE.move_to_end(key)
+        return _FULL_CACHE[key]
+    s = load_run(path).synced
+    result = None
+    if len(s.t_src) and len(s.t_cal):
+        sm_src, sm_cal = smooth_piecewise(list(s.t_src), list(s.v_src), list(s.t_cal), list(s.v_cal))
+        result = (list(s.t_src), sm_src, list(s.t_cal), sm_cal)
+    _FULL_CACHE[key] = result
+    while len(_FULL_CACHE) > _SMOOTH_MAX:
+        _FULL_CACHE.popitem(last=False)
     return result
 
 

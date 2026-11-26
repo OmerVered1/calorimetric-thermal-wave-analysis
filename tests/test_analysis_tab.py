@@ -932,3 +932,116 @@ def test_the_shared_plot_response_axis_zooms_on_its_own_axis(tab):
     ax.wheelEvent(FakeWheel(QPointF(r.right() + 10, r.center().y()), QPointF(2, 2)))
     assert tab._vb2.viewRange()[1] != r0
     assert tab.plot.getPlotItem().vb.viewRange()[1] == y0
+
+
+# ---- smoothed curves on ② Region and ③ Peaks ----
+
+def _drawn(tab):
+    # xData / yData: what was set (getData() is downsampled to the view)
+    return (np.asarray(tab.src_curve.yData), np.asarray(tab.resp_curve.yData))
+
+
+@pytest.fixture
+def smoothed_tab(tab):
+    """A tab on ② with smoothing ticked and the worker's whole-run smoothing delivered."""
+    from ctwa.analysis.smoothing import smooth_piecewise
+    s = tab.run.synced
+    tab._expected = smooth_piecewise(list(s.t_src), list(s.v_src), list(s.t_cal), list(s.v_cal))
+    tab.settings.smooth_check.setChecked(True)
+    tab.go("region")
+    assert wait_until(lambda: tab._drawn[0] == "full", 120), "smoothed run never arrived"
+    return tab
+
+
+@pytest.mark.slow
+def test_region_step_draws_the_smoothed_run(smoothed_tab):
+    tab = smoothed_tab
+    src, resp = _drawn(tab)
+    assert np.array_equal(src, np.asarray(tab._expected[0]))
+    assert np.array_equal(resp, np.asarray(tab._expected[1]))
+    assert "(smoothed)" in tab.title.text()
+
+
+@pytest.mark.slow
+def test_unticking_restores_raw_and_ticking_again_reuses_the_cache(smoothed_tab):
+    tab = smoothed_tab
+    s = tab.run.synced
+    asked = []
+    tab.worker.smoothed_full = lambda p: asked.append(p)
+    tab.settings.smooth_check.setChecked(False)
+    src, resp = _drawn(tab)
+    assert np.array_equal(src, np.asarray(s.v_src)) and np.array_equal(resp, np.asarray(s.v_cal))
+    assert "(smoothed)" not in tab.title.text()
+    tab.settings.smooth_check.setChecked(True)
+    assert tab._drawn[0] == "full"
+    assert np.array_equal(_drawn(tab)[0], np.asarray(tab._expected[0]))
+    assert asked == []   # no second request
+
+
+def test_smoothing_is_requested_once_per_run(tab):
+    asked = []
+    tab.worker.smoothed_full = lambda p: asked.append(p)
+    tab.settings.smooth_check.setChecked(True)
+    tab.go("region")
+    tab.settings.smooth_check.setChecked(False)
+    tab.settings.smooth_check.setChecked(True)
+    tab.go("setup")
+    tab.go("region")
+    assert asked == [tab.run.path]
+
+
+def test_raw_curves_until_the_smoothed_run_arrives(tab):
+    tab.worker.smoothed_full = lambda p: None
+    tab.settings.smooth_check.setChecked(True)
+    tab.go("region")
+    s = tab.run.synced
+    assert tab._drawn == ("raw",)
+    assert np.array_equal(_drawn(tab)[0], np.asarray(s.v_src))
+
+
+def test_late_smoothed_result_for_another_path_is_ignored(tab):
+    tab.worker.smoothed_full = lambda p: None
+    tab.settings.smooth_check.setChecked(True)
+    tab.go("region")
+    s = tab.run.synced
+    fake = (list(s.t_src), [0.0] * len(s.t_src), list(s.t_cal), [0.0] * len(s.t_cal))
+    tab._on_smoothed_ready("/some/old/run.csv", fake)
+    assert tab._drawn == ("raw",) and "/some/old/run.csv" not in tab._smoothed
+    # and a new run never shows the old run's smoothing
+    tab._on_smoothed_ready(tab.run.path, fake)
+    assert tab._drawn[0] == "full"
+    tab.open_run(tab.run.path)
+    assert tab._smoothed == {} and tab._drawn == ("raw",)
+
+
+def test_square_wave_draws_raw(tab):
+    tab.worker.smoothed_full = lambda p: None
+    tab.settings.smooth_check.setChecked(True)
+    tab.go("region")
+    s = tab.run.synced
+    tab._on_smoothed_ready(tab.run.path, (list(s.t_src), [0.0] * len(s.t_src), list(s.t_cal), [0.0] * len(s.t_cal)))
+    assert tab._drawn[0] == "full"
+    tab.settings.square_btn.click()
+    assert tab._drawn == ("raw",)
+    assert np.array_equal(_drawn(tab)[0], np.asarray(s.v_src))
+
+
+@pytest.mark.parametrize("smooth", [False, True])
+def test_peaks_step_draws_the_snap_series(tab, smooth):
+    tab.settings.set_mode("Manual")
+    settle(tab)
+    tab.settings.smooth_check.setChecked(smooth)
+    tab.go("peaks")
+    settle(tab)
+    assert wait_until(lambda: tab._drawn[0] == "snap", 120)
+    info = tab._info[tab._info_key()]
+    ts, vs, tc, vc = info.snap
+    assert np.array_equal(np.asarray(tab.src_curve.xData), np.asarray(ts))
+    assert np.array_equal(np.asarray(tab.src_curve.yData), np.asarray(vs))
+    assert np.array_equal(np.asarray(tab.resp_curve.yData), np.asarray(vc))
+    # the zoom fits the drawn curves
+    lo, hi = tab.plot.getPlotItem().vb.viewRange()[1]
+    assert lo <= float(np.min(vs)) and hi >= float(np.max(vs))
+    # results / back to the region: raw again
+    tab.go("region")
+    assert tab._drawn[0] in ("raw", "full")
