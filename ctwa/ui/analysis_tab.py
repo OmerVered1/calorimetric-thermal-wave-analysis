@@ -25,6 +25,7 @@ from ctwa.analysis.types import PipelineOptions
 from ctwa.ui.analysis_results import ResultsPanel
 from ctwa.ui.analysis_settings import SettingsPanel
 from ctwa.ui.analysis_worker import AnalysisWorker
+from ctwa.ui.dual_axis import ResponseViewBox, link_y_zoom
 
 MARKER_NAMES = ("S1", "S2", "R1", "R2")  # source peak 1, 2; response peak 1, 2
 STEPS = (("setup", "1 Setup"), ("region", "2 Region"), ("peaks", "3 Peaks"), ("results", "4 Results"))
@@ -308,12 +309,12 @@ class AnalysisTab(QWidget):
         self._src_color = theme.series_color("Power")
         self._resp_color = theme.series_color("Heat Flow")
         # the response has its own scale, on the right
-        self._vb2 = pg.ViewBox()
+        # (clicks reach the region and the markers; wheel/drag inside the plot reach the main view box)
+        self._vb2 = ResponseViewBox()
         item.scene().addItem(self._vb2)
         item.getAxis("right").linkToView(self._vb2)
         self._vb2.setXLink(item)
-        self._vb2.setAcceptedMouseButtons(Qt.NoButton)  # clicks and drags reach the region and markers
-        self._vb2.setMouseEnabled(False, False)
+        self._yzoom = link_y_zoom(item.vb, self._vb2)
         item.vb.sigResized.connect(self._sync_views)
         self.src_curve = pg.PlotDataItem(pen=theme.pen(self._src_color))
         self.resp_curve = pg.PlotDataItem(pen=theme.pen(self._resp_color))

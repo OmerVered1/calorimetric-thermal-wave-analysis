@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QLabel, QStackedLayout, QVBoxLayout, QWidget
 
 from ctwa import theme
 from ctwa.analysis.jsmath import js_to_precision
+from ctwa.ui.dual_axis import ResponseViewBox, link_y_zoom
 from ctwa.ui.results.figure_model import (Annotation, Shape, StoredFigure, StoredImage, Trace, bar_values,
                                           parse_color, parse_graph)
 
@@ -144,11 +145,12 @@ class FigureView(QWidget):
         self._plot = pg.PlotWidget()
         theme.style_plot(self._plot)
         self._pi = self._plot.getPlotItem()
-        self._view2 = pg.ViewBox()
+        self._view2 = ResponseViewBox()
         self._pi.showAxis("right")
         self._pi.scene().addItem(self._view2)
         self._pi.getAxis("right").linkToView(self._view2)
         self._view2.setXLink(self._pi.vb)
+        self._yzoom = link_y_zoom(self._pi.vb, self._view2)
         self._pi.hideAxis("right")
         self._pi.vb.sigResized.connect(self._on_resized)
         self._pi.vb.sigRangeChanged.connect(self._reposition)
@@ -299,6 +301,7 @@ class FigureView(QWidget):
         self._on_resized()
         self._pi.vb.autoRange()
         self._view2.autoRange()
+        self._yzoom.relearn()
         self._reposition()
 
     def _draw_image(self, img: StoredImage) -> bool:
