@@ -88,7 +88,7 @@ class _Entry(QWidget):
     def paint_state(self, visible: bool) -> None:
         self.setWindowOpacity(1.0)
         self.label.setStyleSheet("font-size: %dpx; background: transparent; color: %s;" % (
-            theme.TEXT_SMALL, theme.P.text if visible else theme.P.text_faint))
+            theme.TEXT_SMALL, theme.P.text if visible else theme.P.text_disabled))
         self.dot.setVisible(True)
         self.dot.setStyleSheet("background: %s; border-radius: 4px;" % (
             self.property("color") if visible else theme.P.border))

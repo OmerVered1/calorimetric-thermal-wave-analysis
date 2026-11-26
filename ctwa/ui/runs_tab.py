@@ -114,7 +114,7 @@ class RunsModel(QAbstractTableModel):
             if role == Qt.ToolTipRole:
                 return run.path if run.is_capture else f"{run.path}\n{NOT_CAPTURE_TIP}"
             if role == Qt.ForegroundRole and not run.is_capture:
-                return QBrush(QColor(theme.P.text_faint))
+                return QBrush(QColor(theme.P.text_disabled))   # can't be opened: reads as off
         elif c == _STARTED:
             if role == Qt.DisplayRole and run.started:
                 return run.started.strftime("%Y-%m-%d %H:%M")

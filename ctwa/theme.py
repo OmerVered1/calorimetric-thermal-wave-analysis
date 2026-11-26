@@ -47,8 +47,12 @@ class Palette:
     border_strong: str = "#A9ADB3" # hover, and the lower edge that makes a button look raised
     # Text
     text: str = "#1B1C1E"
-    text_muted: str = "#595C61"
-    text_faint: str = "#84878D"
+    # Omer (Nov 2026): no grey text. Secondary and hint text are as black as
+    # the main text; only switched-off things (disabled controls, runs that
+    # can't be opened, hidden legend entries) stay grey, so they still read as off.
+    text_muted: str = "#1B1C1E"
+    text_faint: str = "#1B1C1E"
+    text_disabled: str = "#84878D"
     # Neutral overlays: darken whatever surface they sit on, so one hover
     # colour works on the canvas, a panel and a card alike.
     hover: str = "rgba(27, 28, 30, 0.06)"
@@ -268,7 +272,7 @@ QPushButton:pressed, QToolButton:pressed, QToolButton:open {{
 QPushButton:focus, QToolButton:focus {{ border: 2px solid {p.accent_strong}; padding: 2px 9px; }}
 QPushButton:focus:pressed, QToolButton:focus:pressed {{ padding: 3px 9px 1px 9px; }}
 QPushButton:disabled, QToolButton:disabled {{
-    color: {p.text_faint}; background: {p.card}; border-color: {p.hairline};
+    color: {p.text_disabled}; background: {p.card}; border-color: {p.hairline};
 }}
 QToolButton::menu-indicator {{ image: none; width: 0px; }}
 
@@ -288,7 +292,7 @@ QPushButton[role="primary"]:disabled {{
 QPushButton[role="danger"] {{ color: {p.danger}; }}
 QPushButton[role="danger"]:hover {{ background: {p.danger_soft}; border-color: {p.danger_edge}; }}
 QPushButton[role="danger"]:pressed {{ background: #EBCBC5; }}
-QPushButton[role="danger"]:disabled {{ color: {p.text_faint}; background: {p.card}; border-color: {p.hairline}; }}
+QPushButton[role="danger"]:disabled {{ color: {p.text_disabled}; background: {p.card}; border-color: {p.hairline}; }}
 
 QPushButton[role="quiet"], QToolButton[role="quiet"] {{
     background: transparent; border: 1px solid transparent; color: {p.text_muted};
@@ -298,7 +302,7 @@ QPushButton[role="quiet"]:pressed, QToolButton[role="quiet"]:pressed,
 QToolButton[role="quiet"]:open {{ background: {p.press}; color: {p.text}; }}
 QPushButton[role="quiet"]:focus, QToolButton[role="quiet"]:focus {{ border: 2px solid {p.accent_strong}; }}
 QPushButton[role="quiet"]:disabled, QToolButton[role="quiet"]:disabled {{
-    color: {p.text_faint}; background: transparent; border-color: transparent;
+    color: {p.text_disabled}; background: transparent; border-color: transparent;
 }}
 
 /* output switch: reads as a state, not an action */
@@ -325,7 +329,7 @@ QPushButton[role="segment"]:checked {{
     border: 1px solid {p.border}; border-bottom-color: {p.border_strong};
 }}
 QPushButton[role="segment"]:focus   {{ border: 2px solid {p.accent_strong}; padding: 0px 9px; }}
-QPushButton[role="segment"]:disabled {{ color: {p.text_faint}; background: transparent; border-color: transparent; }}
+QPushButton[role="segment"]:disabled {{ color: {p.text_disabled}; background: transparent; border-color: transparent; }}
 
 /* instrument picker cards */
 QFrame[role="model-card"] {{
@@ -351,7 +355,7 @@ QPlainTextEdit:focus, QTextEdit:focus {{ border: 2px solid {p.accent_strong}; pa
 QComboBox:on {{ background: {p.button_press}; }}
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled,
 QPlainTextEdit:disabled, QTextEdit:disabled {{
-    background: {p.card}; color: {p.text_faint}; border-color: {p.hairline};
+    background: {p.card}; color: {p.text_disabled}; border-color: {p.hairline};
 }}
 QLineEdit[readOnly="true"], QSpinBox[readOnly="true"], QDoubleSpinBox[readOnly="true"] {{
     background: {p.card}; color: {p.text_muted};
@@ -366,13 +370,13 @@ QComboBox QAbstractItemView {{
 QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{ width: 0px; border: none; }}
 
 QCheckBox, QRadioButton {{ spacing: 6px; background: transparent; }}
-QCheckBox:disabled, QRadioButton:disabled {{ color: {p.text_faint}; }}
+QCheckBox:disabled, QRadioButton:disabled {{ color: {p.text_disabled}; }}
 QCheckBox::indicator, QRadioButton::indicator {{
     width: 14px; height: 14px; border: 1px solid {p.border_strong}; background: {p.raised};
 }}
 QCheckBox::indicator {{ border-radius: 3px; }}
 QRadioButton::indicator {{ border-radius: 8px; }}
-QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {p.text_muted}; }}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {p.border_strong}; }}
 QCheckBox::indicator:pressed, QRadioButton::indicator:pressed {{ background: {p.button_press}; }}
 QCheckBox::indicator:focus, QRadioButton::indicator:focus {{
     border: 2px solid {p.accent_strong}; width: 12px; height: 12px;
@@ -398,7 +402,7 @@ QListWidget::item {{ padding: 3px 6px; border-radius: 3px; margin: 0px 2px; colo
 QListWidget::item:hover {{ background: {p.hover}; }}
 QListWidget::item:selected {{ background: {p.accent_soft}; color: {p.text}; }}
 QListWidget::item:selected:!active {{ background: #EDE5D6; }}
-QListWidget::item:disabled {{ color: {p.text_faint}; background: transparent; }}
+QListWidget::item:disabled {{ color: {p.text_disabled}; background: transparent; }}
 QTableWidget::item, QTableView::item {{ padding: 0px 6px; }}
 QTableWidget::item:selected, QTableView::item:selected {{ background: {p.accent_soft}; color: {p.text}; }}
 QHeaderView {{ background: {p.card}; border: none; }}
@@ -439,7 +443,7 @@ QTabBar::tab:selected {{
 }}
 QTabBar::tab:focus    {{ border: 2px solid {p.accent_strong}; border-bottom: none; padding: 3px 13px 5px 13px; }}
 QTabBar::tab:selected:focus {{ border-bottom: 1px solid {p.panel}; padding: 3px 13px 7px 13px; }}
-QTabBar::tab:disabled {{ color: {p.text_faint}; }}
+QTabBar::tab:disabled {{ color: {p.text_disabled}; }}
 
 /* ---------- chrome -------------------------------------------------- */
 QMenuBar {{ background: {p.panel}; border-bottom: 1px solid {p.border}; }}
@@ -449,7 +453,7 @@ QMenuBar::item:pressed {{ background: {p.press}; }}
 QMenu {{ background: {p.raised}; border: 1px solid {p.border}; border-radius: 5px; padding: 3px; }}
 QMenu::item {{ padding: 4px 20px 4px 10px; border-radius: 3px; }}
 QMenu::item:selected {{ background: {p.accent_soft}; color: {p.text}; }}
-QMenu::item:disabled {{ color: {p.text_faint}; background: transparent; }}
+QMenu::item:disabled {{ color: {p.text_disabled}; background: transparent; }}
 QMenu::separator {{ height: 1px; background: {p.hairline}; margin: 3px 6px; }}
 
 QStatusBar {{
@@ -566,7 +570,7 @@ def apply(app: QApplication) -> None:
     pal.setColor(QPalette.ButtonText, QColor(P.text))
     pal.setColor(QPalette.Highlight, QColor(P.accent_soft))
     pal.setColor(QPalette.HighlightedText, QColor(P.text))
-    pal.setColor(QPalette.PlaceholderText, QColor(P.text_faint))
+    pal.setColor(QPalette.PlaceholderText, QColor(P.text))
     pal.setColor(QPalette.ToolTipBase, QColor(P.text))
     pal.setColor(QPalette.ToolTipText, QColor(P.raised))
     app.setPalette(pal)

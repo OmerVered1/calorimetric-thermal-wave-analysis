@@ -2587,7 +2587,7 @@ class WaveToolDialog(QDialog):
                 seg_duration = seg["cycles"] * period_sec
                 time_offset += seg_duration
                 boundary_line = pg.InfiniteLine(pos=time_offset, angle=90,
-                    pen=theme.pen(theme.P.text_faint, 1, dashed=True))
+                    pen=theme.pen(theme.P.text_disabled, 1, dashed=True))   # a line, not text: stays grey
                 self.preview_graph.addItem(boundary_line)
 
         self._update_stats(np.asarray(combined_t), np.asarray(combined_values), export_unit)
