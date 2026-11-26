@@ -122,7 +122,12 @@ class AnalysisTab(QWidget):
         peaks_page = QWidget()
         lay = QVBoxLayout(peaks_page)
         hint = QLabel(PEAKS_HINT)
-        hint.setWordWrap(True)
+        # one line: a wrapped label under-reports its height, the divider then sized
+        # this page too short and pushed Analyze out of view
+        hint.setWordWrap(False)
+        # ...and it may clip on a narrow window rather than force a sideways scrollbar
+        hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        hint.setToolTip(PEAKS_HINT)
         lay.addWidget(hint)
         lay.addStretch(1)
         self._peaks_row = QHBoxLayout()
@@ -233,7 +238,28 @@ class AnalysisTab(QWidget):
     def _zoom_to_region(self) -> None:
         lo, hi = self._region()
         pad = (hi - lo) * ZOOM_MARGIN
-        self.plot.getPlotItem().setXRange(lo - pad, hi + pad, padding=0)
+        x0, x1 = lo - pad, hi + pad
+        item = self.plot.getPlotItem()
+        item.setXRange(x0, x1, padding=0)
+        # each axis fits what is inside the zoom, so the waves fill the height
+        # instead of keeping the whole run's span (a step or a drift elsewhere
+        # would leave them flat)
+        self._fit_y(item.vb, self.src_curve, x0, x1)
+        self._fit_y(self._vb2, self.resp_curve, x0, x1)
+
+    @staticmethod
+    def _fit_y(vb, curve, x0: float, x1: float) -> None:
+        x, y = curve.getData()
+        if x is None or y is None or len(x) == 0:
+            return
+        x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+        inside = (x >= x0) & (x <= x1) & np.isfinite(y)
+        if not inside.any():
+            return
+        lo, hi = float(y[inside].min()), float(y[inside].max())
+        if hi <= lo:
+            hi, lo = lo + 1e-12, lo - 1e-12
+        vb.setYRange(lo, hi, padding=0.08)
 
     def _update_readout(self, *_a) -> None:
         lo, hi = self.region.getRegion()

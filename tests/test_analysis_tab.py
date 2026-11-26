@@ -8,6 +8,7 @@ import os
 import shutil
 import time
 
+import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -701,6 +702,14 @@ def test_manual_region_to_peaks_shows_markers_and_zooms(tab):
     x0, x1 = _x_range(tab)
     margin = (hi - lo) * 0.05
     assert lo - margin - 1e-6 <= x0 <= lo and hi <= x1 <= hi + margin + 1e-6
+    # each y axis fits the data inside the zoom (with a small margin), not the whole run
+    for vb, curve in ((tab.plot.getPlotItem().vb, tab.src_curve), (tab._vb2, tab.resp_curve)):
+        x, y = (np.asarray(a, dtype=float) for a in curve.getData())
+        inside = y[(x >= x0) & (x <= x1)]
+        y0, y1 = vb.viewRange()[1]
+        span = inside.max() - inside.min()
+        assert y0 <= inside.min() and y1 >= inside.max()
+        assert (y1 - y0) <= span * 1.3 + 1e-9
     assert tab.analyze_btn.isVisibleTo(tab) and tab.peaks_back_btn.text() == "← Region"
     tab.peaks_back_btn.click()   # back to Region: the whole run again
     assert tab.step() == "region" and not any(m.isVisible() for m in tab.markers)
