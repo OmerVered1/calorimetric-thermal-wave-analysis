@@ -99,6 +99,7 @@ def env(qapp, tmp_path, run_and_results):
         mgr = UploadManager(client, UploadQueue(str(tmp_path / "q")), interval_ms=10 ** 9)
         panel = SavePanel(mgr, settings=settings)
         made.append((panel, mgr))
+        panel.set_run(run_and_results[0])
         panel.set_result(run_and_results)
         return panel, mgr, settings
 
@@ -165,6 +166,7 @@ def test_sample_and_gas_remembered_per_experiment(env, run_and_results):
     # same settings file -> remembered
     from ctwa.ui.save_panel import SavePanel
     p = SavePanel(panel._manager, settings=settings)
+    p.set_run(run_and_results[0])
     p.set_result(run_and_results)
     assert p.sample_edit.text() == "Alumina"
     assert p.gas_combo.currentText() == "Air"
@@ -708,8 +710,9 @@ def test_header_details_win_over_the_old_sources(env, run_and_results):
     experiment = run_and_results[0].header["experiment"]
     settings.setValue("save/last/%s/sample" % quote(experiment, safe=""), "Remembered")
     settings.setValue("save/last/%s/gas" % quote(experiment, safe=""), "Air")
-    panel.set_result(_with_header(run_and_results, sample="Al2O3", gas="He", power_source="PS-1",
-                                  response_device="Cal-1"))
+    payload = _with_header(run_and_results, sample="Al2O3", gas="He", power_source="PS-1",
+                           response_device="Cal-1")
+    panel.set_run(payload[0])
     assert panel.sample_edit.text() == "Al2O3"
     assert panel.gas_combo.currentText() == "He"
     assert panel.source_device_edit.text() == "PS-1"
@@ -721,22 +724,25 @@ def test_no_header_details_fall_back_to_memory_and_old_sources(env, run_and_resu
     experiment = run_and_results[0].header["experiment"]
     settings.setValue("save/last/%s/sample" % quote(experiment, safe=""), "Remembered")
     settings.setValue("save/last/%s/gas" % quote(experiment, safe=""), "Air")
-    panel.set_result(_with_header(run_and_results, sample=None, gas=None, power_source=None,
-                                  response_device=None))
+    panel.set_run(_with_header(run_and_results, sample=None, gas=None, power_source=None,
+                               response_device=None)[0])
     assert panel.sample_edit.text() == "Remembered"
     assert panel.gas_combo.currentText() == "Air"
     assert panel.source_device_edit.text() == "Keithley 2602B"
     assert panel.response_device_edit.text() == "Drop Calorimeter"
     # and with no memory either: gas defaults to Ar, sample blank
     other = _with_header(run_and_results, experiment="never saved before", sample=None, gas=None)
-    panel.set_result(other)
+    panel.set_run(other[0])
     assert panel.sample_edit.text() == "" and panel.gas_combo.currentText() == "Ar"
 
 
 def test_measured_temperature_wins_over_the_header(env, run_and_results):
     panel, _, _ = env(FakeClient())
     run, opts, _, _ = run_and_results
-    panel.set_result(_with_header(run_and_results, temperature_c=999.0))
+    payload = _with_header(run_and_results, temperature_c=999.0)
+    panel.set_run(payload[0])
+    assert panel.temperature_edit.text() == "999"
+    panel.set_result(payload)
     measured = panel.temperature_edit.text()
     assert measured and measured != "999"
 
@@ -747,8 +753,97 @@ def test_header_temperature_is_used_when_the_run_has_no_temperature_column(env, 
     run, opts, results, plot = _with_header(run_and_results, temperature_c=800.5)
     run.parsed = SimpleNamespace(time=list(run.parsed.time),
                                  temperature=[float("nan")] * len(run.parsed.time))
+    panel.set_run(run)
     panel.set_result((run, opts, results, plot))
     assert panel.temperature_edit.text() == "800.5"
     run.header["temperature_c"] = None
+    panel.set_run(run)
     panel.set_result((run, opts, results, plot))
     assert panel.temperature_edit.text() == ""
+
+
+# ---- steps: the form and the save part are placed by the tab ----
+
+def test_set_run_prefills_before_any_result(env, run_and_results):
+    from ctwa.ui.save_panel import SavePanel
+    _, mgr, settings = env(FakeClient())
+    p = SavePanel(mgr, settings=settings)
+    p.set_run(_with_header(run_and_results, temperature_c=801.0, sample="Al2O3", gas="He")[0])
+    assert p.date_edit.text() == "17/11/2026" and p.time_edit.text() == "09:10"
+    assert p.source_device_edit.text() == "Keithley 2602B"
+    assert p.sample_edit.text() == "Al2O3" and p.gas_combo.currentText() == "He"
+    assert p.temperature_edit.text() == "801"
+    assert not p.save_btn.isEnabled()
+    p.set_run(_with_header(run_and_results, temperature_c=None)[0])
+    assert p.temperature_edit.text() == ""
+
+
+def test_typed_temperature_survives_set_result(env, run_and_results):
+    panel, _, _ = env(FakeClient())
+    panel.set_run(run_and_results[0])
+    panel.temperature_edit.clear()
+    from PySide6.QtTest import QTest
+    QTest.keyClicks(panel.temperature_edit, "123.4")
+    panel.set_result(run_and_results)
+    assert panel.temperature_edit.text() == "123.4"
+    panel.set_run(run_and_results[0])  # a new run forgets what was typed
+    panel.set_result(run_and_results)
+    assert panel.temperature_edit.text() != "123.4"
+
+
+def test_untouched_temperature_follows_each_result(env, run_and_results):
+    import copy
+    panel, _, _ = env(FakeClient())
+    run, opts, results, plot = run_and_results
+    measured = panel.temperature_edit.text()
+    assert measured
+    opts2 = copy.copy(opts)
+    opts2.sel_max = opts.sel_min + (opts.sel_max - opts.sel_min) / 2
+    from ctwa.ui.save_panel import region_temperature
+    expected = region_temperature(run.parsed, opts2.sel_min, opts2.sel_max)
+    panel.set_result((run, opts2, results, plot))
+    assert panel.temperature_edit.text() == expected
+
+
+def test_saving_line_text_and_dashes(env):
+    panel, _, _ = env(FakeClient())
+    panel.sample_edit.setText("Alumina")
+    panel.temperature_edit.setText("766.2")
+    panel.gas_combo.setCurrentText("Air")
+    assert panel.saving_label.text() == "Saving as: Alumina · 17/11/2026 09:10 · 766.2 °C · Air"
+    panel.sample_edit.setText("")
+    panel.temperature_edit.setText("")
+    assert panel.saving_label.text() == "Saving as: — · 17/11/2026 09:10 · — · Air"
+
+
+def test_edit_link_emits_edit_requested(env):
+    panel, _, _ = env(FakeClient())
+    got = []
+    panel.edit_requested.connect(lambda: got.append(1))
+    panel.edit_btn.click()
+    assert got == [1]
+
+
+def test_busy_save_disables_both_parts(env):
+    import threading
+
+    class Gated(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.gate = threading.Event()
+
+        def insert(self, table, row):
+            self.gate.wait(5)
+            return super().insert(table, row)
+
+    client = Gated()
+    panel, _, _ = env(client)
+    panel.sample_edit.setText("A")
+    panel.save_btn.click()
+    assert wait(lambda: panel._busy)
+    assert not panel.form_widget.isEnabled() or not panel.sample_edit.isEnabled()
+    assert not panel.sample_edit.isEnabled() and not panel.temperature_edit.isEnabled()
+    assert not panel.gas_combo.isEnabled() and not panel.save_btn.isEnabled()
+    client.gate.set()
+    assert wait(lambda: not panel._busy)
+    assert panel.sample_edit.isEnabled()

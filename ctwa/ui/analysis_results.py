@@ -36,7 +36,10 @@ ROWS = [  # key, label (lib/i18n/en.ts), unit
     ("lag", "Net Time Lag \u00b1 standard error", "s"),
     ("a1", "Amplitude A\u2081", "mW"),
     ("a2", "Amplitude A\u2082", "mW"),
-    ("period", "Period T", "s"),
+    ("period", "Source Period T", "s"),
+    ("period_resp", "Response Period T", "s"),
+    ("freq", "Source Frequency f", "Hz"),
+    ("freq_resp", "Response Frequency f", "Hz"),
     ("ln_term", "ln(A\u2081\u221ar\u2081 / A\u2082\u221ar\u2082)", ""),
 ]
 
@@ -60,6 +63,9 @@ def format_results(r: AnalysisResults) -> Dict[str, str]:
         "a1": _prec(r.amplitude_a1, 3),
         "a2": _prec(r.amplitude_a2, 3),
         "period": _prec(r.period_t, 4),
+        "period_resp": _prec(r.period_t_resp, 4),
+        "freq": _prec(r.frequency_f, 4),
+        "freq_resp": _prec(r.frequency_f_resp, 4),
         "ln_term": _prec(r.ln_term, 4),
     }
 

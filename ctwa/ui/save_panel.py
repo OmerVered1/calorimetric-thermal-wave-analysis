@@ -1,7 +1,10 @@
 """Save the analysis of the open run to the shared results table (same row as the webapp's).
 
-The panel sits under the results of the Analysis tab. `set_result((LoadedRun, PipelineOptions,
-AnalysisResults, plot))` pre-fills the form and enables Save; everything stays editable. The
+The panel has two parts the Analysis tab places: `form_widget` (the 7 fields, on the Setup
+step) and `action_widget` (the "Saving as" line with Edit, Save and its status, on the Results
+step). `set_run(run)` pre-fills the form from the run's header when a run is opened;
+`set_result((LoadedRun, PipelineOptions, AnalysisResults, plot))` enables Save and only sets the
+temperature to the region's measured mean (unless the user typed one); everything stays editable. The
 plot (the graph saved with the row) is built in the analysis process: nothing here does maths.
 `clear_result()` (a new run, a new Analyze or a failure) takes the result away and disables
 Save; after a save or a queued save Save also stays disabled until a NEW result arrives, so one
@@ -29,6 +32,7 @@ from PySide6.QtCore import QObject, QRunnable, QSettings, QThreadPool, Qt, Signa
 from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPushButton, QVBoxLayout, QWidget)
 
+from ctwa import theme
 from ctwa.analysis.jsmath import js_to_precision
 from ctwa.analysis.row import RowMeta, build_analysis_row, find_duplicate
 from ctwa.cloud.client import NotLoggedIn, Offline, ServerError
@@ -147,6 +151,7 @@ class _SaveJob(QRunnable):
 
 class SavePanel(QWidget):
     saved = Signal(object)  # row id (int), or None when the row was queued
+    edit_requested = Signal()  # the "Edit" link of the saving line
 
     def __init__(self, manager: UploadManager, settings: Optional[QSettings] = None,
                  parent: Optional[QWidget] = None) -> None:
@@ -173,13 +178,28 @@ class SavePanel(QWidget):
         self.gas_combo.setEditable(True)
         self.gas_combo.addItems(GAS_CHOICES)
         self.gas_combo.currentTextChanged.connect(lambda _t: self._refresh_enabled())
+        for w in (self.sample_edit, self.date_edit, self.time_edit, self.source_device_edit,
+                  self.response_device_edit, self.temperature_edit):
+            w.textChanged.connect(lambda _t: self._update_saving_line())
+        self.gas_combo.currentTextChanged.connect(lambda _t: self._update_saving_line())
+        # textEdited fires for typing only, not setText: "typed by the user" since set_run
+        self._temperature_typed = False
+        self.temperature_edit.textEdited.connect(self._on_temperature_typed)
         self.save_btn = QPushButton("Save to database")
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self._on_save_clicked)
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
+        self.saving_label = QLabel("")
+        self.saving_label.setWordWrap(True)
+        self.edit_btn = theme.set_role(QPushButton("Edit"), "quiet")
+        self.edit_btn.clicked.connect(self.edit_requested)
 
-        form = QFormLayout()
+        # the two parts the tab places; the panel itself shows nothing
+        self.form_widget = QWidget()
+        form = QFormLayout(self.form_widget)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setVerticalSpacing(4)
         form.addRow("Sample", self.sample_edit)
         form.addRow("Date", self.date_edit)
         form.addRow("Time", self.time_edit)
@@ -187,14 +207,33 @@ class SavePanel(QWidget):
         form.addRow("Response device", self.response_device_edit)
         form.addRow("Temperature (°C)", self.temperature_edit)
         form.addRow("Gas", self.gas_combo)
+        self.action_widget = QWidget()
+        col = QVBoxLayout(self.action_widget)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(4)
+        line = QHBoxLayout()
+        line.addWidget(self.saving_label, 1)
+        line.addWidget(self.edit_btn)
+        col.addLayout(line)
         row = QHBoxLayout()
         row.addWidget(self.save_btn)
         row.addWidget(self.status_label, 1)
-        lay = QVBoxLayout(self)
-        lay.addLayout(form)
-        lay.addLayout(row)
+        col.addLayout(row)
         self._fields = (self.sample_edit, self.date_edit, self.time_edit, self.source_device_edit,
                         self.response_device_edit, self.temperature_edit, self.gas_combo)
+        self._update_saving_line()
+
+    def _on_temperature_typed(self, _text: str) -> None:
+        self._temperature_typed = True
+
+    def _update_saving_line(self) -> None:
+        dash = "—"
+        when = " ".join(t for t in (self.date_edit.text().strip(), self.time_edit.text().strip()) if t)
+        temperature = self.temperature_edit.text().strip()
+        parts = [self.sample_edit.text().strip() or dash, when or dash,
+                 (temperature + " °C") if temperature else dash,
+                 self.gas_combo.currentText().strip() or dash]
+        self.saving_label.setText("Saving as: " + " · ".join(parts))
 
     # ---- pre-fill ----
     @staticmethod
@@ -211,28 +250,33 @@ class SavePanel(QWidget):
             self.status_label.setText("")
         self._refresh_enabled()
 
-    def set_result(self, payload: Tuple[Any, Any, Any, Any]) -> None:
-        """Slot for AnalysisTab.result_ready."""
-        self._run, self._opts, self._results, self._plot = payload
-        h = self._run.header
+    def set_run(self, run) -> None:
+        """Slot for AnalysisTab.run_loaded: pre-fill the form from the run. The experiment's
+        details (run header) win; otherwise what the file's other lines and the per-experiment
+        memory give."""
+        h = run.header
         started = h.get("started")
         self.date_edit.setText(started.strftime("%d/%m/%Y") if isinstance(started, datetime) else "")
         self.time_edit.setText(started.strftime("%H:%M") if isinstance(started, datetime) else "")
-        # the experiment's details (run header) win; otherwise what the file's other lines and
-        # the per-experiment memory give, as before
         self.source_device_edit.setText(
             str(h.get("power_source") or "") or instrument_device(h.get("instrument")))  # type: ignore[arg-type]
         self.response_device_edit.setText(
             str(h.get("response_device") or "") or calorimeter_device(h.get("calorimeter")))  # type: ignore[arg-type]
-        temperature = region_temperature(self._run.parsed, self._opts.sel_min, self._opts.sel_max)
-        if not temperature and isinstance(h.get("temperature_c"), (int, float)):
-            temperature = "%g" % h["temperature_c"]  # type: ignore[index]
-        self.temperature_edit.setText(temperature)
-        k = self._experiment_key(self._run, "sample")
+        t = h.get("temperature_c")
+        self.temperature_edit.setText("%g" % t if isinstance(t, (int, float)) else "")
+        self._temperature_typed = False
+        k = self._experiment_key(run, "sample")
         self.sample_edit.setText(str(h.get("sample") or "") or (str(self._settings.value(k, "")) if k else ""))
-        k = self._experiment_key(self._run, "gas")
+        k = self._experiment_key(run, "gas")
         self.gas_combo.setCurrentText(
             str(h.get("gas") or "") or (str(self._settings.value(k, "Ar")) if k else "Ar"))
+
+    def set_result(self, payload: Tuple[Any, Any, Any, Any]) -> None:
+        """Slot for AnalysisTab.result_ready."""
+        self._run, self._opts, self._results, self._plot = payload
+        temperature = region_temperature(self._run.parsed, self._opts.sel_min, self._opts.sel_max)
+        if temperature and not self._temperature_typed:
+            self.temperature_edit.setText(temperature)
         if not self._busy:  # a save in flight keeps Save disabled until its job ends
             self.status_label.setText("")
             self._refresh_enabled()

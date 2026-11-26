@@ -192,7 +192,9 @@ class AnalysisTab(QWidget):
             form = lay.itemAt(0).layout()
             if form is not None and hasattr(form, "setVerticalSpacing"):
                 form.setVerticalSpacing(4)
-        self._right.addWidget(panel)
+        self._right.addWidget(panel.form_widget)
+        self._right.addWidget(panel.action_widget)
+        self.run_loaded.connect(panel.set_run)
         self.result_ready.connect(panel.set_result)
         self.result_cleared.connect(panel.clear_result)
 
