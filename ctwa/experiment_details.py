@@ -11,7 +11,8 @@ import re
 from typing import Dict, List, Optional
 
 __all__ = ["FIELDS", "HEADER_KEYS", "DEFAULT_GAS", "DEFAULT_R1_MM", "DEFAULT_R2_MM",
-           "default_details", "header_lines", "parse_number"]
+           "default_details", "header_lines", "parse_number",
+           "SOURCE_PRESETS", "RESPONSE_PRESETS", "FILL_IN_NEW"]
 
 FIELDS = (
     ("sample", "Sample"),
@@ -38,6 +39,10 @@ _NUMERIC = ("temperature_c", "r1_mm", "r2_mm")
 DEFAULT_GAS = "Ar"
 DEFAULT_R1_MM = "6.72"   # = ctwa.ui.analysis_settings.DEFAULT_R1
 DEFAULT_R2_MM = "14.86"  # = ctwa.ui.analysis_settings.DEFAULT_R2
+
+SOURCE_PRESETS = ("Keithley 2602B", "Keithley 2611A", "Keithley 2450", "Keithley 6430")
+RESPONSE_PRESETS = ("C80", "Drop Calorimeter")
+FILL_IN_NEW = "Fill in new\u2026"  # last item of every preset dropdown; never a stored value
 
 _NUMBER = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 
