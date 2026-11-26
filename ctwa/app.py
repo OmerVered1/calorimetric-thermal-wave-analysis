@@ -1144,10 +1144,11 @@ class ExperimentsSidebar(QGroupBox):
         layout.addWidget(self.current_label)
 
         # The run details of the loaded experiment, compact, with a small edit button
+        # under them (beside them, the narrow sidebar wrapped every value)
         self.details_box = QWidget()
-        dl = QHBoxLayout(self.details_box)
+        dl = QVBoxLayout(self.details_box)
         dl.setContentsMargins(0, 0, 0, 0)
-        dl.setSpacing(4)
+        dl.setSpacing(2)
         self.details_label = QLabel("")
         self.details_label.setWordWrap(True)
         self.details_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -1157,7 +1158,7 @@ class ExperimentsSidebar(QGroupBox):
         self.edit_details_btn.setToolTip("Sample, devices, temperature, gas and radii that every run of "
                                          "this experiment carries into the Analysis tab")
         self.edit_details_btn.clicked.connect(self._on_edit_details_clicked)
-        dl.addWidget(self.edit_details_btn, 0, Qt.AlignTop)
+        dl.addWidget(self.edit_details_btn, 0, Qt.AlignLeft)
         layout.addWidget(self.details_box)
         self.details_box.setVisible(False)
 
@@ -3631,11 +3632,12 @@ class MainWindow(QMainWindow):
         self.experiments_sidebar.set_details(details)
 
     def _connected_details_defaults(self) -> dict:
-        try:
-            ident = self.smu.get_identification() if self.smu else None
-        except Exception:
-            ident = None
-        return experiment_details.default_details(ident, self.calorimeter_name)
+        # The model the user connected ("Keithley 2602B"), not an *IDN? query:
+        # New must not wait on the instrument while a sweep holds it.
+        details = experiment_details.default_details(None, self.calorimeter_name)
+        if self.smu is not None:
+            details["power_source"] = self.smu.caps.display_name
+        return details
 
     def _on_notes_changed(self, text: str):
         self._current_experiment_notes = text
